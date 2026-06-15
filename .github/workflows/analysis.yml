@@ -44,7 +44,7 @@ jobs:
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix_items: ${{ steps.fetch_batch.outputs.matrix_items }}
+      matrix_items: ${{ steps.set-matrix.outputs.matrix_items }}
       empty: ${{ steps.fetch_batch.outputs.empty }}
       total_chunks: ${{ steps.fetch_batch.outputs.chunk_count }}
     steps:
@@ -206,8 +206,8 @@ jobs:
           CHUNK_LENGTH=$(jq length /tmp/chunk.json)
           echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
 
-          # ذخیره chunk به عنوان خروجی step
-          echo "chunk=$(cat /tmp/chunk.json)" >> $GITHUB_OUTPUT
+          # chunk.json برای استفاده استپ‌های بعدی در /tmp/chunk.json موجود است
+          echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
 
       - name: 1. دانلود فایل یکپارچه معاملات (یک بار برای کل قطعه)
         env:
@@ -216,7 +216,7 @@ jobs:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           # استخراج نام استراتژی از اولین آیتم قطعه
-          CHUNK_JSON='${{ steps.chunk_params.outputs.chunk }}'
+          CHUNK_JSON=$(cat /tmp/chunk.json)
           STRAT=$(echo "$CHUNK_JSON" | jq -r '.[0].strat' 2>/dev/null || echo "")
           if [ -z "$STRAT" ]; then
             echo "❌ استراتژی در قطعه یافت نشد. خروج."
@@ -302,7 +302,7 @@ jobs:
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          CHUNK_JSON='${{ steps.chunk_params.outputs.chunk }}'
+          CHUNK_JSON=$(cat /tmp/chunk.json)
           LENGTH=$(echo "$CHUNK_JSON" | jq length)
           echo "🚀 شروع پردازش $LENGTH ترکیب در job ${{ matrix.chunk_index }}"
 
