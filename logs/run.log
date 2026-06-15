@@ -187,3 +187,6 @@ jq: error (at /tmp/agg_Test/new_trades.json:3145): object ({"trades":[...) and a
 ✅ عملیات ساخت و به‌روزرسانی صف با موفقیت پایان یافت.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 189
+🔄 فراخوانی analysis.yml (حالت fixed_batch)...
+https://github.com/Amir9287171/test-repository/actions/runs/27574874651
+✅ فراخوانی analysis.yml موفق بود (تلاش 1).
