@@ -112,18 +112,27 @@ jobs:
           echo "$CHUNK_COUNT" > /tmp/batch/chunk_count.txt
 
           if [ "$CHUNK_COUNT" -gt 0 ]; then
-            # فقط آرایه‌ای از index های chunk می‌سازیم (نه داده کامل)
-            INDICES=$(python3 -c "import json; print(json.dumps(list(range($CHUNK_COUNT))))")
+            # ساخت آرایه ای از اندیس های chunk با bash (بدون وابستگی به پایتون)
+            INDICES="["
+            for ((i=0; i<$CHUNK_COUNT; i++)); do
+              if [ $i -gt 0 ]; then
+                INDICES+=", "
+              fi
+              INDICES+="$i"
+            done
+            INDICES+="]"
+            echo "DEBUG: INDICES = $INDICES"
             echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
             echo "empty=false" >> $GITHUB_OUTPUT
           else
             echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
           fi
 
           echo "chunk_count=$CHUNK_COUNT" >> $GITHUB_OUTPUT
           echo "chunk_size=$CHUNK_SIZE" >> $GITHUB_OUTPUT
 
-          # آپلود chunk_size و chunk_count به مخزن سوم تا job های batch بتوانند بخوانند
+          # آپلود chunk_size و chunk_count به مخزن سوم
           CHUNK_META="{\"chunk_size\": $CHUNK_SIZE, \"total_chunks\": $CHUNK_COUNT, \"total_combos\": $TOTAL_COMBOS}"
           echo "$CHUNK_META" > /tmp/batch/chunk_meta.json
           EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/chunk_meta.json" -q '.sha' 2>/dev/null || echo "")
@@ -143,7 +152,7 @@ jobs:
           fi
           echo "========== [DEBUG] پایان fetch_batch =========="
 
-      - name: تنظیم خروجی ماتریس (فقط index های chunk)
+      - name: تنظیم خروجی ماتریس
         id: set-matrix
         run: |
           echo "========== [DEBUG] تنظیم خروجی ماتریس =========="
@@ -197,7 +206,7 @@ jobs:
           CHUNK_LENGTH=$(jq length /tmp/chunk.json)
           echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
 
-          # ذخیره chunk به عنوان خروجی step (برای استفاده در step بعدی)
+          # ذخیره chunk به عنوان خروجی step
           echo "chunk=$(cat /tmp/chunk.json)" >> $GITHUB_OUTPUT
 
       - name: 1. دانلود فایل یکپارچه معاملات (یک بار برای کل قطعه)
@@ -208,7 +217,11 @@ jobs:
         run: |
           # استخراج نام استراتژی از اولین آیتم قطعه
           CHUNK_JSON='${{ steps.chunk_params.outputs.chunk }}'
-          STRAT=$(echo "$CHUNK_JSON" | jq -r '.[0].strat')
+          STRAT=$(echo "$CHUNK_JSON" | jq -r '.[0].strat' 2>/dev/null || echo "")
+          if [ -z "$STRAT" ]; then
+            echo "❌ استراتژی در قطعه یافت نشد. خروج."
+            exit 1
+          fi
           AGG_FILE="aggregated/${STRAT}/${STRAT}_trades.enc"
           ERROR_FILE="analysis_errors/${STRAT}_download_error.txt"
           mkdir -p /tmp/prep
@@ -277,18 +290,14 @@ jobs:
           fi
           echo "✅ فایل یکپارچه آماده شد."
 
-      - name: 2. (حذف شده) دیگر نیازی به فیلتر جداگانه نیست
-        run: |
-          echo "ℹ️ مرحله فیلتر حذف شده است. فایل all_trades.json مستقیماً استفاده می‌شود."
-
-      - name: 3. راه‌اندازی پایتون و نصب کتابخانه‌ها
+      - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: نصب کتابخانه‌های پایتون
         run: pip install pandas requests
 
-      - name: 4. اجرای ماژول تحلیلی برای هر آیتم در قطعه
+      - name: 3. اجرای ماژول تحلیلی برای هر آیتم در قطعه
         id: execute_batch
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
@@ -355,7 +364,7 @@ jobs:
             OUTPUT_FILE="${STRAT}_${COIN}_${INTERVAL}_${MODEL}.csv"
             echo "[DEBUG] فایل خروجی برای $COIN: $OUTPUT_FILE"
 
-            # 5. آپلود خروجی (رمزنگاری شده) - هر ترکیب جداگانه
+            # آپلود خروجی
             if [ -f "$OUTPUT_FILE" ]; then
               echo "   🔐 رمزنگاری فایل خروجی..."
               node -e "
@@ -419,7 +428,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: حذف ۱۰۰ پرانتز اول از all_combinations.json (با sha) - ساده‌شده
+      - name: حذف ۷۵۰۰ پرانتز اول از all_combinations.json (با sha)
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
