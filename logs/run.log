@@ -21,3 +21,6 @@ find: ‘backtest_results’: No such file or directory
 ✅ عملیات ساخت و به‌روزرسانی صف با موفقیت پایان یافت.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 189
+🔄 فراخوانی analysis.yml (حالت fixed_batch)...
+https://github.com/Amir9287171/test-repository/actions/runs/27575555390
+✅ فراخوانی analysis.yml موفق بود (تلاش 1).
