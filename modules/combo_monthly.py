@@ -257,22 +257,44 @@ def process_strategy_combo_monthly(strategy_files, news_events, group, output_pa
 # ================================ ورودی اصلی ================================
 def main():
     parser = argparse.ArgumentParser()
+    # آرگومان‌های سازگار با workflow (مثل combo_10day)
     parser.add_argument("--strategy-folder", required=True)
-    parser.add_argument("--group", required=True, choices=["1", "2"])
-    parser.add_argument("--results-base", required=True)
-    parser.add_argument("--news-pickle", required=True)
-    parser.add_argument("--returns-cache", required=True)
-    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--trades-json", default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    parser.add_argument("--news-dir", default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    parser.add_argument("--coin", default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    parser.add_argument("--interval", default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    parser.add_argument("--model", default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    parser.add_argument("--chunk-start", type=int, default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    parser.add_argument("--chunk-end", type=int, default=None, help="استفاده نمی‌شود (برای سازگاری با workflow)")
+    # آرگومان‌های اصلی combo_monthly (اختیاری با مقادیر پیش‌فرض)
+    parser.add_argument("--group", default="1", choices=["1", "2"])
+    parser.add_argument("--results-base", default="/tmp/prep/results_base")
+    parser.add_argument("--news-pickle", default="/tmp/news.pkl")
+    parser.add_argument("--returns-cache", default="/tmp/returns_cache.json")
+    parser.add_argument("--output-dir", default="/tmp/combo_monthly_output")
     args = parser.parse_args()
 
-    print("🔄 بارگذاری اخبار...")
+    # اگر news-pickle وجود ندارد، با پیام واضح و exit 0 خارج می‌شویم
+    if not os.path.isfile(args.news_pickle):
+        print(f"warning combo_monthly: news-pickle not found at {args.news_pickle}. skipping.")
+        sys.exit(0)
+
+    if not os.path.isdir(args.results_base):
+        print(f"warning combo_monthly: results-base not found at {args.results_base}. skipping.")
+        sys.exit(0)
+
+    print("loading news...")
     news_events = load_news_data(args.news_pickle)
-    print("🔄 بارگذاری نتایج استراتژی...")
+    print("loading strategy results...")
     strategy_files = load_strategy_results(args.results_base, args.group, args.strategy_folder)
     if not strategy_files:
-        print("❌ هیچ فایل نتیجه‌ای برای این استراتژی یافت نشد.")
-        sys.exit(1)
-    returns_cache = get_returns_cache(args.returns_cache)
+        print(f"warning combo_monthly: no result files for {args.strategy_folder}. skipping.")
+        sys.exit(0)
+
+    returns_cache = {}
+    if os.path.isfile(args.returns_cache):
+        returns_cache = get_returns_cache(args.returns_cache)
+
     for r in strategy_files:
         key = f"{args.group}_{args.strategy_folder}_{r['file_name']}"
         if key in returns_cache:
@@ -281,9 +303,19 @@ def main():
         else:
             r["special_rounded_return"] = r.get("real_return", 0)
 
-    out_filename = f"combo_monthly_{args.strategy_folder}.csv"
+    os.makedirs(args.output_dir, exist_ok=True)
+    coin = args.coin or "ALL"
+    interval = args.interval or "monthly"
+    model = args.model or "default"
+    out_filename = f"{args.strategy_folder}_{coin}_{interval}_{model}.csv"
     out_path = os.path.join(args.output_dir, out_filename)
     process_strategy_combo_monthly(strategy_files, news_events, args.group, out_path)
+
+    import shutil
+    local_out = f"{args.strategy_folder}_{coin}_{interval}_{model}.csv"
+    if os.path.isfile(out_path) and os.path.abspath(out_path) != os.path.abspath(local_out):
+        shutil.copy(out_path, local_out)
+        print(f"output copied to {local_out}")
 
 if __name__ == "__main__":
     main()
