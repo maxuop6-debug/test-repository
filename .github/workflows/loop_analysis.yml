@@ -1,0 +1,755 @@
+name: Loop Analysis Workflow
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: analysis-and-aggregation
+  cancel-in-progress: false
+
+jobs:
+  # ============================================================
+  # Job 0: پاک کردن فایل لاگ در ابتدای اجرا
+  # ============================================================
+  init-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
+      - name: Clear log file and commit
+        run: |
+          mkdir -p logs
+          echo -n "" > logs/run.log
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "clear logs for run ${{ github.run_id }}" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 1: بررسی پرچم وقفه
+  # ============================================================
+  check-interrupt:
+    needs: init-logs
+    runs-on: ubuntu-latest
+    outputs:
+      force_fixed: ${{ steps.check.outputs.force_fixed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: بررسی پرچم وقفه
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          {
+            echo "🔍 بررسی پرچم‌های وقفه..."
+            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "⚠️ پرچم وقفه یافت شد! حذف می‌شود..."
+              SHA=$(gh api "repos/$THIRD_REPO/contents/interrupt.flag" -q '.sha')
+              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X DELETE -F message="clear interrupt" -F sha="$SHA" -F branch="main"
+              echo "force_fixed=true" >> $GITHUB_OUTPUT
+            else
+              echo "force_fixed=false" >> $GITHUB_OUTPUT
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after check-interrupt (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 2: یکپارچه‌سازی نتایج بک‌تست (aggregate-results) کامل
+  # ============================================================
+  aggregate-results:
+    needs: check-interrupt
+    runs-on: ubuntu-latest
+    steps:
+      - name: 0. نصب jq (بدون ذخیره لاگ در فایل)
+        run: |
+          if ! command -v jq &> /dev/null; then
+            echo "📦 jq یافت نشد. در حال نصب..."
+            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+            if ! command -v jq &> /dev/null; then
+              echo "❌ خطای بحرانی: نصب jq ناموفق بود."
+              exit 1
+            fi
+          fi
+          echo "✅ jq آماده است."
+
+      - name: 0.5. پاکسازی فضای موقت
+        run: |
+          mkdir -p logs
+          {
+            rm -rf /tmp/agg_* 2>/dev/null || true
+            echo "✅ پاکسازی فضای موقت انجام شد."
+          } >> logs/run.log 2>&1
+
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+
+      - name: بررسی دفتر ثبت انتقالات
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            echo "📋 بررسی transfer_ledger.json..."
+            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/transfer_ledger.json" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+            if [ "$HTTP_CODE" = "200" ]; then
+              gh api "repos/$THIRD_REPO/contents/transfer_ledger.json" -q '.content' | base64 -d > /tmp/transfer_ledger.json
+              echo "✅ فایل انتقالات بارگذاری شد."
+            else
+              echo "ℹ️ فایل انتقالات وجود ندارد."
+              echo '{"transferred_strategies":[]}' > /tmp/transfer_ledger.json
+            fi
+          } >> logs/run.log 2>&1
+
+      - name: یکپارچه‌سازی نتایج بک‌تست
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          mkdir -p logs
+          {
+            echo "=============================================="
+            echo "   🔄 شروع یکپارچه‌سازی نتایج بک‌تست"
+            echo "=============================================="
+            echo ""
+            echo "0- وضعیت منابع سیستم:"
+            df -h /tmp | tail -1
+            free -h | grep Mem
+            echo ""
+            echo "1- دریافت لیست استراتژی‌ها از مخزن سوم (Git Trees API)..."
+            MAIN_SHA=$(gh api "repos/$THIRD_REPO/git/refs/heads/main" -q '.object.sha')
+            TREE=$(gh api "repos/$THIRD_REPO/git/trees/$MAIN_SHA?recursive=1" -q '.tree')
+            STRATEGIES_LIST=$(echo "$TREE" | jq -r '.[] | select(.type=="tree") | .path' | grep '^backtest_results/' | cut -d'/' -f2 | sort -u)
+            if [ -z "$STRATEGIES_LIST" ]; then
+              echo "⚠️ هیچ استراتژی در backtest_results یافت نشد."
+              exit 0
+            fi
+            echo "   استراتژی‌های یافت شده: $STRATEGIES_LIST"
+            echo ""
+            for STRAT in $STRATEGIES_LIST; do
+              echo "=============================================="
+              echo "   📊 پردازش استراتژی: $STRAT"
+              echo "=============================================="
+              AGG_FILE="aggregated/${STRAT}/${STRAT}_trades.enc"
+              STATUS_FILE="aggregated/${STRAT}/aggregation_status.json"
+              mkdir -p "/tmp/agg_${STRAT}"
+              echo "0- بررسی پرچم وضعیت یکپارچه‌سازی برای $STRAT ..."
+              STATUS_CONTENT=""
+              HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+              if [ "$HTTP_CODE" = "200" ]; then
+                gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -q '.content' | base64 -d > "/tmp/agg_${STRAT}/status.json" 2>/dev/null
+                STATUS_CONTENT=$(cat "/tmp/agg_${STRAT}/status.json")
+                echo "   📄 پرچم وضعیت یافت شد: $STATUS_CONTENT"
+                STATUS=$(echo "$STATUS_CONTENT" | jq -r '.status' 2>/dev/null)
+                if [ "$STATUS" = "cleaning" ]; then
+                  echo "   ⚠️ فرآیند قبلی ناقص مانده. فقط پاکسازی فایل‌های قدیمی انجام می‌شود."
+                  FILES_TO_DELETE=$(echo "$STATUS_CONTENT" | jq -r '.files_to_delete[]' 2>/dev/null)
+                  echo "   🗑️ شروع پاکسازی فایل‌های باقی‌مانده..."
+                  for ENC_PATH in $FILES_TO_DELETE; do
+                    echo "   تلاش برای حذف $ENC_PATH ..."
+                    SHA=$(gh api "repos/$THIRD_REPO/contents/$ENC_PATH" -q '.sha' 2>/dev/null)
+                    if [ -n "$SHA" ]; then
+                      RETRY=0; MAX=10000
+                      while [ $RETRY -lt $MAX ]; do
+                        if gh api "repos/$THIRD_REPO/contents/$ENC_PATH" -X DELETE -F message="cleanup" -F sha="$SHA" -F branch="main" 2>&1 || true; then
+                          echo "      ✅ حذف موفق"
+                          break
+                        else
+                          RETRY=$((RETRY+1))
+                          sleep $(( (RANDOM % 5) + 1 ))
+                        fi
+                      done
+                    else
+                      echo "      ⚠️ فایل یافت نشد (ممکن است قبلاً حذف شده باشد)."
+                    fi
+                  done
+                  echo '{"status": "completed"}' > "/tmp/agg_${STRAT}/status.json"
+                  base64 -w0 < "/tmp/agg_${STRAT}/status.json" > "/tmp/agg_${STRAT}/status_base64.txt"
+                  EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -q '.sha' 2>/dev/null || echo "")
+                  if [ -n "$EXISTING_SHA" ]; then
+                    gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" \
+                      -X PUT \
+                      -F message="update aggregation status" \
+                      -F content="@/tmp/agg_${STRAT}/status_base64.txt" \
+                      -F sha="$EXISTING_SHA" \
+                      -F branch="main" 2>&1 || echo "⚠️ خطا در به‌روزرسانی پرچم وضعیت."
+                  fi
+                  rm -rf "/tmp/agg_${STRAT}"
+                  continue
+                elif [ "$STATUS" = "completed" ]; then
+                  echo "   ✅ فرآیند قبلی کامل بوده. پاکسازی پرچم وضعیت..."
+                  SHA=$(gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -q '.sha' 2>/dev/null)
+                  if [ -n "$SHA" ]; then
+                    gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -X DELETE -F message="remove status flag" -F sha="$SHA" -F branch="main" 2>&1 || true
+                  fi
+                  echo "   ℹ️ همه چیز مرتب است. ادامهٔ کار عادی..."
+                fi
+                rm -f "/tmp/agg_${STRAT}/status.json" "/tmp/agg_${STRAT}/status_base64.txt"
+              else
+                echo "   ℹ️ پرچم وضعیتی وجود ندارد. شروع فرآیند عادی..."
+              fi
+              echo ""
+              echo "2- بررسی وجود فایل یکپارچه قبلی برای $STRAT ..."
+              EXISTING_TRADES_FILE="/tmp/agg_${STRAT}/existing_trades.json"
+              echo "[]" > "$EXISTING_TRADES_FILE"
+              HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$AGG_FILE" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "   📥 دانلود فایل یکپارچه قبلی..."
+                gh api "repos/$THIRD_REPO/contents/$AGG_FILE" -q '.content' | base64 -d > "/tmp/agg_${STRAT}/existing_trades.enc" 2>/dev/null
+                if [ -f "/tmp/agg_${STRAT}/existing_trades.enc" ]; then
+                  set +e
+                  node -e "
+                    const crypto=require('crypto'),fs=require('fs');
+                    const pass=process.env.RESULTS_PASSWORD;
+                    const data=fs.readFileSync('/tmp/agg_${STRAT}/existing_trades.enc');
+                    const key=crypto.scryptSync(pass,'salt',32);
+                    const iv=data.slice(0,16),enc=data.slice(16);
+                    const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+                    const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+                    fs.writeFileSync('$EXISTING_TRADES_FILE',dec);
+                  " 2>/tmp/agg_${STRAT}/existing_decrypt_error.log
+                  NODE_EXIT=$?
+                  set -e
+                  if [ $NODE_EXIT -eq 0 ] && [ -f "$EXISTING_TRADES_FILE" ]; then
+                    echo "   ✅ فایل یکپارچه قبلی با موفقیت بارگذاری شد."
+                  else
+                    echo "   ❌ خطا در رمزگشایی فایل یکپارچه قبلی (کد $NODE_EXIT)."
+                  fi
+                  rm -f "/tmp/agg_${STRAT}/existing_decrypt_error.log"
+                fi
+              else
+                echo "   ℹ️ فایل یکپارچه قبلی وجود ندارد. یک فایل جدید ساخته خواهد شد."
+              fi
+              echo ""
+              echo "3- دریافت لیست فایل‌های results.enc برای $STRAT (Git Trees API)..."
+              FILES=$(echo "$TREE" | jq -r '.[] | select(.type=="tree") | .path' | grep "^backtest_results/$STRAT/" | cut -d'/' -f3 | sort -u)
+              if [ -z "$FILES" ]; then
+                echo "   ⚠️ هیچ فایلی در backtest_results/$STRAT یافت نشد."
+                continue
+              fi
+              FILE_COUNT=$(echo "$FILES" | wc -l)
+              echo "   📊 تعداد فایل‌های یافت‌شده: $FILE_COUNT"
+              echo ""
+              NEW_TRADES_FILE="/tmp/agg_${STRAT}/new_trades.json"
+              echo "[]" > "$NEW_TRADES_FILE"
+              SUCCESS_COUNT=0
+              FAIL_COUNT=0
+              for FOLDER in $FILES; do
+                ENC_PATH="backtest_results/${STRAT}/${FOLDER}/results.enc"
+                echo "   📄 پردازش: $ENC_PATH"
+                HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$ENC_PATH" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+                if [ "$HTTP_CODE" != "200" ]; then
+                  echo "      ❌ فایل با کد $HTTP_CODE یافت نشد. رد می‌شود."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                  continue
+                fi
+                echo "      ⏳ دانلود..."
+                gh api "repos/$THIRD_REPO/contents/$ENC_PATH" -q '.content' | base64 -d > "/tmp/agg_${STRAT}/temp.enc" 2>/tmp/agg_${STRAT}/download_error.log
+                if [ ! -s "/tmp/agg_${STRAT}/temp.enc" ]; then
+                  echo "      ❌ خطا در دانلود یا فایل خالی است."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                  continue
+                fi
+                echo "      ⏳ رمزگشایی..."
+                set +e
+                node -e "
+                  const crypto=require('crypto'),fs=require('fs');
+                  const pass=process.env.RESULTS_PASSWORD;
+                  const data=fs.readFileSync('/tmp/agg_${STRAT}/temp.enc');
+                  const key=crypto.scryptSync(pass,'salt',32);
+                  const iv=data.slice(0,16),enc=data.slice(16);
+                  const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+                  const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+                  fs.writeFileSync('/tmp/agg_${STRAT}/temp.tar.gz',dec);
+                " 2>/tmp/agg_${STRAT}/decrypt_error.log
+                NODE_EXIT=$?
+                set -e
+                if [ $NODE_EXIT -ne 0 ]; then
+                  echo "      ❌ خطا در رمزگشایی (کد $NODE_EXIT)."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                  rm -f "/tmp/agg_${STRAT}/temp.enc"
+                  continue
+                fi
+                if [ ! -f "/tmp/agg_${STRAT}/temp.tar.gz" ] || [ ! -s "/tmp/agg_${STRAT}/temp.tar.gz" ]; then
+                  echo "      ❌ فایل tar.gz خروجی ناقص است."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                  rm -f "/tmp/agg_${STRAT}/temp.enc"
+                  continue
+                fi
+                echo "      ✅ رمزگشایی موفق."
+                echo "      ⏳ استخراج..."
+                tar -xzf "/tmp/agg_${STRAT}/temp.tar.gz" -C "/tmp/agg_${STRAT}/" 2>/tmp/agg_${STRAT}/tar_error.log
+                if [ $? -ne 0 ]; then
+                  echo "      ❌ خطا در استخراج tar.gz."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                  rm -f "/tmp/agg_${STRAT}/temp.enc" "/tmp/agg_${STRAT}/temp.tar.gz"
+                  continue
+                fi
+                EXTRACTED_DIR="/tmp/agg_${STRAT}/${FOLDER}"
+                TRADE_FILE="$EXTRACTED_DIR/trades_summary.json"
+                if [ -f "$TRADE_FILE" ]; then
+                  echo "      ⏳ خواندن معاملات..."
+                  jq -c '.trades' "$TRADE_FILE" > "/tmp/agg_${STRAT}/current_trades.json" 2>/dev/null
+                  if [ ! -s "/tmp/agg_${STRAT}/current_trades.json" ]; then
+                    echo "      ⚠️ آرایه trades خالی یا null است. نادیده گرفته می‌شود."
+                    echo "[]" > "/tmp/agg_${STRAT}/current_trades.json"
+                  fi
+                else
+                  echo "      ❌ فایل trades_summary.json یافت نشد."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                  echo "[]" > "/tmp/agg_${STRAT}/current_trades.json"
+                fi
+                echo "      ⏳ ادغام با jq..."
+                set +e
+                jq -s '.[0] + .[1]' "$NEW_TRADES_FILE" "/tmp/agg_${STRAT}/current_trades.json" > "/tmp/agg_${STRAT}/merged_tmp.json" 2>/tmp/agg_${STRAT}/merge_error.log
+                JQ_EXIT=$?
+                set -e
+                if [ $JQ_EXIT -eq 0 ]; then
+                  mv "/tmp/agg_${STRAT}/merged_tmp.json" "$NEW_TRADES_FILE"
+                  SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                  echo "      ✅ معاملات ادغام شدند."
+                else
+                  echo "      ❌ خطا در ادغام JSON (کد $JQ_EXIT)."
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                fi
+                rm -rf "$EXTRACTED_DIR" 2>/dev/null
+                rm -f "/tmp/agg_${STRAT}/temp.enc" "/tmp/agg_${STRAT}/temp.tar.gz" "/tmp/agg_${STRAT}/current_trades.json" "/tmp/agg_${STRAT}/merged_tmp.json"
+                echo ""
+              done
+              echo "   📊 جمع‌بندی پردازش استراتژی $STRAT:"
+              echo "      ✅ موفق: $SUCCESS_COUNT"
+              echo "      ❌ ناموفق: $FAIL_COUNT"
+              echo ""
+              if [ ! -s "$NEW_TRADES_FILE" ] || [ "$(cat "$NEW_TRADES_FILE")" = "[]" ]; then
+                echo "   ⚠️ هیچ معامله جدیدی برای ادغام وجود ندارد."
+              else
+                echo "   ⏳ ادغام نهایی با فایل یکپارچه قبلی..."
+                set +e
+                jq -s '.[0] + .[1]' "$EXISTING_TRADES_FILE" "$NEW_TRADES_FILE" > "/tmp/agg_${STRAT}/combined_trades.json" 2>/tmp/agg_${STRAT}/merge_error.log
+                JQ_EXIT=$?
+                set -e
+                if [ $JQ_EXIT -ne 0 ]; then
+                  echo "   ❌ خطا در ادغام نهایی. استفاده از فایل معاملات جدید به تنهایی."
+                  cp "$NEW_TRADES_FILE" "/tmp/agg_${STRAT}/combined_trades.json"
+                fi
+                echo "   ✅ ادغام نهایی کامل شد."
+                echo "4- رمزنگاری و آپلود فایل یکپارچه جدید..."
+                node -e "
+                  const crypto=require('crypto'),fs=require('fs');
+                  const pass=process.env.RESULTS_PASSWORD;
+                  const data=fs.readFileSync('/tmp/agg_${STRAT}/combined_trades.json');
+                  const key=crypto.scryptSync(pass,'salt',32);
+                  const iv=crypto.randomBytes(16);
+                  const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+                  const enc=Buffer.concat([cipher.update(data),cipher.final()]);
+                  fs.writeFileSync('/tmp/agg_${STRAT}/final.enc', Buffer.concat([iv,enc]));
+                "
+                if [ $? -ne 0 ]; then
+                  echo "   ❌ خطا در رمزنگاری فایل یکپارچه."
+                  continue
+                fi
+                base64 -w0 < "/tmp/agg_${STRAT}/final.enc" > "/tmp/agg_${STRAT}/final_base64.txt"
+                EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$AGG_FILE" -q '.sha' 2>/dev/null || echo "")
+                RETRY=0; MAX=10000
+                while [ $RETRY -lt $MAX ]; do
+                  if [ -n "$EXISTING_SHA" ]; then
+                    gh api "repos/$THIRD_REPO/contents/$AGG_FILE" \
+                      -X PUT \
+                      -F message="aggregate trades for $STRAT" \
+                      -F content="@/tmp/agg_${STRAT}/final_base64.txt" \
+                      -F sha="$EXISTING_SHA" \
+                      -F branch="main" 2>&1
+                  else
+                    gh api "repos/$THIRD_REPO/contents/$AGG_FILE" \
+                      -X PUT \
+                      -F message="aggregate trades for $STRAT" \
+                      -F content="@/tmp/agg_${STRAT}/final_base64.txt" \
+                      -F branch="main" 2>&1
+                  fi
+                  if [ $? -eq 0 ]; then
+                    echo "   ✅ آپلود فایل یکپارچه $STRAT موفق"
+                    break
+                  else
+                    RETRY=$((RETRY+1))
+                    sleep $(( (RANDOM % 10) + 1 ))
+                  fi
+                done
+                rm -f "/tmp/agg_${STRAT}/final_base64.txt"
+                echo "4.5- ذخیره پرچم شروع پاکسازی..."
+                FILES_TO_DELETE_JSON="["
+                FIRST=true
+                for FOLDER in $FILES; do
+                  ENC_PATH="backtest_results/${STRAT}/${FOLDER}/results.enc"
+                  if $FIRST; then
+                    FILES_TO_DELETE_JSON+="\"$ENC_PATH\""
+                    FIRST=false
+                  else
+                    FILES_TO_DELETE_JSON+=", \"$ENC_PATH\""
+                  fi
+                done
+                FILES_TO_DELETE_JSON+="]"
+                echo "{\"status\": \"cleaning\", \"files_to_delete\": $FILES_TO_DELETE_JSON}" > "/tmp/agg_${STRAT}/status.json"
+                base64 -w0 < "/tmp/agg_${STRAT}/status.json" > "/tmp/agg_${STRAT}/status_base64.txt"
+                STATUS_SHA=$(gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -q '.sha' 2>/dev/null || echo "")
+                if [ -n "$STATUS_SHA" ]; then
+                  gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" \
+                    -X PUT \
+                    -F message="start cleaning flag" \
+                    -F content="@/tmp/agg_${STRAT}/status_base64.txt" \
+                    -F sha="$STATUS_SHA" \
+                    -F branch="main" 2>&1 || echo "⚠️ خطا در ذخیره پرچم شروع."
+                else
+                  gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" \
+                    -X PUT \
+                    -F message="start cleaning flag" \
+                    -F content="@/tmp/agg_${STRAT}/status_base64.txt" \
+                    -F branch="main" 2>&1 || echo "⚠️ خطا در ذخیره پرچم شروع."
+                fi
+                echo "5- پاک‌سازی results.enc های قدیمی $STRAT ..."
+                for FOLDER in $FILES; do
+                  ENC_PATH="backtest_results/${STRAT}/${FOLDER}/results.enc"
+                  SHA=$(gh api "repos/$THIRD_REPO/contents/$ENC_PATH" -q '.sha' 2>/dev/null)
+                  if [ -n "$SHA" ]; then
+                    RETRY=0; MAX=10000
+                    while [ $RETRY -lt $MAX ]; do
+                      if gh api "repos/$THIRD_REPO/contents/$ENC_PATH" -X DELETE -F message="cleanup" -F sha="$SHA" -F branch="main" 2>&1 || true; then
+                        echo "   ✅ حذف موفق $ENC_PATH"
+                        break
+                      else
+                        RETRY=$((RETRY+1))
+                        sleep $(( (RANDOM % 5) + 1 ))
+                      fi
+                    done
+                  fi
+                done
+                echo "5.5- به‌روزرسانی پرچم وضعیت به completed..."
+                echo '{"status": "completed"}' > "/tmp/agg_${STRAT}/status.json"
+                base64 -w0 < "/tmp/agg_${STRAT}/status.json" > "/tmp/agg_${STRAT}/status_base64.txt"
+                STATUS_SHA=$(gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" -q '.sha' 2>/dev/null || echo "")
+                if [ -n "$STATUS_SHA" ]; then
+                  gh api "repos/$THIRD_REPO/contents/$STATUS_FILE" \
+                    -X PUT \
+                    -F message="update aggregation status to completed" \
+                    -F content="@/tmp/agg_${STRAT}/status_base64.txt" \
+                    -F sha="$STATUS_SHA" \
+                    -F branch="main" 2>&1 || echo "⚠️ خطا در به‌روزرسانی پرچم پایان."
+                fi
+                rm -f "/tmp/agg_${STRAT}/status.json" "/tmp/agg_${STRAT}/status_base64.txt"
+              fi
+              rm -rf "/tmp/agg_${STRAT}"
+              echo ""
+            done
+            echo "✅ یکپارچه‌سازی کامل شد."
+          } >> logs/run.log 2>&1
+
+      - name: Save logs after job
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after aggregate-results (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 3: آماده‌سازی صف کارها (ساخت all_combinations.json) با اصلاح کش
+  # ============================================================
+  prepare-dispatch:
+    needs: aggregate-results
+    runs-on: ubuntu-latest
+    outputs:
+      total_batches: ${{ steps.queue.outputs.total_batches }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: راه‌اندازی پایتون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: دریافت داده‌های لازم از مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' > /tmp/strategies.txt
+      - name: ساخت و به‌روزرسانی all_combinations.json (با اسکریپت پایتون اصلاح شده)
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            python scripts/build_work_queue.py \
+              --progress /tmp/dummy \
+              --strategies /tmp/strategies.txt \
+              --output-dir /tmp/dummy \
+              --batch-size 100 2>&1
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ اسکریپت با خطا مواجه شد (کد $EXIT_CODE)"
+              exit $EXIT_CODE
+            fi
+          } >> logs/run.log 2>&1
+
+          # ========== دریافت فایل با retry و cache buster ==========
+          echo "🔄 دریافت all_combinations.json با retry..." | tee -a logs/run.log
+          for attempt in 1 2 3 4 5; do
+            TIMESTAMP=$(date +%s%N)
+            ALL_COMBOS_CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$TIMESTAMP" \
+              -H "Accept: application/vnd.github.v3.raw" 2>/dev/null)
+            if [ -n "$ALL_COMBOS_CONTENT" ] && [ "$ALL_COMBOS_CONTENT" != "null" ]; then
+              TOTAL_COMBOS=$(echo "$ALL_COMBOS_CONTENT" | jq 'length')
+              TOTAL_BATCHES=$(( (TOTAL_COMBOS + 99) / 100 ))
+              echo "total_batches=$TOTAL_BATCHES" >> $GITHUB_OUTPUT
+              echo "✅ تعداد بسته‌ها: $TOTAL_BATCHES" | tee -a logs/run.log
+              break
+            fi
+            echo "⏳ تلاش $attempt: فایل در دسترس نیست، 3 ثانیه صبر..." | tee -a logs/run.log
+            sleep 3
+          done
+          if [ -z "$TOTAL_BATCHES" ]; then
+            echo "❌ تعداد بسته‌ها صفر در نظر گرفته می‌شود." | tee -a logs/run.log
+            echo "total_batches=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Save logs after job
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after prepare-dispatch (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 4: اجرای fixed jobs (توزیع بسته‌ها) با retry
+  # ============================================================
+  dispatch-fixed:
+    needs: prepare-dispatch
+    if: needs.prepare-dispatch.outputs.total_batches != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: فراخوانی analysis.yml (با retry)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔄 فراخوانی analysis.yml (حالت fixed_batch)..."
+            for attempt in 1 2 3; do
+              if gh workflow run analysis.yml --ref main \
+                -f analysis_module="fixed_batch" \
+                -f analysis_strategy="dummy" \
+                -f analysis_coin="dummy" \
+                -f analysis_interval="dummy" \
+                -f analysis_model="dummy" 2>&1; then
+                echo "✅ فراخوانی analysis.yml موفق بود (تلاش $attempt)."
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after dispatch-fixed (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 5: اجرای golden (پس از اتمام کارهای ثابت)
+  # ============================================================
+  dispatch-golden:
+    needs: dispatch-fixed
+    if: needs.prepare-dispatch.outputs.total_batches == '0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: بررسی وقفه و استراتژی جدید
+        id: interrupt_check
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
+              echo "interrupted=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            LAST_COUNT=$(cat /tmp/last_strategy_count 2>/dev/null || echo "0")
+            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' | wc -l)
+            if [ "$CURRENT_COUNT" -gt "$LAST_COUNT" ]; then
+              echo "$CURRENT_COUNT" > /tmp/last_strategy_count
+              echo "interrupt" | base64 -w0 > /tmp/flag.txt
+              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
+              echo "interrupted=true" >> $GITHUB_OUTPUT
+            else
+              echo "interrupted=false" >> $GITHUB_OUTPUT
+            fi
+          } >> logs/run.log 2>&1
+      - name: فراخوانی analysis.yml برای golden
+        if: steps.interrupt_check.outputs.interrupted == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔄 فراخوانی analysis.yml برای golden..."
+            for attempt in 1 2 3; do
+              if gh workflow run analysis.yml --ref main \
+                -f analysis_module="golden" \
+                -f analysis_strategy="dummy" \
+                -f analysis_coin="dummy" \
+                -f analysis_interval="dummy" \
+                -f analysis_model="dummy" 2>&1; then
+                echo "✅ فراخوانی golden موفق بود (تلاش $attempt)."
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after dispatch-golden (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 6: اجرای portfolios (افزایشی)
+  # ============================================================
+  dispatch-portfolios:
+    needs: dispatch-golden
+    if: needs.prepare-dispatch.outputs.total_batches == '0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: بررسی وقفه و استراتژی جدید
+        id: interrupt_check
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
+              echo "interrupted=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            LAST_COUNT=$(cat /tmp/last_strategy_count 2>/dev/null || echo "0")
+            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' | wc -l)
+            if [ "$CURRENT_COUNT" -gt "$LAST_COUNT" ]; then
+              echo "$CURRENT_COUNT" > /tmp/last_strategy_count
+              echo "interrupt" | base64 -w0 > /tmp/flag.txt
+              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
+              echo "interrupted=true" >> $GITHUB_OUTPUT
+            else
+              echo "interrupted=false" >> $GITHUB_OUTPUT
+            fi
+          } >> logs/run.log 2>&1
+      - name: فراخوانی analysis.yml برای portfolios
+        if: steps.interrupt_check.outputs.interrupted == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔄 فراخوانی analysis.yml برای portfolios..."
+            for attempt in 1 2 3; do
+              if gh workflow run analysis.yml --ref main \
+                -f analysis_module="portfolios" \
+                -f analysis_strategy="dummy" \
+                -f analysis_coin="dummy" \
+                -f analysis_interval="dummy" \
+                -f analysis_model="dummy" 2>&1; then
+                echo "✅ فراخوانی portfolios موفق بود (تلاش $attempt)."
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after dispatch-portfolios (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 7: ذخیره نهایی لاگ (همیشه اجرا می‌شود، مستقل از موفقیت/شکست)
+  # ============================================================
+  save-logs:
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
+          fetch-depth: 0
+      - name: commit و push فایل لاگ واحد
+        run: |
+          mkdir -p logs
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          if ! git diff --cached --quiet; then
+            git commit -m "final update logs (run ${{ github.run_id }})" --allow-empty
+            git pull --rebase origin main || true
+            git push origin main || true
+          else
+            echo "هیچ تغییری در لاگ وجود ندارد." >> logs/run.log 2>&1
+            git add -f logs/run.log
+            git commit -m "final logs (run ${{ github.run_id }})" --allow-empty || true
+            git push origin main || true
+          fi
