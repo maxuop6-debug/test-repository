@@ -1,0 +1,6 @@
+{
+    "news_dir": "data/news",
+    "results_base": "data/backtest_results",
+    "combo_chunk_size": 30,
+    "total_combinations": 252
+}
