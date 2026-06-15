@@ -44,7 +44,7 @@ jobs:
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix_items: ${{ steps.set-matrix.outputs.matrix_items }}
+      matrix_items: ${{ steps.fetch_batch.outputs.matrix_items }}
       empty: ${{ steps.fetch_batch.outputs.empty }}
       total_chunks: ${{ steps.fetch_batch.outputs.chunk_count }}
     steps:
@@ -168,7 +168,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        chunk_index: ${{ fromJson(needs.generate-matrix.outputs.matrix_items) }}
+        chunk_index: ${{ fromJson(needs.generate-matrix.outputs.matrix_items || '[0]') }}
     steps:
       - uses: actions/checkout@v5
         with:
