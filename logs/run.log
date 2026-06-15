@@ -604,3 +604,4 @@ jq: error (at /tmp/agg_Test/new_trades.json:10572): object ({"trades":[...) and 
 🔄 فراخوانی analysis.yml (حالت fixed_batch)...
 https://github.com/Amir9287171/test-repository/actions/runs/27574793042
 ✅ فراخوانی analysis.yml موفق بود (تلاش 1).
+هیچ تغییری در لاگ وجود ندارد.
