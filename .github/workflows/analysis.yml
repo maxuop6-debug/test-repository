@@ -380,7 +380,9 @@ jobs:
               base64 -w0 < "${OUTPUT_FILE}.enc" > /tmp/out_base64.txt
               DEST="analysis_results/${MODULE}/${STRAT}/${COIN}/${INTERVAL}_${MODEL}.csv.enc"
               echo "   📤 آپلود به $DEST ..."
+              set +e
               HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+              set -e
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "   ℹ️ فایل قبلاً وجود دارد. آپلود نمی‌شود."
               else
@@ -554,7 +556,9 @@ jobs:
               fs.writeFileSync('$f.enc', Buffer.concat([iv,enc]));
             "
             DEST="analysis_results/golden/$(basename $f).enc"
+            set +e
             HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+            set -e
             if [ "$HTTP_CODE" != "200" ]; then
               gh api "repos/$THIRD_REPO/contents/$DEST" \
                 -X PUT \
@@ -625,7 +629,9 @@ jobs:
               fs.writeFileSync('$f.enc', Buffer.concat([iv,enc]));
             "
             DEST="analysis_results/portfolios/$(basename $f).enc"
+            set +e
             HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
+            set -e
             if [ "$HTTP_CODE" != "200" ]; then
               gh api "repos/$THIRD_REPO/contents/$DEST" \
                 -X PUT \
