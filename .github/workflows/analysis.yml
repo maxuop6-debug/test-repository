@@ -301,6 +301,8 @@ jobs:
         id: execute_batch
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           CHUNK_JSON=$(cat /tmp/chunk.json)
           LENGTH=$(echo "$CHUNK_JSON" | jq length)
@@ -311,6 +313,8 @@ jobs:
             MODULE=$(echo "$ITEM" | jq -r '.module')
             STRAT=$(echo "$ITEM" | jq -r '.strat')
             COIN=$(echo "$ITEM" | jq -r '.coin')
+            # جایگزینی + با _ در نام COIN برای استفاده در مسیر فایل GitHub API
+            SAFE_COIN=$(echo "$COIN" | tr '+' '_')
             INTERVAL=$(echo "$ITEM" | jq -r '.interval')
             MODEL=$(echo "$ITEM" | jq -r '.model')
             CHUNK_START="${{ github.event.inputs.chunk_start }}"
@@ -378,7 +382,7 @@ jobs:
                 fs.writeFileSync('${OUTPUT_FILE}.enc', Buffer.concat([iv,enc]));
               "
               base64 -w0 < "${OUTPUT_FILE}.enc" > /tmp/out_base64.txt
-              DEST="analysis_results/${MODULE}/${STRAT}/${COIN}/${INTERVAL}_${MODEL}.csv.enc"
+              DEST="analysis_results/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.csv.enc"
               echo "   📤 آپلود به $DEST ..."
               set +e
               HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
