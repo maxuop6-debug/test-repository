@@ -395,10 +395,13 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
         print("⚠️ move_percents موجود نیست — بازده ویژه محاسبه نمی‌شود.")
 
     # ---------- مرحله ۲: فیلتر بر اساس کوین ----------
+    # پشتیبانی از کوین‌های ترکیبی مثل BTCUSDT+ETHUSDT (مانند combo_monthly)
+    target_coins = [c.strip() for c in target_coin.split('+')]
+
     trade_list = []  # لیست (date, profit)
     for t in trades:
         symbol = t.get("symbol") or t.get("pair") or t.get("coin")
-        if symbol != target_coin:
+        if symbol not in target_coins:
             continue
 
         time_str = (t.get("entryTime") or t.get("entry_time") or
