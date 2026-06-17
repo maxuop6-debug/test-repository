@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # combo_10day.py - تحلیل ترکیبی الگوهای خبری در بازه‌های زمانی دلخواه
-# نسخه اصلاح‌شده: تمام باگ‌های شناسایی‌شده برطرف شده‌اند
+# نسخه اصلاح‌شده: باگ‌های مدل‌بندی، move_percents و تفکیک مدل‌ها برطرف شده‌اند
 
 import os
 import sys
@@ -18,7 +18,6 @@ INDICATORS = ['CPI m/m', 'Core CPI m/m', 'PPI m/m', 'Core PPI m/m', 'FOMC', 'CPI
 THRESHOLDS = [0.0, 0.1, 0.2, 0.3]
 
 # نقشه تبدیل نام شاخص در interval به نام استاندارد در INDICATORS
-# باگ ۲ اصلاح شد: CPI_y_y به عنوان یک کلید کامل اضافه شد
 INTERVAL_TO_INDICATOR = {
     'CPI':      'CPI m/m',
     'CoreCPI':  'Core CPI m/m',
@@ -27,6 +26,9 @@ INTERVAL_TO_INDICATOR = {
     'FOMC':     'FOMC',
     'CPI_y_y':  'CPI y/y',
 }
+
+# مدل‌های معتبر
+VALID_MODELS = ['simple_hybrid', 'fibonacci_full', 'fibonacci_hybrid']
 
 # ================================ توابع کمکی بازده ویژه ================================
 
@@ -81,7 +83,6 @@ def parse_percent(value_str):
 
 def detect_indicator_from_filename(filename_no_ext):
     """
-    باگ ۱ و باگ ۶ اصلاح شد:
     تشخیص indicator بر اساس بررسی substring در نام فایل (lowercase).
     این روش مستقل از regex پیچیده یا exact-match است و با هر فرمت نام فایل کار می‌کند.
     """
@@ -98,10 +99,8 @@ def detect_indicator_from_filename(filename_no_ext):
         return 'CPI m/m'
     if 'ppi' in name:
         return 'PPI m/m'
-    # باگ ۶: فایل FOMC که پسوند Moneycontrol دارد نه Forex Factory
     if 'fomc' in name or 'federal' in name or 'interest rate' in name:
         return 'FOMC'
-    # چک اضافه برای فایل Moneycontrol
     if 'moneycontrol' in name or 'united_states' in name:
         return 'FOMC'
 
@@ -111,11 +110,6 @@ def detect_indicator_from_filename(filename_no_ext):
 def load_news_from_directory(news_dir):
     """
     بارگذاری رویدادهای خبری از همه فایل‌های CSV داخل پوشه news_dir.
-
-    باگ‌های اصلاح‌شده:
-      - باگ ۱: جایگزینی regex با detect_indicator_from_filename (substring-based)
-      - باگ ۴: FOMC: داده‌های actual و consensus از فایل خوانده می‌شوند
-      - باگ ۶: فایل FOMC با نام Moneycontrol هم تشخیص داده می‌شود
     """
     events = []
 
@@ -132,7 +126,6 @@ def load_news_from_directory(news_dir):
         file_path = os.path.join(news_dir, filename)
         base_name = filename.replace('.csv', '').strip()
 
-        # باگ ۱ اصلاح شد: تشخیص indicator با substring
         indicator = detect_indicator_from_filename(base_name)
         if indicator is None:
             print(f"   ⚠️ {filename}: indicator ناشناخته → نادیده گرفته شد")
@@ -149,11 +142,9 @@ def load_news_from_directory(news_dir):
                 actual_idx  = find_column_index(header, 'actual')
                 forecast_idx = find_column_index(header, 'forecast')
                 if forecast_idx == -1:
-                    # فایل FOMC از 'consensus' به جای 'forecast' استفاده می‌کند
                     forecast_idx = find_column_index(header, 'consensus')
                 previous_idx = find_column_index(header, 'previous')
 
-                # برای فایل FOMC یک reference_idx نیز داریم
                 reference_idx = find_column_index(header, 'reference') if is_fomc else -1
 
                 if date_idx == -1:
@@ -165,15 +156,11 @@ def load_news_from_directory(news_dir):
                     if not row:
                         continue
 
-                    # باگ ۴ اصلاح شد: برای FOMC فقط ردیف‌های 'Fed Interest Rate Decision'
-                    # یا ردیف‌هایی که actual معتبر دارند پردازش می‌شوند
                     if is_fomc and reference_idx != -1 and reference_idx < len(row):
                         ref = row[reference_idx].strip()
-                        # فقط تصمیمات نرخ بهره اصلی را در نظر می‌گیریم
                         if 'Interest Rate' not in ref and 'FOMC' not in ref:
                             continue
 
-                    # پارس تاریخ
                     if date_idx >= len(row):
                         continue
                     date_str = row[date_idx].strip()
@@ -185,7 +172,6 @@ def load_news_from_directory(news_dir):
                         except ValueError:
                             continue
 
-                    # باگ ۴ اصلاح شد: برای FOMC هم actual و forecast خوانده می‌شوند
                     actual   = parse_percent(row[actual_idx])   if actual_idx != -1   and actual_idx < len(row)   else None
                     forecast = parse_percent(row[forecast_idx]) if forecast_idx != -1 and forecast_idx < len(row) else None
                     previous = parse_percent(row[previous_idx]) if previous_idx != -1 and previous_idx < len(row) else None
@@ -212,26 +198,21 @@ def load_news_from_directory(news_dir):
 
 def parse_interval(interval):
     """
-    باگ ۲ اصلاح شد:
     پارس interval با regex از انتها به جای split('_') ساده.
-    این تابع هر interval مثل CPI_y_y_post_10d را درست تجزیه می‌کند.
 
     خروجی:
       ('fixed', days_int, None)           برای fixed_Xd
       (indicator_key, direction, days_int) برای news-based
       None                                 در صورت خطا
     """
-    # بررسی فرمت fixed
     m_fixed = re.match(r'^fixed_(\d+)d$', interval)
     if m_fixed:
         return ('fixed', int(m_fixed.group(1)), None)
 
-    # باگ ۲: parse از انتها با regex تا نام شاخص چند-قسمتی درست تشخیص داده شود
-    # فرمت: <indicator_key>_(post|pre)_<days>d
     m_news = re.match(r'^(.+)_(post|pre)_(\d+)d$', interval)
     if m_news:
-        indicator_key = m_news.group(1)   # مثلاً CPI_y_y یا CoreCPI
-        direction     = m_news.group(2)   # post یا pre
+        indicator_key = m_news.group(1)
+        direction     = m_news.group(2)
         days          = int(m_news.group(3))
         return (indicator_key, direction, days)
 
@@ -241,8 +222,6 @@ def parse_interval(interval):
 def find_nearest_event_date(events, target_date, indicator, direction='post'):
     """
     نزدیک‌ترین رویداد خبری برای indicator مشخص نسبت به target_date.
-    direction='post': اولین رویداد بعد از target_date (یا همان روز)
-    direction='pre':  آخرین رویداد قبل از target_date (یا همان روز)
     """
     filtered = [ev["date"] for ev in events
                 if ev["indicator"] == indicator and ev["date"] is not None]
@@ -260,7 +239,6 @@ def find_nearest_event_date(events, target_date, indicator, direction='post'):
 def get_period_key_from_date(date, interval, news_events):
     """
     محاسبه کلید بازه زمانی برای یک تاریخ معین.
-    باگ ۲ اصلاح شد: از parse_interval استفاده می‌شود.
     خروجی: رشته 'YYYY-MM-DD_YYYY-MM-DD' یا None
     """
     parsed = parse_interval(interval)
@@ -270,7 +248,6 @@ def get_period_key_from_date(date, interval, news_events):
 
     mode = parsed[0]
 
-    # ---- بازه ثابت (fixed) ----
     if mode == 'fixed':
         days = parsed[1]
         epoch = datetime(2000, 1, 1).date()
@@ -280,12 +257,10 @@ def get_period_key_from_date(date, interval, news_events):
         end   = start + timedelta(days=days - 1)
         return f"{start.isoformat()}_{end.isoformat()}"
 
-    # ---- بازه وابسته به خبر ----
     indicator_key = mode
     direction     = parsed[1]
     days          = parsed[2]
 
-    # نگاشت indicator_key به نام استاندارد
     indicator_name = INTERVAL_TO_INDICATOR.get(indicator_key)
     if not indicator_name:
         print(f"⚠️ indicator_key ناشناخته در interval: {indicator_key}")
@@ -294,16 +269,14 @@ def get_period_key_from_date(date, interval, news_events):
     if days == 0:
         return date.isoformat()
 
-    # پیدا کردن تاریخ رویداد خبری نزدیک
     event_date = find_nearest_event_date(news_events, date, indicator_name, direction)
     if event_date is None:
         return None
 
-    # محاسبه بازه زمانی
     if direction == 'post':
         start = event_date + timedelta(days=1)
         end   = start + timedelta(days=days - 1)
-    else:  # pre
+    else:
         end   = event_date - timedelta(days=1)
         start = end - timedelta(days=days - 1)
 
@@ -313,7 +286,6 @@ def get_period_key_from_date(date, interval, news_events):
 def compute_indicator_status_for_period(start_date, end_date, news_events):
     """
     محاسبه وضعیت (Good/Bad/Neutral) هر شاخص برای بازه [start_date, end_date].
-    باگ ۴ اصلاح شد: FOMC اگر actual و forecast داشت، diff محاسبه می‌شود.
     """
     events_in_range = [ev for ev in news_events
                        if start_date <= ev["date"] <= end_date]
@@ -335,7 +307,6 @@ def compute_indicator_status_for_period(start_date, end_date, news_events):
                 diffs.append(ev["actual"] - ev["forecast"])
 
         if not diffs:
-            # رویداد وجود دارد ولی داده کافی ندارد (مثل برخی ردیف‌های FOMC)
             status[ind] = {thr: 'Neutral' for thr in THRESHOLDS}
             continue
 
@@ -352,18 +323,59 @@ def compute_indicator_status_for_period(start_date, end_date, news_events):
     return status
 
 
+# ================================ محاسبه بازده بر اساس مدل ================================
+
+def compute_trade_profit(raw_profit, move_percents, model, trade):
+    """
+    اصلاح باگ ۱ و ۳: محاسبه بازده بر اساس مدل مشخص‌شده.
+
+    - simple_hybrid:    بازده خام (raw_profit) بدون special rounding
+    - fibonacci_full:   تمام معاملات با apply_special_rounding
+    - fibonacci_hybrid: بر اساس فیلد is_fibonacci در داده معامله:
+                          اگر True → apply_special_rounding
+                          اگر False یا موجود نباشد → raw_profit خام
+
+    move_percents باید پیش از فراخوانی این تابع اعتبارسنجی شده باشد.
+    """
+    if model == 'simple_hybrid':
+        # مدل ساده: بدون special rounding، همیشه بازده خام
+        return raw_profit
+
+    elif model == 'fibonacci_full':
+        # مدل فیبوناچی کامل: همه معاملات special rounding می‌گیرند
+        return apply_special_rounding(raw_profit, move_percents)
+
+    elif model == 'fibonacci_hybrid':
+        # مدل هیبرید: بر اساس فیلد is_fibonacci در داده معامله تصمیم می‌گیریم
+        is_fib = trade.get("is_fibonacci", False)
+        if is_fib:
+            return apply_special_rounding(raw_profit, move_percents)
+        else:
+            return raw_profit
+
+    else:
+        # مدل ناشناخته: بازده خام (defensive)
+        return raw_profit
+
+
 # ================================ تابع اصلی تحلیل ================================
 
 def process_analysis(trades_json_path, news_dir, interval, target_coin,
-                     chunk_start, chunk_end, output_path):
+                     chunk_start, chunk_end, output_path, model):
     """
     تحلیل اصلی:
       - بارگذاری معاملات و متادیتا
+      - اعتبارسنجی move_percents بر اساس مدل (اصلاح باگ ۲)
       - فیلتر بر اساس کوین
       - گروه‌بندی معاملات بر اساس interval
       - محاسبه وضعیت خبری هر دوره
       - تولید ترکیب‌های شاخص/آستانه
       - ذخیره نتایج در CSV
+
+    اصلاح باگ ۱: پارامتر model اضافه شد
+    اصلاح باگ ۲: اگر move_percents خالی باشد و مدل به آن نیاز داشته باشد، با خطا متوقف می‌شود
+    اصلاح باگ ۳: منطق سه‌گانه مدل‌ها در compute_trade_profit پیاده‌سازی شد
+    اصلاح باگ ۴: فرمت قدیمی برای مدل‌های فیبوناچی با خطا متوقف می‌شود
     """
 
     # ---------- مرحله ۱: بارگذاری معاملات ----------
@@ -374,7 +386,11 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     if isinstance(data, list):
         trades   = data
         metadata = None
-        print("⚠️ فرمت قدیمی (بدون متادیتا) — بازده ویژه محاسبه نمی‌شود.")
+        # اصلاح باگ ۴: اگر مدل فیبوناچی است و metadata ندارد، خطا بده
+        if model in ('fibonacci_full', 'fibonacci_hybrid'):
+            print(f"❌ مدل '{model}' نیاز به متادیتا (move_percents) دارد اما فایل فرمت قدیمی است.")
+            sys.exit(1)
+        print("⚠️ فرمت قدیمی (بدون متادیتا) — simple_hybrid با بازده خام اجرا می‌شود.")
     elif isinstance(data, dict) and "trades" in data:
         trades   = data["trades"]
         metadata = data.get("metadata", {})
@@ -389,13 +405,23 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
 
     # استخراج move_percents از متادیتا
     move_percents = metadata.get("move_percents", []) if metadata else []
-    if move_percents:
+
+    # اصلاح باگ ۲: اگر مدل به move_percents نیاز دارد و آن خالی است، با خطا متوقف شو
+    if model in ('fibonacci_full', 'fibonacci_hybrid'):
+        if not move_percents:
+            print(f"❌ مدل '{model}' نیاز به move_percents دارد اما این لیست خالی یا موجود نیست.")
+            print("   لطفاً از فایل معاملاتی استفاده کنید که metadata.move_percents داشته باشد.")
+            sys.exit(1)
         print(f"📈 move_percents: {move_percents}")
     else:
-        print("⚠️ move_percents موجود نیست — بازده ویژه محاسبه نمی‌شود.")
+        # simple_hybrid نیازی به move_percents ندارد
+        if move_percents:
+            print(f"ℹ️ move_percents موجود است ({move_percents}) اما مدل simple_hybrid از آن استفاده نمی‌کند.")
+        else:
+            print("ℹ️ مدل simple_hybrid: بازده خام (raw_profit) استفاده می‌شود.")
 
     # ---------- مرحله ۲: فیلتر بر اساس کوین ----------
-    # پشتیبانی از کوین‌های ترکیبی مثل BTCUSDT+ETHUSDT (مانند combo_monthly)
+    # پشتیبانی از کوین‌های ترکیبی مثل BTCUSDT+ETHUSDT
     target_coins = [c.strip() for c in target_coin.split('+')]
 
     trade_list = []  # لیست (date, profit)
@@ -426,12 +452,12 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
         except (TypeError, ValueError):
             raw_profit = 0.0
 
-        profit = apply_special_rounding(raw_profit, move_percents) if move_percents else raw_profit
+        # اصلاح باگ ۳: محاسبه بازده بر اساس مدل — با پاس دادن کل trade برای fibonacci_hybrid
+        profit = compute_trade_profit(raw_profit, move_percents, model, t)
         trade_list.append((trade_date, profit))
 
     if not trade_list:
         print(f"⚠️ هیچ معامله‌ای برای کوین {target_coin} یافت نشد.")
-        # باگ ۵ اصلاح شد: فایل خالی ایجاد می‌شود تا workflow نشکند
         _write_empty_csv(output_path)
         return
 
@@ -472,14 +498,10 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     # ---------- مرحله ۵: محاسبه وضعیت خبری هر دوره ----------
     period_status = {}
     for period_key, ret in period_returns.items():
-        # period_key فرمت 'YYYY-MM-DD_YYYY-MM-DD' دارد
-        # چون تاریخ‌ها با dash هستند و separator هم underscore است،
-        # split('_') ممکن است بیش از ۲ قسمت بدهد.
-        # راه‌حل: برش از وسط با ایندکس ثابت (هر تاریخ ۱۰ کاراکتر است)
         if len(period_key) < 21:
             continue
-        start_str = period_key[:10]   # 'YYYY-MM-DD'
-        end_str   = period_key[11:]   # 'YYYY-MM-DD' (بعد از underscore)
+        start_str = period_key[:10]
+        end_str   = period_key[11:]
 
         try:
             start_date = datetime.strptime(start_str, "%Y-%m-%d").date()
@@ -573,7 +595,7 @@ def _write_empty_csv(output_path):
 def _write_csv(output_path, csv_rows):
     """
     ذخیره خروجی در CSV.
-    باگ ۵ اصلاح شد: بررسی dirname قبل از makedirs تا از خطا جلوگیری شود.
+    بررسی dirname قبل از makedirs تا از خطا جلوگیری شود.
     """
     fieldnames = [
         'آستانه', 'تعداد_شاخص‌ها', 'لیست_شاخص‌ها', 'الگوی_وضعیت',
@@ -581,7 +603,6 @@ def _write_csv(output_path, csv_rows):
         'درصد_ضررده', 'درصد_سودده', 'نسبت_شانس', 'دوره‌ها',
     ]
 
-    # باگ ۵: اگر dirname خالی نبود makedirs می‌زنیم
     parent_dir = os.path.dirname(output_path)
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)
@@ -619,7 +640,8 @@ def main():
     parser.add_argument("--coin",             required=True,
                         help="جفت ارز (مثلاً BTCUSDT)")
     parser.add_argument("--model",            required=True,
-                        help="مدل محاسبه (برای نام خروجی)")
+                        choices=VALID_MODELS,
+                        help="مدل محاسبه: simple_hybrid | fibonacci_full | fibonacci_hybrid")
     args = parser.parse_args()
 
     output_file = (
@@ -627,6 +649,7 @@ def main():
     )
     output_path = os.path.join(os.getcwd(), output_file)
 
+    # اصلاح باگ ۱: پارامتر model به process_analysis پاس داده می‌شود
     process_analysis(
         trades_json_path=args.trades_json,
         news_dir=args.news_dir,
@@ -635,6 +658,7 @@ def main():
         chunk_start=args.chunk_start,
         chunk_end=args.chunk_end,
         output_path=output_path,
+        model=args.model,
     )
 
 
