@@ -10014,3 +10014,6 @@ Mem:            15Gi       879Mi        13Gi        40Mi       1.5Gi        14Gi
 ✅ عملیات ساخت و به‌روزرسانی صف با موفقیت پایان یافت.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 95
+🔄 فراخوانی analysis.yml (حالت fixed_batch)...
+https://github.com/Amir9287171/test-repository/actions/runs/27752529424
+✅ فراخوانی analysis.yml موفق بود (تلاش 1).
