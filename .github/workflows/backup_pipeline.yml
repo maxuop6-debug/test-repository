@@ -2,17 +2,21 @@ name: Backup Pipeline
 
 on:
   workflow_dispatch:
-  repository_dispatch:
-    types: [run-backup]
+    inputs:
+      force:
+        description: 'اجرای اجباری بدون بررسی زمان'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+  schedule:
+    - cron: '0 * * * *'   # هر ساعت – بررسی زمان‌بندی در پایتون انجام می‌شود
 
 concurrency:
   group: backup-loop
   cancel-in-progress: false
-
-env:
-  IRAN_TZ: "Asia/Tehran"
-  ORIGIN_DATE: "2000-01-01"
-  MAX_PACK_BYTES: 10485760
 
 jobs:
   backup:
@@ -20,503 +24,111 @@ jobs:
     timeout-minutes: 55
 
     steps:
+      # ─── دریافت کد ───────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
+      # ─── نصب Python و وابستگی‌ها ─────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install Python dependencies
-        run: pip install cryptography pytz requests
-
-      # ─────────────────────────────────────────────────
-      # Helper: shared telegram.py used by all steps
-      # ─────────────────────────────────────────────────
-      - name: Write shared helpers
+      - name: Install dependencies
         run: |
-          cat > /tmp/tg_helper.py << 'PYEOF'
-import os, hashlib, requests
-import secrets as sec
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          pip install --upgrade pip
+          pip install requests cryptography
 
-def get_key():
-    password = os.environ["RESULTS_PASSWORD"].encode()
-    return hashlib.sha256(password).digest()
-
-def encrypt(data: bytes, key: bytes) -> bytes:
-    nonce = sec.token_bytes(12)
-    return nonce + AESGCM(key).encrypt(nonce, data, None)
-
-def decrypt(data: bytes, key: bytes) -> bytes:
-    return AESGCM(key).decrypt(data[:12], data[12:], None)
-
-def tg_upload(file_bytes: bytes, filename: str, caption: str) -> str:
-    """Upload bytes to Telegram, return file_id."""
-    bot = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat = os.environ["TELEGRAM_CHAT_ID"]
-    url = f"https://api.telegram.org/bot{bot}/sendDocument"
-    resp = requests.post(url, data={"chat_id": chat, "caption": caption},
-                         files={"document": (filename, file_bytes, "application/octet-stream")},
-                         timeout=120)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("ok"):
-        raise RuntimeError(f"Telegram error: {result}")
-    return result["result"]["document"]["file_id"]
-
-def tg_download(file_id: str) -> bytes:
-    """Download file from Telegram by file_id, return raw bytes."""
-    bot = os.environ["TELEGRAM_BOT_TOKEN"]
-    info = requests.get(f"https://api.telegram.org/bot{bot}/getFile",
-                        params={"file_id": file_id}, timeout=30)
-    info.raise_for_status()
-    fpath = info.json()["result"]["file_path"]
-    dl = requests.get(f"https://api.telegram.org/file/bot{bot}/{fpath}", timeout=120)
-    dl.raise_for_status()
-    return dl.content
-PYEOF
-          echo "Helpers written."
-
-      # ─────────────────────────────────────────────────
-      # 0. Integrity Test
-      # ─────────────────────────────────────────────────
-      - name: Integrity Test
+      # ─── اجرای پایپ‌لاین اصلی ───────────────────────────────────────────────
+      - name: Run backup pipeline
         env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+          RESULTS_PASSWORD:    ${{ secrets.RESULTS_PASSWORD }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:   ${{ github.repository }}
+          GITHUB_ACTOR:        ${{ github.actor }}
+          WEEKLY_REPOS:        "now-test-repo"
+          FORCE_RUN:           ${{ github.event.inputs.force || 'false' }}
+        run: |
+          FORCE_FLAG=""
+          if [ "$FORCE_RUN" = "true" ]; then
+            FORCE_FLAG="--force"
+          fi
+          python backup_system.py run $FORCE_FLAG
+
+      # ─── commit فایل‌های metadata ─────────────────────────────────────────────
+      - name: Commit metadata files
+        run: |
+          git config user.name  "GitHub Actions – Backup Bot"
+          git config user.email "actions@github.com"
+
+          # فایل‌های metadata که باید commit شوند
+          META_FILES=(
+            "auto_mapping.json"
+            "backup_ledger.json"
+            "schedule_times.json"
+            "integrity_pass.flag"
+          )
+
+          CHANGED=0
+          for f in "${META_FILES[@]}"; do
+            if [ -f "$f" ]; then
+              git add "$f"
+              CHANGED=1
+            fi
+          done
+
+          # حذف فایل‌های analysis_results که پاک شده‌اند
+          git add -u analysis_results/ 2>/dev/null || true
+
+          if [ "$CHANGED" = "1" ] || ! git diff --cached --quiet; then
+            git commit -m "chore: backup metadata update $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git push
+          else
+            echo "تغییری برای commit وجود ندارد"
+          fi
+
+      # ─── گزارش خطا در صورت شکست ──────────────────────────────────────────────
+      - name: Notify on failure
+        if: failure()
+        env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python - <<'PYEOF'
-import sys, os, json, lzma, csv, io, datetime
-sys.path.insert(0, "/tmp")
-from tg_helper import get_key, encrypt, decrypt, tg_upload, tg_download
+          import os, requests
+          token   = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          msg = "⚠️ بک‌آپ ناموفق بود!\nزمان: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          requests.post(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              json={"chat_id": chat_id, "text": msg},
+              timeout=15,
+          )
+          PYEOF
 
-FLAG = "integrity_pass.flag"
-if os.path.exists(FLAG):
-    print("Integrity flag exists – skipping."); exit(0)
-
-key = get_key()
-MAPPING_VALUES = {
-    "Good":"G","Bad":"B","Neutral":"N","CPI m/m":"C",
-    "Core CPI m/m":"K","PPI m/m":"P","Core PPI m/m":"R",
-    "FOMC":"F","CPI y/y":"Y",
-}
-MAPPING_COLS = {"date":"d","value":"v","status":"s","indicator":"i","threshold":"t"}
-base = datetime.date(2000,1,1)
-
-rows = [{"date":(datetime.date(2026,1,1)+datetime.timedelta(days=i)).isoformat(),
-         "value":str(round(i*0.1,2)),"status":"Good",
-         "indicator":"CPI m/m","threshold":"0.1"} for i in range(50)]
-
-def map_row(r):
-    out = {}
-    for k,v in r.items():
-        ck = MAPPING_COLS.get(k,k)
-        out[ck] = str((datetime.date.fromisoformat(v)-base).days) if k=="date" else MAPPING_VALUES.get(v,v)
-    return out
-
-mapped = [map_row(r) for r in rows]
-buf = io.StringIO()
-w = csv.DictWriter(buf, fieldnames=list(mapped[0].keys()))
-w.writeheader(); w.writerows(mapped)
-csv_bytes = buf.getvalue().encode()
-
-ciphertext = encrypt(lzma.compress(csv_bytes, preset=9), key)
-file_id = tg_upload(ciphertext, "test_integrity.enc", "TEST_FILE integrity check")
-print(f"Uploaded: {file_id}")
-
-downloaded = tg_download(file_id)
-dec_csv = lzma.decompress(decrypt(downloaded, key)).decode()
-
-INV_VALS = {v:k for k,v in MAPPING_VALUES.items()}
-INV_COLS = {v:k for k,v in MAPPING_COLS.items()}
-reader = csv.DictReader(io.StringIO(dec_csv))
-recovered = []
-for row in reader:
-    out = {}
-    for k,v in row.items():
-        ok = INV_COLS.get(k,k)
-        out[ok] = (base+datetime.timedelta(days=int(v))).isoformat() if ok=="date" else INV_VALS.get(v,v)
-    recovered.append(out)
-
-assert recovered == rows, f"MISMATCH!\nExpected: {rows[:2]}\nGot: {recovered[:2]}"
-print("Integrity test PASSED ✅")
-with open(FLAG,"w") as f: f.write("ok")
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 1. Load Mapping
-      # ─────────────────────────────────────────────────
-      - name: Load Mapping
-        run: |
-          python - <<'PYEOF'
-import json, os
-
-FIXED_VALUES = {
-    "0.0":"L","0.1":"M","0.2":"N","0.3":"O",
-    "Good":"G","Bad":"B","Neutral":"N",
-    "CPI m/m":"C","Core CPI m/m":"K","PPI m/m":"P",
-    "Core PPI m/m":"R","FOMC":"F","CPI y/y":"Y",
-}
-path = "auto_mapping.json"
-mapping = json.load(open(path)) if os.path.exists(path) else {"columns":{},"values":{},"next_code":0}
-mapping["values"].update({k:v for k,v in FIXED_VALUES.items() if k not in mapping["values"]})
-with open(path,"w") as f: json.dump(mapping, f, indent=2)
-print("Mapping loaded.")
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 2. Auto-detect new mapping candidates
-      # ─────────────────────────────────────────────────
-      - name: Auto-detect Mapping
-        run: |
-          python - <<'PYEOF'
-import json, os, csv, glob, string
-from collections import Counter
-
-def next_code(n):
-    L = string.ascii_uppercase
-    l = string.ascii_lowercase
-    if n < 26: return L[n]
-    n -= 26
-    if n < 26*26: return L[n//26] + l[n%26]
-    n -= 26*26
-    return L[n//(26*26)] + l[(n%(26*26))//26] + l[n%26]
-
-path = "auto_mapping.json"
-with open(path) as f: mapping = json.load(f)
-
-counter = Counter()
-for fp in glob.glob("analysis_results/**/*.csv", recursive=True):
-    try:
-        with open(fp, newline="", encoding="utf-8", errors="ignore") as f:
-            for row in csv.reader(f):
-                for cell in row:
-                    c = cell.strip()
-                    if c and not c.replace(".","").replace("-","").isdigit() and len(c)>=3:
-                        counter[c] += 1
-    except Exception as e:
-        print(f"Warning: {fp}: {e}")
-
-current_vals = set(mapping["values"])
-current_codes = set(mapping["values"].values()) | set(mapping["columns"].values())
-nc = mapping.get("next_code", 0)
-added = 0
-
-for word, cnt in sorted(counter.items(), key=lambda x: -x[1]):
-    if cnt <= 5 or word in current_vals: continue
-    code = next_code(nc)
-    while code in current_codes: nc += 1; code = next_code(nc)
-    mapping["values"][word] = code
-    current_codes.add(code); nc += 1; added += 1
-
-mapping["next_code"] = nc
-with open(path,"w") as f: json.dump(mapping, f, indent=2)
-print(f"Added {added} new mapping entries.")
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 3. Process Files (map + compress + encrypt)
-      # ─────────────────────────────────────────────────
-      - name: Process Files
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python - <<'PYEOF'
-import sys, os, json, lzma, csv, io, datetime, glob
-sys.path.insert(0, "/tmp")
-from tg_helper import get_key, encrypt
-
-key = get_key()
-with open("auto_mapping.json") as f: mapping = json.load(f)
-val_map = mapping["values"]
-col_map = mapping["columns"]
-base = datetime.date(2000,1,1)
-processed = []
-
-for src in glob.glob("analysis_results/**/*.csv", recursive=True):
-    dst = src + ".lzxenc"
-    try:
-        with open(src, newline="", encoding="utf-8", errors="ignore") as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames or []
-            rows = list(reader)
-        mapped_cols = [col_map.get(c,c) for c in fieldnames]
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(mapped_cols)
-        for row in rows:
-            new_row = []
-            for c in fieldnames:
-                v = row.get(c,"")
-                try: v = str((datetime.date.fromisoformat(v)-base).days)
-                except: v = val_map.get(v,v)
-                new_row.append(v)
-            writer.writerow(new_row)
-        with open(dst,"wb") as f:
-            f.write(encrypt(lzma.compress(buf.getvalue().encode(), preset=9), key))
-        processed.append({"src":src,"dst":dst,"type":"analysis"})
-        print(f"Processed: {src}")
-    except Exception as e:
-        print(f"Error {src}: {e}")
-
-for src in glob.glob("aggregated/**/*", recursive=True):
-    if os.path.isdir(src): continue
-    dst = src + ".lzxenc"
-    try:
-        with open(src,"rb") as f: data = f.read()
-        compressed = lzma.compress(data, preset=9)
-        out = compressed if src.endswith(".enc") else encrypt(compressed, key)
-        with open(dst,"wb") as f: f.write(out)
-        processed.append({"src":src,"dst":dst,"type":"aggregated"})
-    except Exception as e:
-        print(f"Error {src}: {e}")
-
-with open("/tmp/processed_files.json","w") as f: json.dump(processed, f)
-print(f"Total: {len(processed)}")
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 4. Pack Bundles (10 MB)
-      # ─────────────────────────────────────────────────
-      - name: Pack Bundles
-        run: |
-          python - <<'PYEOF'
-import os, json, tarfile, datetime
-
-with open("/tmp/processed_files.json") as f: processed = json.load(f)
-MAX = 10 * 1024 * 1024
-now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
-bundles, current_files, current_size, idx = [], [], 0, 0
-
-def flush(files, i):
-    if not files: return None
-    name = f"/tmp/backup_{now_str}_{i:03d}.tar.xz"
-    ix_path = f"/tmp/index_{i:03d}.json"
-    with open(ix_path,"w") as f:
-        json.dump({"files":[fi["dst"] for fi in files],"created":now_str}, f, indent=2)
-    with tarfile.open(name,"w:xz") as tar:
-        tar.add(ix_path, arcname="index.json")
-        for fi in files:
-            if os.path.exists(fi["dst"]):
-                tar.add(fi["dst"], arcname=fi["dst"])
-    print(f"Bundle: {name} ({os.path.getsize(name)/1024/1024:.2f} MB)")
-    return name
-
-for fi in processed:
-    size = os.path.getsize(fi["dst"]) if os.path.exists(fi["dst"]) else 0
-    if size > MAX:
-        b = flush(current_files, idx)
-        if b: bundles.append(b); idx += 1
-        current_files, current_size = [], 0
-        b = flush([fi], idx)
-        if b: bundles.append(b); idx += 1
-    elif current_size + size > MAX:
-        b = flush(current_files, idx)
-        if b: bundles.append(b); idx += 1
-        current_files, current_size, idx = [fi], size, idx+1
-    else:
-        current_files.append(fi); current_size += size
-
-b = flush(current_files, idx)
-if b: bundles.append(b)
-with open("/tmp/bundles.json","w") as f: json.dump(bundles, f)
-print(f"Total bundles: {len(bundles)}")
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 5. Upload to Telegram
-      # ─────────────────────────────────────────────────
-      - name: Upload to Telegram
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - <<'PYEOF'
-import sys, os, json, datetime
-sys.path.insert(0, "/tmp")
-from tg_helper import get_key, encrypt, tg_upload
-
-key = get_key()
-with open("/tmp/bundles.json") as f: bundles = json.load(f)
-ledger_path = "backup_ledger.json"
-ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {"uploads":[]}
-now = datetime.datetime.utcnow().isoformat()
-
-for bundle_path in bundles:
-    if not os.path.exists(bundle_path): continue
-    with open(bundle_path,"rb") as f: data = f.read()
-    enc = encrypt(data, key)
-    fname = os.path.basename(bundle_path) + ".enc"
-    size_mb = len(enc)/1024/1024
-    caption = f"📦 Backup | {fname} | {size_mb:.2f} MB | {now[:10]}"
-    try:
-        file_id = tg_upload(enc, fname, caption)
-        ledger["uploads"].append({"file":fname,"file_id":file_id,
-            "size_bytes":len(enc),"uploaded_at":now,"type":"backup"})
-        print(f"Uploaded: {fname} → {file_id}")
-    except Exception as e:
-        print(f"Upload failed {bundle_path}: {e}")
-
-with open(ledger_path,"w") as f: json.dump(ledger, f, indent=2)
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 6. Cleanup analysis_results
-      # ─────────────────────────────────────────────────
-      - name: Cleanup analysis_results
-        run: |
-          python - <<'PYEOF'
-import os, json, glob
-
-with open("/tmp/processed_files.json") as f: processed = json.load(f)
-for fi in processed:
-    if fi["type"] == "analysis":
-        try: os.remove(fi["src"]); print(f"Deleted: {fi['src']}")
-        except: pass
-    try: os.remove(fi["dst"])
-    except: pass
-
-for d in sorted(glob.glob("analysis_results/**", recursive=True), reverse=True):
-    if os.path.isdir(d):
-        try: os.rmdir(d)
-        except: pass
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 7. Send Metadata (once per day)
-      # ─────────────────────────────────────────────────
-      - name: Send Metadata
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - <<'PYEOF'
-import sys, os, json, tarfile, datetime, io
-sys.path.insert(0, "/tmp")
-from tg_helper import get_key, encrypt, tg_upload
-
-ledger_path = "backup_ledger.json"
-ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {"uploads":[]}
-today = datetime.date.today().isoformat()
-if ledger.get("last_metadata") == today:
-    print("Metadata already sent today."); exit(0)
-
-key = get_key()
-buf = io.BytesIO()
-with tarfile.open(fileobj=buf, mode="w:xz") as tar:
-    for fn in ["backup_ledger.json","auto_mapping.json","integrity_pass.flag"]:
-        if os.path.exists(fn): tar.add(fn)
-buf.seek(0); data = buf.read()
-enc = encrypt(data, key)
-fname = f"metadata_{today}.tar.xz.enc"
-file_id = tg_upload(enc, fname, f"🗂 Metadata | {today}")
-print(f"Metadata sent: {file_id}")
-ledger["last_metadata"] = today
-ledger["uploads"].append({"file":fname,"file_id":file_id,"type":"metadata",
-    "uploaded_at":datetime.datetime.utcnow().isoformat()})
-with open(ledger_path,"w") as f: json.dump(ledger, f, indent=2)
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 8. Weekly Full Backup
-      # ─────────────────────────────────────────────────
-      - name: Weekly Full Backup
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python - <<'PYEOF'
-import sys, os, json, tarfile, datetime, subprocess, io
-sys.path.insert(0, "/tmp")
-from tg_helper import get_key, encrypt, tg_upload
-
-today = datetime.date.today()
-if today.weekday() not in (3, 4):
-    print(f"Not weekly day. Skipping."); exit(0)
-
-ledger_path = "backup_ledger.json"
-ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {}
-wk = today.isocalendar()[1]
-if ledger.get("last_weekly_week") == wk:
-    print("Weekly already done."); exit(0)
-
-repo = os.environ.get("GITHUB_REPOSITORY","")
-token = os.environ["GITHUB_TOKEN"]
-clone_url = f"https://x-access-token:{token}@github.com/{repo}.git"
-subprocess.run(["git","clone","--depth=1", clone_url, "/tmp/weekly_repo"], check=True)
-
-key = get_key()
-buf = io.BytesIO()
-with tarfile.open(fileobj=buf, mode="w:xz") as tar:
-    tar.add("/tmp/weekly_repo", arcname="repo", recursive=True)
-buf.seek(0); data = buf.read()
-enc = encrypt(data, key)
-size_mb = len(enc)/1024/1024
-if len(enc) > 50*1024*1024:
-    print(f"Too large ({size_mb:.1f} MB). Skipping."); exit(0)
-
-fname = f"weekly_{today}.tar.xz.enc"
-file_id = tg_upload(enc, fname, f"📅 Weekly Backup | {today} | {size_mb:.1f} MB")
-print(f"Weekly uploaded: {file_id}")
-ledger["last_weekly_week"] = wk
-ledger.setdefault("uploads",[]).append({"file":fname,"file_id":file_id,
-    "type":"weekly","uploaded_at":datetime.datetime.utcnow().isoformat()})
-with open(ledger_path,"w") as f: json.dump(ledger, f, indent=2)
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # 9. Generate Schedule
-      # ─────────────────────────────────────────────────
-      - name: Generate Schedule
-        run: |
-          python - <<'PYEOF'
-import json, datetime, random, os, pytz
-
-iran = pytz.timezone("Asia/Tehran")
-today = datetime.datetime.now(iran).date().isoformat()
-spath = "schedule_times.json"
-schedule = json.load(open(spath)) if os.path.exists(spath) else {}
-if today not in schedule:
-    times = sorted(random.sample(range(12*60, 24*60), 4))
-    schedule[today] = [f"{t//60:02d}:{t%60:02d}" for t in times]
-    with open(spath,"w") as f: json.dump(schedule, f, indent=2)
-    print(f"Schedule for {today}: {schedule[today]}")
-else:
-    print(f"Schedule exists: {schedule[today]}")
-PYEOF
-
-      # ─────────────────────────────────────────────────
-      # Commit Changes
-      # ─────────────────────────────────────────────────
-      - name: Commit Changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add backup_ledger.json auto_mapping.json integrity_pass.flag schedule_times.json 2>/dev/null || true
-          git diff --staged --quiet || git commit -m "chore: auto backup $(date -u '+%Y-%m-%d %H:%M:%S') [skip ci]"
-          git push || true
-
-      # ─────────────────────────────────────────────────
-      # 10. Trigger Loop (always)
-      # ─────────────────────────────────────────────────
-      - name: Trigger Loop Workflow
+      # ─── چرخه: فراخوانی loop_backup در صورت شکست هم ──────────────────────────
+      - name: Trigger loop (always)
         if: always()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          curl -sf -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/loop_backup.yml/dispatches" \
-            -d '{"ref":"main"}' \
-            && echo "Loop triggered." || echo "Loop trigger failed (non-fatal)."
+          python - <<'PYEOF'
+          import os, requests
+
+          token   = os.environ["GITHUB_TOKEN"]
+          repo    = os.environ["GITHUB_REPOSITORY"]
+          url     = f"https://api.github.com/repos/{repo}/actions/workflows/loop_backup.yml/dispatches"
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept":        "application/vnd.github+json",
+          }
+          resp = requests.post(url, json={"ref": "main"}, headers=headers, timeout=30)
+          print(f"loop_backup trigger: {resp.status_code}")
+          PYEOF
