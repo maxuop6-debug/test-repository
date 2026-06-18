@@ -1,0 +1,722 @@
+name: Backup Pipeline
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [run-backup]
+
+concurrency:
+  group: backup-loop
+  cancel-in-progress: false
+
+env:
+  IRAN_TZ: "Asia/Tehran"
+  ORIGIN_DATE: "2000-01-01"
+  MAX_PACK_BYTES: 10485760   # 10 MB
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      # ─────────────────────────────────────────────────
+      # 0. Checkout & Python setup
+      # ─────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install cryptography pytz
+
+      # ─────────────────────────────────────────────────
+      # 0. Integrity test (skip if flag exists)
+      # ─────────────────────────────────────────────────
+      - name: Integrity Test
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PYEOF'
+          import os, json, lzma, csv, io, hashlib, datetime, urllib.request, urllib.parse
+
+          FLAG = "integrity_pass.flag"
+          if os.path.exists(FLAG):
+              print("Integrity flag exists – skipping test.")
+              exit(0)
+
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          import secrets as sec
+
+          password = os.environ["RESULTS_PASSWORD"].encode()
+          key = hashlib.sha256(password).digest()
+
+          def encrypt(data: bytes) -> bytes:
+              nonce = sec.token_bytes(12)
+              return nonce + AESGCM(key).encrypt(nonce, data, None)
+
+          def decrypt(data: bytes) -> bytes:
+              return AESGCM(key).decrypt(data[:12], data[12:], None)
+
+          # ── Build sample CSV ──
+          MAPPING_VALUES = {
+              "Good":"G","Bad":"B","Neutral":"N","CPI m/m":"C",
+              "Core CPI m/m":"K","PPI m/m":"P","Core PPI m/m":"R",
+              "FOMC":"F","CPI y/y":"Y",
+          }
+          MAPPING_COLS = {"date":"d","value":"v","status":"s","indicator":"i","threshold":"t"}
+
+          rows = []
+          base = datetime.date(2000,1,1)
+          for i in range(50):
+              d = (datetime.date(2026,1,1) + datetime.timedelta(days=i)).isoformat()
+              rows.append({"date":d,"value":str(round(i*0.1,2)),
+                           "status":"Good","indicator":"CPI m/m","threshold":"0.1"})
+
+          # ── Apply mapping ──
+          def map_row(r):
+              out = {}
+              for k,v in r.items():
+                  ck = MAPPING_COLS.get(k,k)
+                  if k == "date":
+                      days = (datetime.date.fromisoformat(v)-base).days
+                      out[ck] = str(days)
+                  else:
+                      out[ck] = MAPPING_VALUES.get(v,v)
+              return out
+
+          mapped = [map_row(r) for r in rows]
+
+          buf = io.StringIO()
+          w = csv.DictWriter(buf, fieldnames=list(mapped[0].keys()))
+          w.writeheader(); w.writerows(mapped)
+          csv_bytes = buf.getvalue().encode()
+
+          # ── Compress + Encrypt ──
+          compressed = lzma.compress(csv_bytes, preset=9)
+          ciphertext = encrypt(compressed)
+
+          # ── Upload to Telegram ──
+          bot = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat = os.environ["TELEGRAM_CHAT_ID"]
+          url = f"https://api.telegram.org/bot{bot}/sendDocument"
+
+          import urllib.request, urllib.parse
+          boundary = "----FormBoundary"
+          body = (
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="caption"\r\n\r\nTEST_FILE integrity check\r\n'
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="document"; filename="test_integrity.enc"\r\n'
+              f"Content-Type: application/octet-stream\r\n\r\n"
+          ).encode() + ciphertext + f"\r\n--{boundary}--\r\n".encode()
+
+          req = urllib.request.Request(url, data=body,
+              headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+          with urllib.request.urlopen(req) as resp:
+              result = json.loads(resp.read())
+
+          file_id = result["result"]["document"]["file_id"]
+          print(f"Uploaded test file, file_id={file_id}")
+
+          # ── Download from Telegram ──
+          info_url = f"https://api.telegram.org/bot{bot}/getFile?file_id={file_id}"
+          with urllib.request.urlopen(info_url) as r:
+              info = json.loads(r.read())
+          fpath = info["result"]["file_path"]
+          dl_url = f"https://api.telegram.org/file/bot{bot}/{fpath}"
+          with urllib.request.urlopen(dl_url) as r:
+              downloaded = r.read()
+
+          # ── Decrypt + Decompress + Unmap ──
+          dec_compressed = decrypt(downloaded)
+          dec_csv = lzma.decompress(dec_compressed).decode()
+
+          INV_VALS = {v:k for k,v in MAPPING_VALUES.items()}
+          INV_COLS = {v:k for k,v in MAPPING_COLS.items()}
+
+          reader = csv.DictReader(io.StringIO(dec_csv))
+          recovered = []
+          for row in reader:
+              out = {}
+              for k,v in row.items():
+                  ok = INV_COLS.get(k,k)
+                  if ok == "date":
+                      out[ok] = (base + datetime.timedelta(days=int(v))).isoformat()
+                  else:
+                      out[ok] = INV_VALS.get(v,v)
+              recovered.append(out)
+
+          # ── Compare ──
+          assert recovered == rows, f"Mismatch! recovered={recovered[:2]}"
+          print("Integrity test PASSED ✅")
+          with open(FLAG,"w") as f: f.write("ok")
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 1. Load or create auto_mapping.json
+      # ─────────────────────────────────────────────────
+      - name: Load Mapping
+        run: |
+          python - <<'PYEOF'
+          import json, os
+
+          FIXED_VALUES = {
+              "0.0":"L","0.1":"M","0.2":"N","0.3":"O",
+              "Good":"G","Bad":"B","Neutral":"N",
+              "CPI m/m":"C","Core CPI m/m":"K","PPI m/m":"P",
+              "Core PPI m/m":"R","FOMC":"F","CPI y/y":"Y",
+          }
+          DEFAULT = {"columns":{},"values": FIXED_VALUES,"next_code":0}
+
+          path = "auto_mapping.json"
+          if os.path.exists(path):
+              with open(path) as f:
+                  mapping = json.load(f)
+              # Ensure fixed values present
+              mapping["values"].update({k:v for k,v in FIXED_VALUES.items()
+                                        if k not in mapping["values"]})
+          else:
+              mapping = DEFAULT.copy()
+
+          with open(path,"w") as f:
+              json.dump(mapping, f, indent=2)
+          print("Mapping loaded.")
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 2. Auto-detect new mapping candidates
+      # ─────────────────────────────────────────────────
+      - name: Auto-detect Mapping
+        run: |
+          python - <<'PYEOF'
+          import json, os, csv, glob
+          from collections import Counter
+
+          path = "auto_mapping.json"
+          with open(path) as f:
+              mapping = json.load(f)
+
+          def next_code(n):
+              import string
+              letters = string.ascii_uppercase
+              if n < 26:
+                  return letters[n]
+              n -= 26
+              if n < 26*26:
+                  big = n // 26
+                  small = n % 26
+                  return letters[big] + string.ascii_lowercase[small]
+              n -= 26*26
+              big = n // (26*26); mid = (n % (26*26)) // 26; sm = n % 26
+              return letters[big] + string.ascii_lowercase[mid] + string.ascii_lowercase[sm]
+
+          counter = Counter()
+          for fpath in glob.glob("analysis_results/**/*.csv", recursive=True):
+              try:
+                  with open(fpath, newline="", encoding="utf-8", errors="ignore") as f:
+                      reader = csv.reader(f)
+                      for row in reader:
+                          for cell in row:
+                              cell = cell.strip()
+                              if cell and not cell.replace(".","").replace("-","").isdigit() and len(cell)>=3:
+                                  counter[cell] += 1
+              except Exception as e:
+                  print(f"Warning reading {fpath}: {e}")
+
+          current_vals = set(mapping["values"].keys())
+          current_codes = set(mapping["values"].values()) | set(mapping["columns"].values())
+          nc = mapping.get("next_code", 0)
+
+          candidates = sorted(
+              [(w,c) for w,c in counter.items() if c > 5 and w not in current_vals],
+              key=lambda x: -x[1]
+          )
+
+          added = 0
+          for word, _ in candidates:
+              code = next_code(nc)
+              while code in current_codes:
+                  nc += 1
+                  code = next_code(nc)
+              mapping["values"][word] = code
+              current_codes.add(code)
+              nc += 1
+              added += 1
+
+          mapping["next_code"] = nc
+          with open(path,"w") as f:
+              json.dump(mapping, f, indent=2)
+          print(f"Added {added} new mapping entries.")
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 3. Map, compress, encrypt analysis_results/
+      #    Compress+encrypt aggregated/ (already .enc)
+      # ─────────────────────────────────────────────────
+      - name: Process Files
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          python - <<'PYEOF'
+          import os, json, lzma, csv, io, hashlib, datetime, glob
+          import secrets as sec
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+          password = os.environ["RESULTS_PASSWORD"].encode()
+          key = hashlib.sha256(password).digest()
+
+          def encrypt(data: bytes) -> bytes:
+              nonce = sec.token_bytes(12)
+              return nonce + AESGCM(key).encrypt(nonce, data, None)
+
+          with open("auto_mapping.json") as f:
+              mapping = json.load(f)
+
+          val_map = mapping["values"]
+          col_map = mapping["columns"]
+          base = datetime.date(2000,1,1)
+
+          processed = []
+
+          # ── analysis_results: map + compress + encrypt ──
+          for src in glob.glob("analysis_results/**/*.csv", recursive=True):
+              dst = src + ".lzxenc"
+              try:
+                  with open(src, newline="", encoding="utf-8", errors="ignore") as f:
+                      reader = csv.DictReader(f)
+                      fieldnames = reader.fieldnames or []
+                      rows = list(reader)
+
+                  mapped_cols = [col_map.get(c,c) for c in fieldnames]
+
+                  buf = io.StringIO()
+                  writer = csv.writer(buf)
+                  writer.writerow(mapped_cols)
+                  for row in rows:
+                      new_row = []
+                      for c in fieldnames:
+                          v = row.get(c,"")
+                          mc = col_map.get(c,c)
+                          # Try date parse
+                          try:
+                              d = datetime.date.fromisoformat(v)
+                              v = str((d-base).days)
+                          except:
+                              v = val_map.get(v,v)
+                          new_row.append(v)
+                      writer.writerow(new_row)
+
+                  csv_bytes = buf.getvalue().encode()
+                  compressed = lzma.compress(csv_bytes, preset=9)
+                  ciphertext = encrypt(compressed)
+
+                  with open(dst,"wb") as f:
+                      f.write(ciphertext)
+
+                  processed.append({"src":src,"dst":dst,"type":"analysis"})
+                  print(f"Processed: {src}")
+              except Exception as e:
+                  print(f"Error processing {src}: {e}")
+
+          # ── aggregated: compress + encrypt only if not already .enc ──
+          for src in glob.glob("aggregated/**/*", recursive=True):
+              if os.path.isdir(src): continue
+              if src.endswith(".enc"):
+                  # Already encrypted – just compress
+                  dst = src + ".lzxenc"
+              else:
+                  dst = src + ".lzxenc"
+              try:
+                  with open(src,"rb") as f: data = f.read()
+                  compressed = lzma.compress(data, preset=9)
+                  if not src.endswith(".enc"):
+                      ciphertext = encrypt(compressed)
+                  else:
+                      ciphertext = compressed  # already encrypted
+                  with open(dst,"wb") as f: f.write(ciphertext)
+                  processed.append({"src":src,"dst":dst,"type":"aggregated"})
+                  print(f"Processed aggregated: {src}")
+              except Exception as e:
+                  print(f"Error processing {src}: {e}")
+
+          with open("/tmp/processed_files.json","w") as f:
+              json.dump(processed, f)
+          print(f"Total processed: {len(processed)}")
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 4. Smart packing (10 MB bundles)
+      # ─────────────────────────────────────────────────
+      - name: Pack Bundles
+        run: |
+          python - <<'PYEOF'
+          import os, json, tarfile, datetime, glob
+
+          with open("/tmp/processed_files.json") as f:
+              processed = json.load(f)
+
+          MAX = 10 * 1024 * 1024  # 10 MB
+          now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
+
+          bundles = []
+          current_files = []
+          current_size = 0
+          bundle_idx = 0
+
+          def flush_bundle(files, idx):
+              if not files: return None
+              name = f"/tmp/backup_{now_str}_{idx:03d}.tar"
+              index = {"files": [f["dst"] for f in files], "created": now_str}
+              index_path = f"/tmp/index_{idx:03d}.json"
+              with open(index_path,"w") as f:
+                  json.dump(index, f, indent=2)
+
+              with tarfile.open(name,"w:xz") as tar:
+                  tar.add(index_path, arcname="index.json")
+                  for fi in files:
+                      # Preserve directory structure
+                      arcname = fi["dst"]
+                      tar.add(fi["dst"], arcname=arcname)
+
+              print(f"Bundle: {name} ({os.path.getsize(name)/1024/1024:.2f} MB)")
+              return name
+
+          for fi in processed:
+              size = os.path.getsize(fi["dst"]) if os.path.exists(fi["dst"]) else 0
+              if size > MAX:
+                  # Flush current bundle first
+                  b = flush_bundle(current_files, bundle_idx)
+                  if b: bundles.append(b); bundle_idx += 1
+                  current_files = []; current_size = 0
+                  # Send oversized file alone
+                  b = flush_bundle([fi], bundle_idx)
+                  if b: bundles.append(b); bundle_idx += 1
+              elif current_size + size > MAX:
+                  b = flush_bundle(current_files, bundle_idx)
+                  if b: bundles.append(b); bundle_idx += 1
+                  current_files = [fi]; current_size = size; bundle_idx += 1
+              else:
+                  current_files.append(fi); current_size += size
+
+          b = flush_bundle(current_files, bundle_idx)
+          if b: bundles.append(b)
+
+          with open("/tmp/bundles.json","w") as f:
+              json.dump(bundles, f)
+          print(f"Total bundles: {len(bundles)}")
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 5. Upload bundles to Telegram
+      # ─────────────────────────────────────────────────
+      - name: Upload to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          python - <<'PYEOF'
+          import os, json, datetime, urllib.request, hashlib
+          import secrets as sec
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+          bot = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat = os.environ["TELEGRAM_CHAT_ID"]
+          password = os.environ["RESULTS_PASSWORD"].encode()
+          key = hashlib.sha256(password).digest()
+
+          def encrypt_file(path):
+              with open(path,"rb") as f: data = f.read()
+              nonce = sec.token_bytes(12)
+              ct = nonce + AESGCM(key).encrypt(nonce, data, None)
+              out = path + ".enc"
+              with open(out,"wb") as f: f.write(ct)
+              return out
+
+          def upload(fpath, caption):
+              fname = os.path.basename(fpath)
+              with open(fpath,"rb") as f: data = f.read()
+              boundary = "----Boundary7890"
+              body = (
+                  f"--{boundary}\r\n"
+                  f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
+                  f"--{boundary}\r\n"
+                  f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'
+                  f"--{boundary}\r\n"
+                  f'Content-Disposition: form-data; name="document"; filename="{fname}"\r\n'
+                  f"Content-Type: application/octet-stream\r\n\r\n"
+              ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+              url = f"https://api.telegram.org/bot{bot}/sendDocument"
+              req = urllib.request.Request(url, data=body,
+                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+              with urllib.request.urlopen(req, timeout=120) as resp:
+                  result = json.loads(resp.read())
+              return result["result"]["document"]["file_id"]
+
+          ledger_path = "backup_ledger.json"
+          ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {"uploads":[]}
+
+          with open("/tmp/bundles.json") as f:
+              bundles = json.load(f)
+
+          now = datetime.datetime.utcnow().isoformat()
+          for bundle_path in bundles:
+              if not os.path.exists(bundle_path): continue
+              enc_path = encrypt_file(bundle_path)
+              fname = os.path.basename(enc_path)
+              size = os.path.getsize(enc_path)
+              caption = f"📦 Backup | {fname} | {size/1024/1024:.2f} MB | {now[:10]}"
+              try:
+                  file_id = upload(enc_path, caption)
+                  ledger["uploads"].append({
+                      "file": fname,
+                      "file_id": file_id,
+                      "size_bytes": size,
+                      "uploaded_at": now,
+                      "type": "backup"
+                  })
+                  print(f"Uploaded: {fname} → {file_id}")
+              except Exception as e:
+                  print(f"Upload failed for {bundle_path}: {e}")
+
+          with open(ledger_path,"w") as f:
+              json.dump(ledger, f, indent=2)
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 6. Remove processed analysis_results files
+      # ─────────────────────────────────────────────────
+      - name: Cleanup analysis_results
+        run: |
+          python - <<'PYEOF'
+          import os, json, glob
+
+          with open("/tmp/processed_files.json") as f:
+              processed = json.load(f)
+
+          for fi in processed:
+              if fi["type"] == "analysis":
+                  try: os.remove(fi["src"]); print(f"Deleted: {fi['src']}")
+                  except: pass
+              # Remove temp processed files
+              try: os.remove(fi["dst"])
+              except: pass
+
+          # Remove empty directories
+          for d in sorted(glob.glob("analysis_results/**", recursive=True), reverse=True):
+              if os.path.isdir(d):
+                  try: os.rmdir(d)
+                  except: pass
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 7. Send metadata (ledger + mapping + flag) daily
+      # ─────────────────────────────────────────────────
+      - name: Send Metadata
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          python - <<'PYEOF'
+          import os, json, tarfile, hashlib, datetime, urllib.request
+          import secrets as sec
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+          # Only send once per day
+          ledger_path = "backup_ledger.json"
+          ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {"uploads":[],"last_metadata":""}
+          today = datetime.date.today().isoformat()
+          if ledger.get("last_metadata") == today:
+              print("Metadata already sent today."); exit(0)
+
+          bot = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat = os.environ["TELEGRAM_CHAT_ID"]
+          password = os.environ["RESULTS_PASSWORD"].encode()
+          key = hashlib.sha256(password).digest()
+
+          tar_path = f"/tmp/metadata_{today}.tar.xz"
+          with tarfile.open(tar_path,"w:xz") as tar:
+              for f in ["backup_ledger.json","auto_mapping.json","integrity_pass.flag"]:
+                  if os.path.exists(f): tar.add(f)
+
+          with open(tar_path,"rb") as f: data = f.read()
+          nonce = sec.token_bytes(12)
+          ciphertext = nonce + AESGCM(key).encrypt(nonce, data, None)
+          enc_path = tar_path + ".enc"
+          with open(enc_path,"wb") as f: f.write(ciphertext)
+
+          fname = os.path.basename(enc_path)
+          boundary = "----MetaBoundary"
+          body = (
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="caption"\r\n\r\n🗂 Metadata | {today}\r\n'
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="document"; filename="{fname}"\r\n'
+              f"Content-Type: application/octet-stream\r\n\r\n"
+          ).encode() + ciphertext + f"\r\n--{boundary}--\r\n".encode()
+
+          url = f"https://api.telegram.org/bot{bot}/sendDocument"
+          req = urllib.request.Request(url, data=body,
+              headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+          with urllib.request.urlopen(req, timeout=60) as resp:
+              result = json.loads(resp.read())
+          fid = result["result"]["document"]["file_id"]
+          print(f"Metadata sent: {fid}")
+
+          ledger["last_metadata"] = today
+          ledger.setdefault("uploads",[]).append({
+              "file": fname, "file_id": fid, "type": "metadata",
+              "uploaded_at": datetime.datetime.utcnow().isoformat()
+          })
+          with open(ledger_path,"w") as f:
+              json.dump(ledger, f, indent=2)
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 8. Weekly full-repo backup (Thursday/Friday)
+      # ─────────────────────────────────────────────────
+      - name: Weekly Full Backup
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          import os, json, tarfile, hashlib, datetime, urllib.request, subprocess
+          import secrets as sec
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+          today = datetime.date.today()
+          # Run on Thursday (3) or Friday (4) in Iran time
+          if today.weekday() not in (3, 4):
+              print(f"Not weekly day (weekday={today.weekday()}). Skipping."); exit(0)
+
+          ledger_path = "backup_ledger.json"
+          ledger = json.load(open(ledger_path)) if os.path.exists(ledger_path) else {}
+          wk = today.isocalendar()[1]
+          if ledger.get("last_weekly_week") == wk:
+              print("Weekly backup already done this week."); exit(0)
+
+          password = os.environ["RESULTS_PASSWORD"].encode()
+          key = hashlib.sha256(password).digest()
+          bot = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat = os.environ["TELEGRAM_CHAT_ID"]
+
+          # Clone current repo (shallow)
+          repo = os.environ.get("GITHUB_REPOSITORY","")
+          token = os.environ["GITHUB_TOKEN"]
+          clone_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+          subprocess.run(["git","clone","--depth=1", clone_url, "/tmp/weekly_repo"], check=True)
+
+          tar_path = f"/tmp/weekly_{today.isoformat()}.tar.xz"
+          with tarfile.open(tar_path,"w:xz") as tar:
+              tar.add("/tmp/weekly_repo", arcname="repo", recursive=True)
+
+          with open(tar_path,"rb") as f: data = f.read()
+          nonce = sec.token_bytes(12)
+          ct = nonce + AESGCM(key).encrypt(nonce, data, None)
+          enc_path = tar_path + ".enc"
+          with open(enc_path,"wb") as f: f.write(ct)
+
+          size_mb = os.path.getsize(enc_path)/1024/1024
+          MAX = 50*1024*1024  # Telegram 50MB limit
+          if os.path.getsize(enc_path) > MAX:
+              print(f"Weekly archive too large ({size_mb:.1f} MB) – skipping upload."); exit(0)
+
+          fname = os.path.basename(enc_path)
+          boundary = "----WeeklyBoundary"
+          with open(enc_path,"rb") as f: enc_data = f.read()
+          body = (
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{chat}\r\n'
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="caption"\r\n\r\n📅 Weekly Full Backup | {today} | {size_mb:.1f} MB\r\n'
+              f"--{boundary}\r\n"
+              f'Content-Disposition: form-data; name="document"; filename="{fname}"\r\n'
+              f"Content-Type: application/octet-stream\r\n\r\n"
+          ).encode() + enc_data + f"\r\n--{boundary}--\r\n".encode()
+
+          url = f"https://api.telegram.org/bot{bot}/sendDocument"
+          req = urllib.request.Request(url, data=body,
+              headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+          with urllib.request.urlopen(req, timeout=300) as resp:
+              result = json.loads(resp.read())
+          fid = result["result"]["document"]["file_id"]
+          print(f"Weekly backup uploaded: {fid}")
+
+          ledger["last_weekly_week"] = wk
+          ledger.setdefault("uploads",[]).append({
+              "file": fname, "file_id": fid, "type": "weekly",
+              "uploaded_at": datetime.datetime.utcnow().isoformat()
+          })
+          with open(ledger_path,"w") as f:
+              json.dump(ledger, f, indent=2)
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # 9. Generate tomorrow's random schedule (Iran time)
+      # ─────────────────────────────────────────────────
+      - name: Generate Schedule
+        run: |
+          python - <<'PYEOF'
+          import json, datetime, random, pytz
+
+          iran = pytz.timezone("Asia/Tehran")
+          today = datetime.datetime.now(iran).date()
+          spath = "schedule_times.json"
+
+          schedule = json.load(open(spath)) if __import__("os").path.exists(spath) else {}
+
+          today_key = today.isoformat()
+          if today_key not in schedule:
+              # 4 random times between 12:00 and 23:59 Iran time
+              times = sorted(random.sample(range(12*60, 24*60), 4))
+              schedule[today_key] = [f"{t//60:02d}:{t%60:02d}" for t in times]
+              with open(spath,"w") as f: json.dump(schedule, f, indent=2)
+              print(f"Schedule for {today_key}: {schedule[today_key]}")
+          else:
+              print(f"Schedule already exists for {today_key}")
+          PYEOF
+
+      # ─────────────────────────────────────────────────
+      # Commit updated files
+      # ─────────────────────────────────────────────────
+      - name: Commit Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add backup_ledger.json auto_mapping.json integrity_pass.flag schedule_times.json || true
+          git diff --staged --quiet || git commit -m "chore: auto backup $(date -u '+%Y-%m-%d %H:%M:%S') [skip ci]"
+          git push || true
+
+      # ─────────────────────────────────────────────────
+      # 10. Trigger loop (always, even on failure)
+      # ─────────────────────────────────────────────────
+      - name: Trigger Loop Workflow
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${GITHUB_REPOSITORY}"
+          curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${REPO}/actions/workflows/loop_backup.yml/dispatches" \
+            -d '{"ref":"main"}' \
+            && echo "Loop triggered." || echo "Loop trigger failed (non-fatal)."
