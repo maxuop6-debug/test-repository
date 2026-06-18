@@ -28,6 +28,9 @@ INTERVAL_TO_INDICATOR = {
 
 VALID_MODELS = ['simple_hybrid', 'fibonacci_full', 'fibonacci_hybrid']
 
+# نسبت‌های فیبوناچی برای تقسیم بازه‌های زمانی (تجمعی، از ابتدای بازه)
+FIBONACCI_RATIOS = [0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+
 # ================================ توابع کمکی بازده ویژه ================================
 
 def round_to_nearest(value, options):
@@ -183,19 +186,92 @@ def parse_interval(interval):
 
 
 def find_nearest_event_date(events, target_date, indicator, direction='post'):
+    """
+    رویداد خبری مرجع را برای محاسبه بازه post/pre پیدا می‌کند.
+
+    - direction='post': بازه‌ی CPI_post_Xd یعنی «روزهای بعد از یک رویداد خبری».
+      پس باید رویداد N که *قبل از یا در* target_date اتفاق افتاده پیدا شود
+      (آخرین رویداد گذشته).
+    - direction='pre': بازه‌ی CPI_pre_Xd یعنی «روزهای قبل از یک رویداد خبری».
+      پس باید رویداد N+1 که *بعد از یا در* target_date اتفاق می‌افتد پیدا شود
+      (نزدیک‌ترین رویداد آینده).
+    """
     filtered = [ev["date"] for ev in events
                 if ev["indicator"] == indicator and ev["date"] is not None]
     if not filtered:
         return None
     if direction == 'post':
+        candidates = [d for d in filtered if d <= target_date]
+        return max(candidates) if candidates else None
+    else:
         candidates = [d for d in filtered if d >= target_date]
         return min(candidates) if candidates else None
+
+
+def find_adjacent_event_date(events, anchor_date, indicator, direction):
+    """
+    رویداد مجاور به anchor_date را در همان سمت پیدا می‌کند تا طول کامل فاصله
+    بین دو رویداد متوالی برای تقسیم فیبوناچی محاسبه شود.
+
+    - direction='post': anchor_date همان رویداد N است (قبل از تاریخ معامله).
+      اینجا باید رویداد N+1 (اولین رویداد بعد از N) را پیدا کنیم تا فاصله N→N+1
+      مشخص شود.
+    - direction='pre': anchor_date همان رویداد N+1 است (بعد از تاریخ معامله).
+      اینجا باید رویداد N (آخرین رویداد قبل از N+1) را پیدا کنیم تا فاصله
+      N→N+1 مشخص شود.
+    """
+    filtered = sorted({ev["date"] for ev in events
+                        if ev["indicator"] == indicator and ev["date"] is not None})
+    if not filtered:
+        return None
+    if direction == 'post':
+        candidates = [d for d in filtered if d > anchor_date]
+        return min(candidates) if candidates else None
     else:
-        candidates = [d for d in filtered if d <= target_date]
+        candidates = [d for d in filtered if d < anchor_date]
         return max(candidates) if candidates else None
 
 
-def get_period_key_from_date(date, interval, news_events):
+def build_fibonacci_sub_periods(gap_start, gap_end):
+    """
+    یک بازه [gap_start, gap_end] را با نسبت‌های تجمعی فیبوناچی
+    (0.236, 0.382, 0.5, 0.618, 0.786, 1.0) به زیر-دوره‌ها تقسیم می‌کند.
+    هر زیر-دوره به صورت (start_date, end_date) برگردانده می‌شود.
+    طول کل بازه = (gap_end - gap_start).days + 1 روز.
+    """
+    total_days = (gap_end - gap_start).days + 1
+    if total_days <= 0:
+        return []
+
+    boundaries = [0]
+    for ratio in FIBONACCI_RATIOS:
+        offset = round(ratio * total_days)
+        offset = max(boundaries[-1], min(offset, total_days))
+        boundaries.append(offset)
+    if boundaries[-1] != total_days:
+        boundaries[-1] = total_days
+
+    sub_periods = []
+    for i in range(len(boundaries) - 1):
+        start_offset = boundaries[i]
+        end_offset   = boundaries[i + 1]
+        if end_offset <= start_offset:
+            continue
+        sub_start = gap_start + timedelta(days=start_offset)
+        sub_end   = gap_start + timedelta(days=end_offset - 1)
+        sub_periods.append((sub_start, sub_end))
+
+    return sub_periods
+
+
+def find_sub_period_for_date(date, sub_periods):
+    for start, end in sub_periods:
+        if start <= date <= end:
+            return (start, end)
+    return None
+
+
+def get_period_key_from_date(date, interval, news_events, model='simple_hybrid'):
     parsed = parse_interval(interval)
     if parsed is None:
         print(f"⚠️ interval ناشناخته: {interval}")
@@ -226,13 +302,77 @@ def get_period_key_from_date(date, interval, news_events):
     if event_date is None:
         return None
 
-    if direction == 'post':
-        start = event_date + timedelta(days=1)
-        end   = start + timedelta(days=days - 1)
-    else:
-        end   = event_date - timedelta(days=1)
-        start = end - timedelta(days=days - 1)
+    # ----- simple_hybrid: همان رفتار قبلی، بازه ثابت با طول days -----
+    if model == 'simple_hybrid':
+        if direction == 'post':
+            start = event_date + timedelta(days=1)
+            end   = start + timedelta(days=days - 1)
+        else:
+            end   = event_date - timedelta(days=1)
+            start = end - timedelta(days=days - 1)
+        return f"{start.isoformat()}_{end.isoformat()}"
 
+    # ----- fibonacci_hybrid / fibonacci_full: نیاز به طول کامل فاصله بین دو رویداد -----
+    adjacent_event_date = find_adjacent_event_date(news_events, event_date, indicator_name, direction)
+    if adjacent_event_date is None:
+        # رویداد مجاوری وجود ندارد (مثلاً اولین/آخرین رویداد سری) →
+        # به رفتار بازه ثابت برمی‌گردیم تا داده‌ای از دست نرود.
+        if direction == 'post':
+            start = event_date + timedelta(days=1)
+            end   = start + timedelta(days=days - 1)
+        else:
+            end   = event_date - timedelta(days=1)
+            start = end - timedelta(days=days - 1)
+        return f"{start.isoformat()}_{end.isoformat()}"
+
+    if direction == 'post':
+        gap_start = event_date + timedelta(days=1)
+        gap_end   = adjacent_event_date - timedelta(days=1)
+    else:
+        gap_start = adjacent_event_date + timedelta(days=1)
+        gap_end   = event_date - timedelta(days=1)
+
+    gap_total_days = (gap_end - gap_start).days + 1
+    if gap_total_days <= 0:
+        return None
+
+    if model == 'fibonacci_full':
+        # کل فاصله از ابتدا با فیبوناچی تقسیم می‌شود؛ days نادیده گرفته می‌شود.
+        sub_periods = build_fibonacci_sub_periods(gap_start, gap_end)
+        match = find_sub_period_for_date(date, sub_periods)
+        if match is None:
+            return None
+        start, end = match
+        return f"{start.isoformat()}_{end.isoformat()}"
+
+    if model != 'fibonacci_hybrid':
+        print(f"⚠️ مدل ناشناخته در get_period_key_from_date: {model}")
+        return None
+
+    # model == 'fibonacci_hybrid'
+    if gap_total_days <= days:
+        # فاصله کوچک‌تر یا برابر بخش ثابت است → کل فاصله یک بازه ثابت است (بدون فیبوناچی)
+        return f"{gap_start.isoformat()}_{gap_end.isoformat()}"
+
+    if direction == 'post':
+        fixed_start = gap_start
+        fixed_end   = fixed_start + timedelta(days=days - 1)
+        remainder_start = fixed_end + timedelta(days=1)
+        remainder_end   = gap_end
+    else:
+        fixed_end   = gap_end
+        fixed_start = fixed_end - timedelta(days=days - 1)
+        remainder_start = gap_start
+        remainder_end   = fixed_start - timedelta(days=1)
+
+    if fixed_start <= date <= fixed_end:
+        return f"{fixed_start.isoformat()}_{fixed_end.isoformat()}"
+
+    sub_periods = build_fibonacci_sub_periods(remainder_start, remainder_end)
+    match = find_sub_period_for_date(date, sub_periods)
+    if match is None:
+        return None
+    start, end = match
     return f"{start.isoformat()}_{end.isoformat()}"
 
 
@@ -401,7 +541,7 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     period_groups = defaultdict(list)
     skipped = 0
     for date, profit in trade_list:
-        period_key = get_period_key_from_date(date, interval, news_events)
+        period_key = get_period_key_from_date(date, interval, news_events, model=model)
         if period_key is None:
             skipped += 1
             continue
