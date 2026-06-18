@@ -300,23 +300,45 @@ jobs:
                 fi
                 echo "   ✅ ادغام نهایی کامل شد."
 
-                # ========== اضافه کردن متادیتا ==========
-                echo "   📥 جستجوی متادیتا (1.json) برای $STRAT ..."
+                # ========== مرحله: ساخت یا بارگذاری متادیتا (1.json) با پرچم skip ==========
+                echo "   📥 بررسی متادیتا (1.json) برای $STRAT ..."
                 METADATA_SUCCESS=false
                 META_FILE="/tmp/third_repo/strategies/${STRAT}/1.json"
-                if [ -f "$META_FILE" ]; then
+                META_DONE_FLAG="/tmp/third_repo/strategies/${STRAT}/.metadata_generated"
+
+                # --- بررسی پرچم skip: اگر قبلاً متادیتا ساخته شده، نیازی به بازسازی نیست ---
+                if [ -f "$META_DONE_FLAG" ] && [ -f "$META_FILE" ]; then
+                  echo "   ⏭️ پرچم skip یافت شد → متادیتا قبلاً برای $STRAT ساخته شده. رد می‌شود."
                   cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
                   METADATA_SUCCESS=true
-                  echo "   ✅ متادیتا از مخزن محلی دریافت شد."
                 fi
 
+                # --- اگر فایل 1.json موجود است ولی پرچم نیست → استفاده و ثبت پرچم ---
+                if [ "$METADATA_SUCCESS" = false ] && [ -f "$META_FILE" ]; then
+                  echo "   ✅ فایل 1.json از مخزن محلی یافت شد."
+                  cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
+                  METADATA_SUCCESS=true
+                  # ثبت پرچم skip برای دفعات بعدی
+                  touch "$META_DONE_FLAG"
+                  echo "   🏁 پرچم skip برای $STRAT ثبت شد."
+                fi
+
+                # --- اگر نه فایل وجود دارد نه پرچم → ساخت از روی فایل .js (منطق generate_metadata) ---
                 if [ "$METADATA_SUCCESS" = false ]; then
-                  echo "   ⚠️ فایل 1.json یافت نشد. تلاش برای ساخت خودکار از روی فایل استراتژی..."
+                  echo "   ⚠️ فایل 1.json یافت نشد. در حال ساخت خودکار از روی فایل استراتژی..."
+
+                  # ابتدا پوشه‌های موجود را اسکن می‌کنیم (مثل generate_metadata برای strat_dir)
+                  STRAT_DIR="/tmp/third_repo/strategies/${STRAT}/"
+                  mkdir -p "$STRAT_DIR"
+
                   JS_FILE="/tmp/third_repo/strategies/${STRAT}.js"
                   if [ ! -f "$JS_FILE" ]; then
-                    echo "   ❌ فایل استراتژی ${STRAT}.js نیز در مخزن سوم یافت نشد. خروج."
-                    exit 1
+                    echo "   ❌ فایل استراتژی ${STRAT}.js در مخزن سوم یافت نشد. این استراتژی رد می‌شود."
+                    rm -rf "/tmp/agg_${STRAT}"
+                    continue
                   fi
+
+                  echo "   🔧 ساخت 1.json از روی ${JS_FILE}..."
                   node -e "
                     const fs = require('fs');
                     const jsContent = fs.readFileSync('$JS_FILE', 'utf8');
@@ -334,15 +356,20 @@ jobs:
                       stop_loss_initial: stop_loss,
                       max_move_percent: max_move
                     };
-                    fs.writeFileSync('/tmp/agg_${STRAT}/generated_1.json', JSON.stringify(meta, null, 2));
+                    fs.writeFileSync('$META_FILE', JSON.stringify(meta, null, 2));
                   "
-                  if [ ! -s "/tmp/agg_${STRAT}/generated_1.json" ]; then
-                    echo "   ❌ ساخت فایل 1.json ناموفق بود."
-                    exit 1
+                  if [ -s "$META_FILE" ]; then
+                    echo "   ✅ فایل 1.json با موفقیت ساخته شد."
+                    cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
+                    METADATA_SUCCESS=true
+                    # ثبت پرچم skip برای دفعات بعدی
+                    touch "$META_DONE_FLAG"
+                    echo "   🏁 پرچم skip برای $STRAT ثبت شد."
+                  else
+                    echo "   ❌ ساخت فایل 1.json ناموفق بود. این استراتژی رد می‌شود."
+                    rm -rf "/tmp/agg_${STRAT}"
+                    continue
                   fi
-                  cp "/tmp/agg_${STRAT}/generated_1.json" "$META_FILE"
-                  echo "   ✅ فایل 1.json در مخزن محلی ایجاد شد."
-                  cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
                 fi
 
                 # استخراج فیلدهای مورد نیاز
