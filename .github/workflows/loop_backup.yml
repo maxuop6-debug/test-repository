@@ -1,0 +1,95 @@
+name: Loop Backup
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [run-loop]
+
+concurrency:
+  group: backup-loop
+  cancel-in-progress: false
+
+jobs:
+  check-and-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytz
+
+      # ── Check if it's time for a scheduled backup ──
+      - name: Check Schedule & Dispatch Backup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          import json, datetime, os, urllib.request, pytz
+
+          iran = pytz.timezone("Asia/Tehran")
+          now_iran = datetime.datetime.now(iran)
+          today_key = now_iran.date().isoformat()
+          now_hhmm = now_iran.strftime("%H:%M")
+
+          spath = "schedule_times.json"
+          if not os.path.exists(spath):
+              print("No schedule file found – triggering backup anyway.")
+              should_run = True
+          else:
+              with open(spath) as f:
+                  schedule = json.load(f)
+              times_today = schedule.get(today_key, [])
+              # Match within ±2 minutes
+              should_run = False
+              for t in times_today:
+                  th, tm = map(int, t.split(":"))
+                  nh, nm = now_iran.hour, now_iran.minute
+                  diff = abs((th*60+tm) - (nh*60+nm))
+                  if diff <= 2:
+                      should_run = True
+                      break
+              print(f"Iran time: {now_hhmm} | Scheduled: {times_today} | Run: {should_run}")
+
+          if should_run:
+              repo = os.environ["GITHUB_REPOSITORY"]
+              token = os.environ["GITHUB_TOKEN"]
+              url = f"https://api.github.com/repos/{repo}/actions/workflows/backup_pipeline.yml/dispatches"
+              body = json.dumps({"ref":"main"}).encode()
+              req = urllib.request.Request(url, data=body, headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github.v3+json",
+                  "Content-Type": "application/json"
+              })
+              with urllib.request.urlopen(req) as r:
+                  print(f"Backup pipeline dispatched: HTTP {r.status}")
+          else:
+              print("Not scheduled now – sleeping until next check.")
+          PYEOF
+
+      # ── Wait 60 minutes then re-trigger this loop ──
+      - name: Wait 60 minutes
+        run: sleep 3600
+
+      - name: Re-trigger Loop
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${GITHUB_REPOSITORY}"
+          curl -s -X POST \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${REPO}/actions/workflows/loop_backup.yml/dispatches" \
+            -d '{"ref":"main"}' \
+            && echo "Loop re-triggered." || echo "Re-trigger failed (non-fatal)."
