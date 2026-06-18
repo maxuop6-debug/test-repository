@@ -120,8 +120,18 @@ def decompress_data(data: bytes) -> bytes:
 
 def load_mapping() -> dict:
     if MAPPING_FILE.exists():
-        return json.loads(MAPPING_FILE.read_text(encoding="utf-8"))
-    return {"columns": dict(FIXED_COLUMN_MAP), "values": dict(FIXED_VALUE_MAP), "reverse_values": {}}
+        m = json.loads(MAPPING_FILE.read_text(encoding="utf-8"))
+        # اگر reverse_values خالی بود، از values بازسازی کن
+        if not m.get("reverse_values"):
+            m["reverse_values"] = {v: k for k, v in m.get("values", {}).items()}
+        return m
+    # ساخت mapping اولیه با reverse_values کامل
+    values = dict(FIXED_VALUE_MAP)
+    return {
+        "columns":        dict(FIXED_COLUMN_MAP),
+        "values":         values,
+        "reverse_values": {v: k for k, v in values.items()},
+    }
 
 
 def save_mapping(mapping: dict) -> None:
@@ -277,20 +287,21 @@ def reverse_mapping(csv_bytes: bytes, mapping: dict) -> bytes:
 # ─── تست یکپارچگی ──────────────────────────────────────────────────────────────
 
 def integrity_test(password: str, bot_token: str, chat_id: str) -> bool:
-    """تست کامل زنجیره پردازش"""
+    """تست کامل زنجیره پردازش – بدون وابستگی به تلگرام"""
     if INTEGRITY_FLAG.exists():
         log.info("تست یکپارچگی قبلاً انجام شده – اسکیپ")
         return True
 
     log.info("شروع تست یکپارچگی...")
 
-    # تولید داده نمونه
+    # داده نمونه با تمام مقادیر نگاشت‌شده
     sample_rows = [["date", "indicator", "threshold", "status"]]
+    statuses   = ["Good", "Bad", "Neutral", "Good"]
+    thresholds = ["0.0", "0.1", "0.2", "0.3"]
     for i in range(50):
         d = (EPOCH + timedelta(days=i * 7)).strftime("%Y-%m-%d")
-        sample_rows.append([d, "CPI m/m", "0.1", "Good"])
+        sample_rows.append([d, "CPI m/m", thresholds[i % 4], statuses[i % 4]])
 
-    # ذخیره نمونه
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w",
                                      newline="", encoding="utf-8") as tf:
         csv.writer(tf).writerows(sample_rows)
@@ -299,31 +310,15 @@ def integrity_test(password: str, bot_token: str, chat_id: str) -> bool:
     try:
         mapping = load_mapping()
 
-        # پردازش
-        mapped = apply_mapping(tmp_path, mapping)
+        # زنجیره کامل بدون تلگرام
+        mapped     = apply_mapping(tmp_path, mapping)
         compressed = compress_data(mapped)
-        encrypted = encrypt_data(compressed, password)
+        encrypted  = encrypt_data(compressed, password)
+        dec        = decrypt_data(encrypted, password)
+        decomp     = decompress_data(dec)
+        restored   = reverse_mapping(decomp, mapping)
 
-        # آپلود
-        file_id = telegram_send_document(
-            bot_token, chat_id,
-            data=encrypted,
-            filename="TEST_FILE.csv.lzma.enc",
-            caption="🧪 TEST_FILE – integrity check"
-        )
-        if not file_id:
-            log.error("آپلود تست ناموفق")
-            return False
-
-        # دانلود
-        downloaded = telegram_download_file(bot_token, file_id)
-
-        # معکوس‌سازی
-        dec = decrypt_data(downloaded, password)
-        decomp = decompress_data(dec)
-        restored = reverse_mapping(decomp, mapping)
-
-        # مقایسه
+        # مقایسه خط‌به‌خط
         original_content = tmp_path.read_bytes()
         orig_rows = list(csv.reader(io.StringIO(original_content.decode("utf-8"))))
         rest_rows = list(csv.reader(io.StringIO(restored.decode("utf-8"))))
@@ -333,6 +328,10 @@ def integrity_test(password: str, bot_token: str, chat_id: str) -> bool:
             log.info("✅ تست یکپارچگی موفق")
             return True
         else:
+            for i, (a, b) in enumerate(zip(orig_rows, rest_rows)):
+                if a != b:
+                    log.error(f"تفاوت ردیف {i}: {a} ≠ {b}")
+                    break
             log.error("❌ تست یکپارچگی ناموفق – داده‌ها مطابقت ندارند")
             return False
     finally:
