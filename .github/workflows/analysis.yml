@@ -112,7 +112,6 @@ jobs:
           echo "$CHUNK_COUNT" > /tmp/batch/chunk_count.txt
 
           if [ "$CHUNK_COUNT" -gt 0 ]; then
-            # ساخت آرایه ای از اندیس های chunk با bash (بدون وابستگی به پایتون)
             INDICES="["
             for ((i=0; i<$CHUNK_COUNT; i++)); do
               if [ $i -gt 0 ]; then
@@ -206,9 +205,11 @@ jobs:
           CHUNK_LENGTH=$(jq length /tmp/chunk.json)
           echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
 
-          # chunk.json برای استفاده استپ‌های بعدی در /tmp/chunk.json موجود است
           echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
 
+      # ================================================================
+      # استپ ۱: دانلود و آماده‌سازی فایل یکپارچه معاملات
+      # ================================================================
       - name: 1. دانلود فایل یکپارچه معاملات (یک بار برای کل قطعه)
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -223,6 +224,7 @@ jobs:
             exit 1
           fi
           AGG_FILE="aggregated/${STRAT}/${STRAT}_trades.enc"
+          META_FLAG_PATH="aggregated/${STRAT}/metadata_injected.flag"
           ERROR_FILE="analysis_errors/${STRAT}_download_error.txt"
           mkdir -p /tmp/prep
 
@@ -288,6 +290,134 @@ jobs:
             upload_error "Decryption failed for $AGG_FILE. Node exit code: $NODE_EXIT. Error: $(cat /tmp/prep/decrypt_error.log)"
             exit 1
           fi
+
+          # ================================================================
+          # بررسی پرچم metadata_injected — اگر موجود بود، این مرحله skip می‌شود
+          # ================================================================
+          echo "🔍 بررسی پرچم metadata_injected برای $STRAT ..."
+          FLAG_HTTP=$(gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" -i 2>/dev/null | head -n1 | cut -d' ' -f2 || echo "")
+          if [ "$FLAG_HTTP" = "200" ]; then
+            echo "✅ پرچم metadata_injected موجود است — متادیتا قبلاً تزریق شده، مرحله injection رد می‌شود."
+            echo "✅ فایل یکپارچه آماده شد (بدون نیاز به injection مجدد)."
+            exit 0
+          fi
+
+          echo "ℹ️ پرچم metadata_injected یافت نشد — بررسی وجود metadata در فایل..."
+
+          # ================================================================
+          # بررسی آیا metadata در فایل یکپارچه هست یا نه
+          # ================================================================
+          HAS_METADATA=$(node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('/tmp/prep/all_trades.json', 'utf8'));
+            const hasMeta = data && typeof data === 'object' && !Array.isArray(data)
+                            && 'metadata' in data && data.metadata !== null
+                            && typeof data.metadata === 'object';
+            console.log(hasMeta ? 'true' : 'false');
+          " 2>/dev/null || echo "false")
+
+          if [ "$HAS_METADATA" = "true" ]; then
+            echo "✅ فایل یکپارچه قبلاً metadata دارد."
+
+            # ذخیره پرچم در مخزن سوم تا دفعه بعد این مرحله skip شود
+            echo "🚩 ذخیره پرچم metadata_injected..."
+            FLAG_CONTENT=$(echo "injected" | base64 -w0)
+            gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" \
+              -X PUT \
+              -F message="mark metadata as injected for $STRAT" \
+              -F content="$FLAG_CONTENT" \
+              -F branch="main" 2>/dev/null || echo "⚠️ ذخیره پرچم ناموفق بود (ادامه می‌دهیم)."
+
+            echo "✅ فایل یکپارچه آماده شد."
+            exit 0
+          fi
+
+          # ================================================================
+          # فایل metadata ندارد — باید 1.json را پیدا کنیم و inject کنیم
+          # ================================================================
+          echo "⚙️ فایل یکپارچه metadata ندارد (فرمت قدیمی) — در حال inject metadata..."
+
+          META_FILE_REMOTE="strategies/${STRAT}/1.json"
+          META_CONTENT=$(gh api "repos/$THIRD_REPO/contents/$META_FILE_REMOTE" \
+            -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
+
+          if [ -z "$META_CONTENT" ]; then
+            echo "⚠️ فایل 1.json برای $STRAT در مخزن سوم یافت نشد."
+            echo "   تلاش برای ساخت از روی فایل ${STRAT}.js ..."
+
+            JS_FILE_REMOTE="strategies/${STRAT}.js"
+            JS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/$JS_FILE_REMOTE" \
+              -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
+
+            if [ -z "$JS_CONTENT" ]; then
+              echo "❌ فایل استراتژی ${STRAT}.js نیز یافت نشد."
+              echo "   ادامه با move_percents خالی (استراتژی simple_hybrid فرض می‌شود)."
+              META_CONTENT='{"move_percents":[],"stop_loss_initial":-2.0,"max_move_percent":null}'
+            else
+              echo "$JS_CONTENT" > /tmp/prep/strat.js
+              META_CONTENT=$(node -e "
+                const fs = require('fs');
+                const jsContent = fs.readFileSync('/tmp/prep/strat.js', 'utf8');
+                let moveMatch = jsContent.match(/movePercent\s*:\s*\[(.*?)\]/s);
+                let move_percents = [];
+                if (moveMatch) {
+                  let numbers = moveMatch[1].match(/[\d.]+/g);
+                  if (numbers) move_percents = numbers.map(Number);
+                }
+                let slMatch = jsContent.match(/stopLossInitial\s*:\s*([\d.-]+)/);
+                let stop_loss = slMatch ? parseFloat(slMatch[1]) : -2.0;
+                let max_move = move_percents.length ? move_percents[move_percents.length-1] : null;
+                console.log(JSON.stringify({
+                  move_percents: move_percents,
+                  stop_loss_initial: stop_loss,
+                  max_move_percent: max_move
+                }));
+              " 2>/dev/null || echo '{"move_percents":[],"stop_loss_initial":-2.0,"max_move_percent":null}')
+              echo "✅ متادیتا از فایل .js استخراج شد."
+            fi
+          fi
+
+          echo "$META_CONTENT" > /tmp/prep/meta.json
+
+          MOVE_PERCENTS=$(echo "$META_CONTENT" | jq -c '.move_percents // []')
+          STOP_LOSS=$(echo "$META_CONTENT"    | jq '.stop_loss_initial // -2.0')
+          MAX_MOVE=$(echo "$META_CONTENT"     | jq '.max_move_percent // null')
+
+          echo "   move_percents: $MOVE_PERCENTS"
+          echo "   stop_loss_initial: $STOP_LOSS"
+
+          # ترکیب معاملات موجود با متادیتا
+          node -e "
+            const fs = require('fs');
+            const trades = JSON.parse(fs.readFileSync('/tmp/prep/all_trades.json', 'utf8'));
+            const meta = JSON.parse(fs.readFileSync('/tmp/prep/meta.json', 'utf8'));
+            const tradeList = Array.isArray(trades) ? trades : trades.trades;
+            const output = {
+              trades: tradeList,
+              metadata: {
+                move_percents: meta.move_percents || [],
+                stop_loss_initial: meta.stop_loss_initial || -2.0,
+                max_move_percent: meta.max_move_percent || null
+              }
+            };
+            fs.writeFileSync('/tmp/prep/all_trades.json', JSON.stringify(output));
+          " 2>/tmp/prep/inject_error.log
+          INJECT_EXIT=$?
+          if [ $INJECT_EXIT -ne 0 ]; then
+            echo "❌ خطا در inject metadata: $(cat /tmp/prep/inject_error.log)"
+            exit 1
+          fi
+          echo "✅ metadata با موفقیت به فایل یکپارچه اضافه شد."
+
+          # ذخیره پرچم در مخزن سوم برای دفعات بعدی
+          echo "🚩 ذخیره پرچم metadata_injected برای $STRAT..."
+          FLAG_CONTENT=$(echo "injected" | base64 -w0)
+          gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" \
+            -X PUT \
+            -F message="mark metadata as injected for $STRAT" \
+            -F content="$FLAG_CONTENT" \
+            -F branch="main" 2>/dev/null || echo "⚠️ ذخیره پرچم ناموفق بود (ادامه می‌دهیم)."
+
           echo "✅ فایل یکپارچه آماده شد."
 
       - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
@@ -310,13 +440,12 @@ jobs:
 
           for i in $(seq 0 $((LENGTH-1))); do
             ITEM=$(echo "$CHUNK_JSON" | jq -c ".[$i]")
-            MODULE=$(echo "$ITEM" | jq -r '.module')
-            STRAT=$(echo "$ITEM" | jq -r '.strat')
-            COIN=$(echo "$ITEM" | jq -r '.coin')
-            # جایگزینی + با _ در نام COIN برای استفاده در مسیر فایل GitHub API
+            MODULE=$(echo "$ITEM"   | jq -r '.module')
+            STRAT=$(echo "$ITEM"    | jq -r '.strat')
+            COIN=$(echo "$ITEM"     | jq -r '.coin')
             SAFE_COIN=$(echo "$COIN" | tr '+' '_')
             INTERVAL=$(echo "$ITEM" | jq -r '.interval')
-            MODEL=$(echo "$ITEM" | jq -r '.model')
+            MODEL=$(echo "$ITEM"    | jq -r '.model')
             CHUNK_START="${{ github.event.inputs.chunk_start }}"
             CHUNK_END="${{ github.event.inputs.chunk_end }}"
 
