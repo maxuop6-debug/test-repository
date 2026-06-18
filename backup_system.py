@@ -50,7 +50,7 @@ IRAN_UTC_OFFSET = 3.5                  # ساعت (UTC+3:30)
 FIXED_COLUMN_MAP: dict[str, str] = {}
 
 FIXED_VALUE_MAP: dict[str, str] = {
-    "0.0": "L", "0.1": "M", "0.2": "N", "0.3": "O",
+    "0.0": "L", "0.1": "M", "0.2": "Nv", "0.3": "O",   # Nv برای جلوگیری از تداخل با Neutral
     "Good": "G", "Bad": "B", "Neutral": "N",
     "CPI m/m": "C", "Core CPI m/m": "K",
     "PPI m/m": "P", "Core PPI m/m": "R",
