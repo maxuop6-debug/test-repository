@@ -1,0 +1,33 @@
+{
+  "columns": {},
+  "values": {
+    "0.0": "L",
+    "0.1": "M",
+    "0.2": "Nv",
+    "0.3": "O",
+    "Good": "G",
+    "Bad": "B",
+    "Neutral": "N",
+    "CPI m/m": "C",
+    "Core CPI m/m": "K",
+    "PPI m/m": "P",
+    "Core PPI m/m": "R",
+    "FOMC": "F",
+    "CPI y/y": "Y"
+  },
+  "reverse_values": {
+    "L": "0.0",
+    "M": "0.1",
+    "Nv": "0.2",
+    "O": "0.3",
+    "G": "Good",
+    "B": "Bad",
+    "N": "Neutral",
+    "C": "CPI m/m",
+    "K": "Core CPI m/m",
+    "P": "PPI m/m",
+    "R": "Core PPI m/m",
+    "F": "FOMC",
+    "Y": "CPI y/y"
+  }
+}
