@@ -31,29 +31,28 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ─── نصب Python و وابستگی‌ها ─────────────────────────────────────────────
+      # ─── نصب Python ──────────────────────────────────────────────────────────
+      # cache: 'pip' حذف شد – بدون requirements.txt ارور می‌دهد
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
+      # ─── نصب وابستگی‌ها (یک‌بار برای کل job) ──────────────────────────────
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install requests cryptography
+        run: pip install --upgrade pip requests cryptography
 
       # ─── اجرای پایپ‌لاین اصلی ───────────────────────────────────────────────
       - name: Run backup pipeline
         env:
-          RESULTS_PASSWORD:    ${{ secrets.RESULTS_PASSWORD }}
-          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN:        ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY:   ${{ github.repository }}
-          GITHUB_ACTOR:        ${{ github.actor }}
-          WEEKLY_REPOS:        "now-test-repo"
-          FORCE_RUN:           ${{ github.event.inputs.force || 'false' }}
+          RESULTS_PASSWORD:   ${{ secrets.RESULTS_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:  ${{ github.repository }}
+          GITHUB_ACTOR:       ${{ github.actor }}
+          WEEKLY_REPOS:       "now-test-repo"
+          FORCE_RUN:          ${{ github.event.inputs.force || 'false' }}
         run: |
           FORCE_FLAG=""
           if [ "$FORCE_RUN" = "true" ]; then
@@ -67,7 +66,6 @@ jobs:
           git config user.name  "GitHub Actions – Backup Bot"
           git config user.email "actions@github.com"
 
-          # فایل‌های metadata که باید commit شوند
           META_FILES=(
             "auto_mapping.json"
             "backup_ledger.json"
@@ -83,52 +81,28 @@ jobs:
             fi
           done
 
-          # حذف فایل‌های analysis_results که پاک شده‌اند
+          # ثبت حذف فایل‌های analysis_results که پاک شده‌اند
           git add -u analysis_results/ 2>/dev/null || true
 
           if [ "$CHANGED" = "1" ] || ! git diff --cached --quiet; then
-            git commit -m "chore: backup metadata update $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git commit -m "chore: backup metadata $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
             echo "تغییری برای commit وجود ندارد"
           fi
 
-      # ─── گزارش خطا در صورت شکست ──────────────────────────────────────────────
+      # ─── گزارش خطا (از backup_system.py استفاده می‌کند) ─────────────────────
       - name: Notify on failure
         if: failure()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python - <<'PYEOF'
-          import os, requests
-          token   = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat_id = os.environ["TELEGRAM_CHAT_ID"]
-          msg = "⚠️ بک‌آپ ناموفق بود!\nزمان: $(date -u '+%Y-%m-%d %H:%M UTC')"
-          requests.post(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              json={"chat_id": chat_id, "text": msg},
-              timeout=15,
-          )
-          PYEOF
+        run: python backup_system.py notify-failure
 
-      # ─── چرخه: فراخوانی loop_backup در صورت شکست هم ──────────────────────────
+      # ─── چرخه: فراخوانی loop_backup (همیشه، حتی در صورت شکست) ───────────────
       - name: Trigger loop (always)
         if: always()
         env:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          python - <<'PYEOF'
-          import os, requests
-
-          token   = os.environ["GITHUB_TOKEN"]
-          repo    = os.environ["GITHUB_REPOSITORY"]
-          url     = f"https://api.github.com/repos/{repo}/actions/workflows/loop_backup.yml/dispatches"
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept":        "application/vnd.github+json",
-          }
-          resp = requests.post(url, json={"ref": "main"}, headers=headers, timeout=30)
-          print(f"loop_backup trigger: {resp.status_code}")
-          PYEOF
+        run: python backup_system.py trigger-loop --workflow loop_backup.yml
