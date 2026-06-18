@@ -720,6 +720,9 @@ def main() -> None:
     loop_p = subparsers.add_parser("trigger-loop", help="فراخوانی ورکفلو چرخه")
     loop_p.add_argument("--workflow", default="backup_pipeline.yml")
 
+    # دستور اطلاع‌رسانی خطا
+    subparsers.add_parser("notify-failure", help="ارسال پیام شکست به تلگرام")
+
     args = parser.parse_args()
 
     if args.command == "schedule":
@@ -730,6 +733,18 @@ def main() -> None:
         gh_token = os.environ.get("GITHUB_TOKEN", "")
         repo_full = os.environ.get("GITHUB_REPOSITORY", "")
         trigger_loop_workflow(gh_token, repo_full, args.workflow)
+
+    elif args.command == "notify-failure":
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if bot_token and chat_id:
+            msg = f"⚠️ بک‌آپ ناموفق بود!\nزمان: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+            requests.post(
+                f"{TELEGRAM_API}/bot{bot_token}/sendMessage",
+                json={"chat_id": chat_id, "text": msg},
+                timeout=15,
+            )
+            log.info("پیام شکست ارسال شد")
 
     elif args.command == "run":
         run_pipeline(args)
