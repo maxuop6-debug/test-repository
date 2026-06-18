@@ -13,30 +13,21 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Wait before re-triggering
-        run: |
-          echo "⏳ انتظار ۳۰ ثانیه قبل از فراخوانی مجدد..."
-          sleep 30
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Trigger backup_pipeline
+      - name: Install dependencies
+        run: pip install --upgrade pip requests
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait then trigger backup_pipeline
         env:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          python3 - <<'PYEOF'
-          import os, requests
-
-          token   = os.environ["GITHUB_TOKEN"]
-          repo    = os.environ["GITHUB_REPOSITORY"]
-          url     = f"https://api.github.com/repos/{repo}/actions/workflows/backup_pipeline.yml/dispatches"
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept":        "application/vnd.github+json",
-          }
-          resp = requests.post(url, json={"ref": "main"}, headers=headers, timeout=30)
-          if resp.status_code in (200, 204):
-              print("✅ backup_pipeline فراخوانی شد")
-          else:
-              print(f"❌ خطا: {resp.status_code} – {resp.text}")
-              exit(1)
-          PYEOF
+          sleep 30
+          python backup_system.py trigger-loop --workflow backup_pipeline.yml
