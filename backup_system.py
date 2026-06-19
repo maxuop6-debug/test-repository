@@ -627,9 +627,13 @@ def send_movie_message(bot_token: str, chat_id: str) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     text = data.get("text", "")
     image_url = data.get("image_url")
+    photo_file_id = data.get("photo_file_id")
 
     try:
-        if image_url:
+        if photo_file_id:
+            url = f"{TELEGRAM_API}/bot{bot_token}/sendPhoto"
+            payload = {"chat_id": chat_id, "photo": photo_file_id, "caption": text}
+        elif image_url:
             url = f"{TELEGRAM_API}/bot{bot_token}/sendPhoto"
             payload = {"chat_id": chat_id, "photo": image_url, "caption": text}
         else:
@@ -790,7 +794,22 @@ def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
         f"👉 @{main_channel_username}"
     )
 
+    # ── ذخیره در movie_messages/ برای استفاده بعدی توسط send_movie_message ──
+    MOVIES_DIR.mkdir(exist_ok=True)
+    movie_entry = {
+        "text": msg,
+        "image_url": None,
+        "used": False,
+        "source_uid": uid,
+        "created": datetime.utcnow().isoformat(),
+    }
     photo_id = post["photo"][-1]["file_id"] if post.get("photo") else None
+    if photo_id:
+        movie_entry["photo_file_id"] = photo_id
+    movie_file = MOVIES_DIR / f"movie_{uid}.json"
+    movie_file.write_text(json.dumps(movie_entry, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info(f"💾 پیام در movie_messages ذخیره شد: {movie_file.name}")
+
     if photo_id:
         _tg_send_photo(bot_token, main_chat_id, photo_id, msg)
     else:
@@ -827,9 +846,13 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
         keyboard = {"inline_keyboard": [[
             {"text": "📢 عضویت در کانال", "url": f"https://t.me/{main_channel_username}"}
         ]]}
-        _tg_send_message(bot_token, chat_id,
-                          "⚠️ برای دریافت لینک، ابتدا باید عضو کانال ما شوید:",
-                          reply_markup=keyboard)
+        _tg_send_message(
+            bot_token, chat_id,
+            "⚠️ برای دریافت لینک، ابتدا باید عضو کانال ما شوید:\n\n"
+            "بعد از عضویت دوباره لینک را بزنید و استارت کنید.\n"
+            "⏳ حدوداً ۳۰ ثانیه صبر کنید تا ربات جواب بدهد.",
+            reply_markup=keyboard,
+        )
 
 
 def _send_startup_movie(bot_token: str, chat_id: str) -> None:
