@@ -121,7 +121,7 @@ def main():
         sys.exit(0)
 
     # تنظیمات ثابت (از کد قبلی)
-    fixed_modules = ["combo_10day", "combo_monthly", "deep"]
+    fixed_modules = ["combo_10day", "combo_monthly"]
     coins = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT",
              "BTCUSDT+ETHUSDT", "BTCUSDT+XRPUSDT", "BTCUSDT+SOLUSDT",
              "ETHUSDT+XRPUSDT", "ETHUSDT+SOLUSDT", "XRPUSDT+SOLUSDT",
