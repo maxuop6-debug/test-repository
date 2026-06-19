@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,6 +60,7 @@ DEFAULT_ALPHA = 0.1
 BTC_MIN_SAMPLES = 10
 ALT_MIN_SAMPLES = 5
 BTC_DATA_YEARS = 4  # آستانه برای تشخیص BTC/Altcoin
+DEFAULT_CHUNK_SIZE = 50  # تعداد امضا در هر قطعه (chunk)
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +117,17 @@ def load_correlations(output_dir: str) -> pd.DataFrame | None:
 
 def build_signature(row: pd.Series) -> str:
     """ساخت امضای خبری از فیلدهای یک رکورد."""
-    regime = row.get("market_regime") or "unknown"
+    regime = row.get("market_regime")
+    if regime is None or (isinstance(regime, float) and pd.isna(regime)) or regime == "":
+        regime = "unknown"
     coin = row.get("coin_composition", "")
     indicator = row.get("dominant_indicator", "")
-    position = row.get("position", "")
-    distance = row.get("distance_days", "")
+    position = row.get("position")
+    if position is None or (isinstance(position, float) and pd.isna(position)):
+        position = "none"
+    distance = row.get("distance_days")
+    if distance is None or (isinstance(distance, float) and pd.isna(distance)):
+        distance = 0
     model = row.get("model", "")
     return f"{coin}_{indicator}_{position}_{distance}_{model}_{regime}"
 
@@ -317,6 +325,88 @@ def apply_correlation_feedback(
 
 
 # ---------------------------------------------------------------------------
+# مدیریت وضعیت (Status) برای وقفه و ادامه (Resume)
+# ---------------------------------------------------------------------------
+
+def load_status(status_path: Path) -> dict | None:
+    """بارگذاری فایل وضعیت در صورت وجود."""
+    if not status_path.exists():
+        return None
+    try:
+        with open(status_path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning(f"خواندن فایل وضعیت ناموفق بود ({exc}) – نادیده گرفته شد.")
+        return None
+
+
+def save_status(
+    status_path: Path,
+    processed_signatures,
+    last_chunk_index: int,
+    total_chunks: int,
+    status: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> dict:
+    """ذخیره فایل وضعیت golden_status.json."""
+    payload = {
+        "processed_signatures": sorted(set(processed_signatures)),
+        "last_chunk_index": last_chunk_index,
+        "total_chunks": total_chunks,
+        "chunk_size": chunk_size,
+        "status": status,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(status_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+    return payload
+
+
+def check_interrupt(interrupt_flag_path: Path | None) -> bool:
+    """بررسی وجود فایل interrupt.flag."""
+    if interrupt_flag_path is None:
+        return False
+    return Path(interrupt_flag_path).exists()
+
+
+def chunk_list(items: list, chunk_size: int) -> list:
+    """تقسیم یک لیست به قطعات با اندازه‌ی ثابت."""
+    if chunk_size <= 0:
+        chunk_size = DEFAULT_CHUNK_SIZE
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
+def write_summary(
+    output_path: Path,
+    status: str,
+    total_signatures: int,
+    processed_signatures_count: int,
+    total_groups: int,
+    filtered_groups: int,
+    output_files: list,
+    version_id: str,
+    completed_at: datetime,
+) -> Path:
+    """نوشتن خروجی خلاصه golden_summary.json."""
+    summary = {
+        "status": status,
+        "total_signatures": total_signatures,
+        "processed_signatures": processed_signatures_count,
+        "total_groups": total_groups,
+        "filtered_groups": filtered_groups,
+        "output_files": output_files,
+        "version_id": version_id,
+        "completed_at": completed_at.isoformat(),
+    }
+    summary_path = output_path / "golden_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as fh:
+        json.dump(summary, fh, ensure_ascii=False, indent=2)
+    log.info(f"golden_summary ذخیره شد: {summary_path}")
+    return summary_path
+
+
+# ---------------------------------------------------------------------------
 # پردازش اصلی
 # ---------------------------------------------------------------------------
 
@@ -327,10 +417,17 @@ def run(
     ohlc_dir: str | None,
     output_dir: str,
     alpha: float,
+    status_file: str | None = None,
+    resume: bool = False,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    interrupt_flag: str | None = None,
 ) -> None:
     now_utc = datetime.now(timezone.utc)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    status_path = Path(status_file) if status_file else output_path / "golden_status.json"
+    interrupt_path = Path(interrupt_flag) if interrupt_flag else output_path / "interrupt.flag"
 
     # ── بارگذاری ──────────────────────────────────────────────────────────
     log.info("بارگذاری signatures...")
@@ -346,26 +443,100 @@ def run(
     log.info("ساخت امضاهای خبری...")
     sig_df["signature"] = sig_df.apply(build_signature, axis=1)
 
-    # ── گروه‌بندی و محاسبه معیارهای خام ──────────────────────────────────
-    log.info("محاسبه معیارهای خام...")
-    raw_records = []
-    groups = sig_df.groupby(["strategy_folder", "coin_composition", "signature"])
-    total_groups = groups.ngroups
-    log.info(f"تعداد کل گروه‌ها: {total_groups:,}")
+    unique_signatures = sorted(sig_df["signature"].unique().tolist())
+    total_signatures = len(unique_signatures)
 
-    for (strategy_id, coin, signature), group_df in groups:
-        metrics = compute_raw_metrics(group_df)
-        raw_records.append(
-            {
-                "strategy_id": strategy_id,
-                "coin_composition": coin,
-                "signature": signature,
-                **metrics,
-                "created_at": now_utc,
-            }
-        )
+    # ── گام ۳: تقسیم به قطعات ────────────────────────────────────────────
+    chunks = chunk_list(unique_signatures, chunk_size)
+    total_chunks = len(chunks)
+    log.info(
+        f"تعداد امضاهای منحصربه‌فرد: {total_signatures:,} | "
+        f"اندازه قطعه: {chunk_size} | تعداد قطعات: {total_chunks:,}"
+    )
 
+    processed_signatures: set = set()
+    start_chunk = 0
+    raw_records: list = []
+
+    # ── گام ۰: بارگذاری وضعیت قبلی (در صورت --resume) ───────────────────
+    if resume:
+        prev_status = load_status(status_path)
+        if prev_status and prev_status.get("status") in ("interrupted", "running"):
+            processed_signatures = set(prev_status.get("processed_signatures", []))
+            start_chunk = prev_status.get("last_chunk_index", -1) + 1
+            log.info(
+                f"ادامه از وضعیت قبلی: شروع از قطعه {start_chunk}/{total_chunks} | "
+                f"امضاهای پردازش‌شده قبلی: {len(processed_signatures):,}"
+            )
+            try:
+                existing_raw = _load(output_path / "golden_raw.parquet")
+                raw_records = existing_raw.to_dict("records")
+                log.info(f"رکوردهای خام قبلی بارگذاری شد: {len(raw_records):,}")
+            except FileNotFoundError:
+                log.info("فایل golden_raw قبلی یافت نشد – ادامه با رکوردهای خالی.")
+        else:
+            log.info("هیچ وضعیت قابل‌ادامه‌ای (running/interrupted) یافت نشد. شروع از ابتدا.")
+
+    if total_chunks == 0:
+        log.warning("هیچ امضایی برای پردازش یافت نشد.")
+        save_status(status_path, processed_signatures, -1, 0, "completed", chunk_size)
+        write_summary(output_path, "completed", 0, 0, 0, 0, [], version_id, now_utc)
+        return
+
+    # ── گام ۴: پردازش هر قطعه ────────────────────────────────────────────
+    interrupted = False
+    for chunk_idx in range(start_chunk, total_chunks):
+        # بررسی interrupt.flag قبل از شروع هر قطعه
+        if check_interrupt(interrupt_path):
+            log.warning(f"interrupt.flag یافت شد - توقف پردازش قبل از قطعه {chunk_idx}.")
+            raw_df_partial = pd.DataFrame(raw_records)
+            if not raw_df_partial.empty:
+                _save(raw_df_partial, output_path / "golden_raw.parquet")
+            save_status(status_path, processed_signatures, chunk_idx - 1, total_chunks, "interrupted", chunk_size)
+            interrupted = True
+            break
+
+        chunk_signatures = set(chunks[chunk_idx])
+        chunk_df = sig_df[sig_df["signature"].isin(chunk_signatures)]
+
+        groups = chunk_df.groupby(["strategy_folder", "coin_composition", "signature"])
+        for (strategy_id, coin, signature), group_df in groups:
+            metrics = compute_raw_metrics(group_df)
+            raw_records.append(
+                {
+                    "strategy_id": strategy_id,
+                    "coin_composition": coin,
+                    "signature": signature,
+                    **metrics,
+                    "created_at": now_utc,
+                }
+            )
+
+        processed_signatures.update(chunk_signatures)
+
+        # ذخیره تدریجی خروجی خام + به‌روزرسانی وضعیت پس از هر قطعه
+        raw_df_partial = pd.DataFrame(raw_records)
+        _save(raw_df_partial, output_path / "golden_raw.parquet")
+        save_status(status_path, processed_signatures, chunk_idx, total_chunks, "running", chunk_size)
+        log.info(f"قطعه {chunk_idx + 1}/{total_chunks} پردازش شد ({len(chunk_signatures)} امضا).")
+
+    if interrupted:
+        log.info("پردازش به دلیل interrupt.flag متوقف شد (خروج graceful با کد ۰).")
+        return  # خروج graceful؛ کد بازگشت فرآیند ۰ خواهد بود
+
+    # ── حذف رکوردهای تکراری احتمالی ناشی از resume‌های قبلی ──────────────
     raw_df = pd.DataFrame(raw_records)
+    if not raw_df.empty:
+        raw_df = raw_df.drop_duplicates(
+            subset=["strategy_id", "coin_composition", "signature"], keep="last"
+        ).reset_index(drop=True)
+    total_groups = len(raw_df)
+
+    if raw_df.empty:
+        log.warning("هیچ داده‌ای برای پردازش یافت نشد.")
+        save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size)
+        write_summary(output_path, "completed", total_signatures, len(processed_signatures), 0, 0, [], version_id, now_utc)
+        return
 
     # ── مدیریت all-win ────────────────────────────────────────────────────
     raw_df = resolve_all_win_pf(raw_df)
@@ -382,6 +553,11 @@ def run(
 
     if filtered_df.empty:
         log.warning("هیچ گروه معتبری پس از فیلتر باقی نماند. خروج.")
+        save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size)
+        write_summary(
+            output_path, "completed", total_signatures, len(processed_signatures),
+            total_groups, 0, [raw_out.name], version_id, now_utc,
+        )
         return
 
     # ── نرمال‌سازی ────────────────────────────────────────────────────────
@@ -412,6 +588,22 @@ def run(
     scores_out = _save(scores_out_df, output_path / "golden_scores.parquet")
     log.info(f"golden_scores ذخیره شد: {scores_out}")
 
+    # ── وضعیت نهایی: completed ───────────────────────────────────────────
+    save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size)
+
+    # ── خروجی خلاصه golden_summary.json ──────────────────────────────────
+    write_summary(
+        output_path,
+        "completed",
+        total_signatures,
+        len(processed_signatures),
+        total_groups,
+        len(filtered_df),
+        [raw_out.name, scores_out.name],
+        version_id,
+        now_utc,
+    )
+
     # ── گزارش نهایی ───────────────────────────────────────────────────────
     log.info("=" * 60)
     log.info(f"تعداد گروه‌های پردازش‌شده:  {len(filtered_df):,}")
@@ -435,6 +627,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ohlc-dir", default=None, help="(اختیاری) مسیر پوشه داده‌های OHLC")
     parser.add_argument("--output-dir", required=True, help="مسیر پوشه خروجی")
     parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="ضریب بازخورد Correlation (پیش‌فرض: 0.1)")
+    parser.add_argument(
+        "--status-file",
+        default=None,
+        help="(اختیاری) مسیر فایل وضعیت برای مدیریت وقفه و ادامه (پیش‌فرض: golden_status.json در output-dir)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="در صورت فعال بودن، از آخرین وضعیت ذخیره‌شده ادامه می‌دهد",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=DEFAULT_CHUNK_SIZE,
+        help=f"تعداد امضا در هر قطعه (پیش‌فرض: {DEFAULT_CHUNK_SIZE})",
+    )
+    parser.add_argument(
+        "--interrupt-flag",
+        default=None,
+        help="(اختیاری) مسیر فایل interrupt.flag برای توقف کنترل‌شده (پیش‌فرض: interrupt.flag در output-dir)",
+    )
     return parser.parse_args()
 
 
@@ -447,4 +660,9 @@ if __name__ == "__main__":
         ohlc_dir=args.ohlc_dir,
         output_dir=args.output_dir,
         alpha=args.alpha,
+        status_file=args.status_file,
+        resume=args.resume,
+        chunk_size=args.chunk_size,
+        interrupt_flag=args.interrupt_flag,
     )
+    sys.exit(0)
