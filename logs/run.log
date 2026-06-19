@@ -24,3 +24,14 @@ find: ‘backtest_results’: No such file or directory
 https://github.com/Amir9287171/test-repository/actions/runs/27841183374
 ✅ فراخوانی analysis.yml موفق بود (تلاش 1).
 هیچ تغییری در لاگ وجود ندارد.
+🔍 بررسی پرچم وقفه...
+🔍 بررسی golden_status.json (برای ادامه از آخرین نقطه توقف)...
+   ℹ️ golden_status.json یافت نشد. اجرای golden از ابتدا آغاز می‌شود.
+📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای golden: 1
+🔄 فراخوانی analysis.yml برای golden...
+https://github.com/Amir9287171/test-repository/actions/runs/27846101994
+✅ فراخوانی golden موفق بود (تلاش 1).
+📊 تعداد استراتژی‌ها: قبل=1 بعد=1
+ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت.
+🔁 فراخوانی مجدد loop_analysis.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/27846103057
