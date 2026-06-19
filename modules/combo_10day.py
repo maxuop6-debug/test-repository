@@ -410,48 +410,107 @@ def compute_indicator_status_for_period(start_date, end_date, news_events):
 
 # ================================ محاسبه بازده بر اساس مدل ================================
 
-def compute_trade_profit(raw_profit, move_percents, model, trade):
+def compute_trade_profit(raw_profit, move_percents, model, trade, use_tp_sl=False, take_profit=None, stop_loss=None):
     """
-    محاسبه بازده معامله بر اساس مدل:
+    محاسبه بازده معامله:
 
-    - simple_hybrid:    بازده خام — بدون special rounding
-    - fibonacci_full:   همه معاملات با apply_special_rounding
-                        اگر move_percents خالی باشد → بازده خام (fallback با warning)
-    - fibonacci_hybrid: بر اساس فیلد is_fibonacci در داده معامله
-                        اگر move_percents خالی باشد → همیشه بازده خام (fallback)
+    حالت skeep (use_tp_sl=True):
+        بازده خام با حد سود/ضرر محدود می‌شود — بدون special rounding.
+        اگر raw_profit >= take_profit  → take_profit
+        اگر raw_profit <= -stop_loss  → -stop_loss
+        در غیر این صورت               → raw_profit
+
+    حالت عادی (use_tp_sl=False):
+        در تمام مدل‌ها اجباراً apply_special_rounding با move_percents اجرا می‌شود.
+        - simple_hybrid:    همه معاملات → apply_special_rounding
+        - fibonacci_full:   همه معاملات → apply_special_rounding
+        - fibonacci_hybrid: is_fibonacci=True → apply_special_rounding
+                            is_fibonacci=False → apply_special_rounding (اجباری)
+        اگر move_percents خالی باشد → raw_profit (fallback با warning)
     """
-    if model == 'simple_hybrid':
+    if use_tp_sl:
+        # حالت skeep: فقط حد سود/ضرر اعمال می‌شود
+        result = raw_profit
+        if take_profit is not None and result >= take_profit:
+            result = take_profit
+        if stop_loss is not None and result <= -stop_loss:
+            result = -stop_loss
+        return result
+
+    # حالت عادی: اجباراً special rounding
+    if not move_percents:
         return raw_profit
-
-    elif model == 'fibonacci_full':
-        # اگر move_percents خالی است fallback به raw_profit (استراتژی simple است)
-        if not move_percents:
-            return raw_profit
-        return apply_special_rounding(raw_profit, move_percents)
-
-    elif model == 'fibonacci_hybrid':
-        # اگر move_percents خالی است همه معاملات raw هستند
-        if not move_percents:
-            return raw_profit
-        is_fib = trade.get("is_fibonacci", False)
-        if is_fib:
-            return apply_special_rounding(raw_profit, move_percents)
-        else:
-            return raw_profit
-
-    else:
-        return raw_profit
+    return apply_special_rounding(raw_profit, move_percents)
 
 
 # ================================ تابع اصلی تحلیل ================================
+
+def load_skeep_tp_sl(trades_json_path):
+    """
+    بررسی وجود فایل skeepmove_percents.txt در کنار فایل یکپارچه.
+    مسیر: aggregated/{STRAT_NAME}/{STRAT_NAME}_trades.enc
+    فایل skeep: aggregated/{STRAT_NAME}/skeepmove_percents.txt
+
+    اگر فایل _trades.enc وجود داشت و skeepmove_percents.txt هم موجود بود:
+        → (True, take_profit, stop_loss)
+    در غیر این صورت:
+        → (False, None, None)
+
+    فرمت فایل skeepmove_percents.txt:
+        take_profit=<عدد>
+        stop_loss=<عدد>
+    """
+    # ساخت مسیر فایل enc از روی مسیر trades_json
+    # trades_json_path ممکن است خود _trades.enc باشد یا مسیر دیگری
+    base_dir = os.path.dirname(os.path.abspath(trades_json_path))
+    enc_path = trades_json_path  # فایل ورودی همان _trades.enc است
+
+    # بررسی وجود فایل enc
+    if not os.path.exists(enc_path):
+        return False, None, None
+
+    skeep_path = os.path.join(base_dir, "skeepmove_percents.txt")
+    if not os.path.exists(skeep_path):
+        return False, None, None
+
+    # خواندن مقادیر take_profit و stop_loss از فایل
+    take_profit = None
+    stop_loss   = None
+    try:
+        with open(skeep_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("take_profit"):
+                    val = re.sub(r'[^\\d.-]', '', line.split("=", 1)[-1])
+                    take_profit = float(val) if val else None
+                elif line.startswith("stop_loss"):
+                    val = re.sub(r'[^\\d.-]', '', line.split("=", 1)[-1])
+                    stop_loss = float(val) if val else None
+        print(f"📄 skeepmove_percents.txt یافت شد → take_profit={take_profit}, stop_loss={stop_loss}")
+        return True, take_profit, stop_loss
+    except Exception as e:
+        print(f"⚠️ خطا در خواندن skeepmove_percents.txt: {e}")
+        return False, None, None
+
 
 def process_analysis(trades_json_path, news_dir, interval, target_coin,
                      chunk_start, chunk_end, output_path, model):
     """
     تحلیل اصلی.
-    اصلاح کلیدی: پارامتر model دریافت می‌شود و در compute_trade_profit استفاده می‌شود.
-    اصلاح کلیدی: move_percents خالی دیگر باعث crash نمی‌شود — fallback به raw_profit.
+
+    منطق بازده:
+    - اگر فایل aggregated/.../skeepmove_percents.txt وجود داشت:
+        → حالت skeep: از take_profit/stop_loss استفاده می‌شود (بدون special rounding)
+    - در غیر این صورت:
+        → اجباری: apply_special_rounding با move_percents از متادیتا برای همه معاملات
     """
+
+    # ---------- مرحله ۰: بررسی حالت skeep ----------
+    use_tp_sl, take_profit, stop_loss = load_skeep_tp_sl(trades_json_path)
+    if use_tp_sl:
+        print(f"🔀 حالت skeep فعال: take_profit={take_profit}, stop_loss={stop_loss}")
+    else:
+        print("✅ حالت عادی: apply_special_rounding اجباری برای همه معاملات")
 
     # ---------- مرحله ۱: بارگذاری معاملات ----------
     print(f"🔍 بارگذاری معاملات از {trades_json_path}")
@@ -474,19 +533,14 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
 
     print(f"📊 تعداد کل معاملات: {len(trades)}")
 
-    # استخراج move_percents از متادیتا
+    # استخراج move_percents از متادیتا (برای حالت عادی اجباری است)
     move_percents = metadata.get("move_percents", []) if metadata else []
 
-    # اطلاع‌رسانی وضعیت move_percents بر اساس مدل
-    if model == 'simple_hybrid':
-        print("ℹ️ مدل simple_hybrid: بازده خام (raw_profit) استفاده می‌شود.")
-    elif model in ('fibonacci_full', 'fibonacci_hybrid'):
+    if not use_tp_sl:
         if move_percents:
-            print(f"📈 مدل {model}: move_percents = {move_percents}")
+            print(f"📈 move_percents (اجباری): {move_percents}")
         else:
-            # این استراتژی move_percents ندارد (simple است) → fallback بدون crash
-            print(f"⚠️ مدل {model}: move_percents خالی است — این استراتژی فیبوناچی نیست.")
-            print("   fallback: بازده خام (raw_profit) استفاده می‌شود.")
+            print("⚠️ move_percents خالی است — fallback به raw_profit")
 
     # ---------- مرحله ۲: فیلتر بر اساس کوین ----------
     target_coins = [c.strip() for c in target_coin.split('+')]
@@ -519,8 +573,13 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
         except (TypeError, ValueError):
             raw_profit = 0.0
 
-        # محاسبه بازده بر اساس مدل
-        profit = compute_trade_profit(raw_profit, move_percents, model, t)
+        # محاسبه بازده
+        profit = compute_trade_profit(
+            raw_profit, move_percents, model, t,
+            use_tp_sl=use_tp_sl,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+        )
         trade_list.append((trade_date, profit))
 
     if not trade_list:
