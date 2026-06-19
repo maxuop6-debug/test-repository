@@ -21,16 +21,6 @@ portfolios.py - ماژول دوم: سبدهای مکمل (Complementary Portfoli
         --top-n 15 \
         --status-file /tmp/portfolios_status.json \
         --resume
-
-نکته درباره‌ی «تاریخ انتشار شاخص غالب» (Step 3 سند):
-    رکوردهای signatures که در سند نمونه آمده‌اند فاقد فیلد صریح release_date
-    هستند. این پیاده‌سازی، release_date را از روی period_start/period_end و
-    موقعیت (pre/post) استخراج‌شده از رشته‌ی signature تخمین می‌زند:
-    اگر position == 'post' آنگاه release_date ≈ period_start (دوره از لحظه‌ی
-    انتشار شروع می‌شود)، و اگر position == 'pre' آنگاه release_date ≈
-    period_end (دوره تا لحظه‌ی انتشار ادامه دارد). اگر در داده‌ی ورودی فیلد
-    صریح 'position' یا 'release_date' وجود داشته باشد، آن فیلد به‌جای این
-    استنتاج استفاده می‌شود (اولویت با داده‌ی صریح است).
 """
 
 from __future__ import annotations
@@ -502,7 +492,8 @@ def evaluate_group(
     )
 
     pf_df = pf_df.sort_values("score", ascending=False).head(top_n)
-    pf_df = pf_df.drop(columns=["comp_norm", "corr_norm", "return_norm", "sample_count"])
+    # ========== باگ ۲ رفع شد: sample_count را حذف نکن ==========
+    pf_df = pf_df.drop(columns=["comp_norm", "corr_norm", "return_norm"])
 
     return pf_df.to_dict("records")
 
@@ -659,6 +650,7 @@ def run(
     columns = [
         "coin_composition", "signature", "members", "survival_rate",
         "compensation_ratio", "avg_return", "avg_correlation", "score",
+        "sample_count",  # ========== باگ ۲ رفع شد: sample_count اضافه شد ==========
         "version_id", "created_at",
     ]
 
