@@ -1,4 +1,4 @@
-name.  خطا: Backup Pipeline
+name: Backup Pipeline
 
 on:
   workflow_dispatch:
@@ -24,25 +24,20 @@ jobs:
     timeout-minutes: 55
 
     steps:
-      # ─── دریافت کد ───────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ─── نصب Python ──────────────────────────────────────────────────────────
-      # cache: 'pip' حذف شد – بدون requirements.txt ارور می‌دهد
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ─── نصب وابستگی‌ها (یک‌بار برای کل job) ──────────────────────────────
       - name: Install dependencies
         run: pip install --upgrade pip requests cryptography
 
-      # ─── اجرای پایپ‌لاین اصلی ───────────────────────────────────────────────
       - name: Run backup pipeline
         env:
           RESULTS_PASSWORD:   ${{ secrets.RESULTS_PASSWORD }}
@@ -60,7 +55,6 @@ jobs:
           fi
           python backup_system.py run $FORCE_FLAG
 
-      # ─── commit فایل‌های metadata ─────────────────────────────────────────────
       - name: Commit metadata files
         run: |
           git config user.name  "GitHub Actions – Backup Bot"
@@ -73,25 +67,19 @@ jobs:
             "integrity_pass.flag"
           )
 
-          CHANGED=0
           for f in "${META_FILES[@]}"; do
-            if [ -f "$f" ]; then
-              git add "$f"
-              CHANGED=1
-            fi
+            [ -f "$f" ] && git add "$f"
           done
 
-          # ثبت حذف فایل‌های analysis_results که پاک شده‌اند
           git add -u analysis_results/ 2>/dev/null || true
 
-          if [ "$CHANGED" = "1" ] || ! git diff --cached --quiet; then
+          if ! git diff --cached --quiet; then
             git commit -m "chore: backup metadata $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             git push
           else
             echo "تغییری برای commit وجود ندارد"
           fi
 
-      # ─── گزارش خطا (از backup_system.py استفاده می‌کند) ─────────────────────
       - name: Notify on failure
         if: failure()
         env:
@@ -99,7 +87,6 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python backup_system.py notify-failure
 
-      # ─── چرخه: فراخوانی loop_backup (همیشه، حتی در صورت شکست) ───────────────
       - name: Trigger loop (always)
         if: always()
         env:
