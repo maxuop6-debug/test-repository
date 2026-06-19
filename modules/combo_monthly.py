@@ -256,6 +256,7 @@ def load_skeep_tp_sl(trades_json_path):
             for line in f:
                 line = line.strip()
                 if line.startswith("take_profit"):
+                    # این خط درست است (بدون باگ)
                     val = re.sub(r'[^\d.-]', '', line.split("=", 1)[-1])
                     take_profit = float(val) if val else None
                 elif line.startswith("stop_loss"):
