@@ -481,10 +481,14 @@ def load_skeep_tp_sl(trades_json_path):
             for line in f:
                 line = line.strip()
                 if line.startswith("take_profit"):
-                    val = re.sub(r'[^\\d.-]', '', line.split("=", 1)[-1])
+                    # ========== فیکس باگ ==========
+                    # قبلاً: r'[^\\d.-]' (اشتباه)
+                    # حالا:  r'[^\d.-]'  (درست)
+                    val = re.sub(r'[^\d.-]', '', line.split("=", 1)[-1])
                     take_profit = float(val) if val else None
                 elif line.startswith("stop_loss"):
-                    val = re.sub(r'[^\\d.-]', '', line.split("=", 1)[-1])
+                    # ========== فیکس باگ ==========
+                    val = re.sub(r'[^\d.-]', '', line.split("=", 1)[-1])
                     stop_loss = float(val) if val else None
         print(f"📄 skeepmove_percents.txt یافت شد → take_profit={take_profit}, stop_loss={stop_loss}")
         return True, take_profit, stop_loss
