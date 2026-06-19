@@ -49,6 +49,21 @@ INTEGRITY_FLAG = Path("integrity_pass.flag")
 STARTUP_TEST_FLAG = Path("startup_test_sent.flag")   # پرچم پیام تستی اولین اجرا
 IRAN_UTC_OFFSET = 3.5                  # ساعت (UTC+3:30)
 
+# ─── ثابت‌های کارهای جدید (فیلتر/۳۰دقیقه/پرچم/ساختار) ─────────────────────────
+ALL_COMBINATIONS_FILE = Path("all_combinations.json")
+MASTER_STRUCTURE_FILE = Path("master_structure.json")
+BACKUP_DONE_FLAG = ".backup_done"
+AGGREGATED_MIN_AGE_MINUTES = 30
+
+# فایل‌های یکبار مصرف: هرکدام می‌تواند پوشه یا فایل باشد
+ONE_TIME_TARGETS = [
+    Path("data/news"),
+    Path("encrypted_data"),
+    Path("Test-repo/data.enc"),
+    Path("Test-repo/zips"),
+    Path("encrypted_data/src"),
+]
+
 # ─── ثابت‌های بخش فیلم/سریال و پردازش فورواردی ─────────────────────────────────
 MOVIES_DIR = Path("movie_messages")
 OFFSET_FILE = Path("update_offset.json")
@@ -411,6 +426,238 @@ def record_upload(ledger: dict, rel_path: str, file_id: str, size: int) -> None:
     save_ledger(ledger)
 
 
+# ─── کار ۱: فیلتر analysis_results بر اساس all_combinations.json ───────────────
+
+def load_completed_strategies() -> set[str]:
+    """خواندن استراتژی‌های تکمیل‌شده از all_combinations.json"""
+    if not ALL_COMBINATIONS_FILE.exists():
+        return set()
+    try:
+        data = json.loads(ALL_COMBINATIONS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning(f"خطا در خواندن {ALL_COMBINATIONS_FILE}: {e}")
+        return set()
+    if isinstance(data, dict):
+        # ممکن است {"completed_strategies": [...]} یا مستقیماً دیکشنری کلید-استراتژی باشد
+        if "completed_strategies" in data:
+            return set(str(s) for s in data["completed_strategies"])
+        return set(str(k) for k in data.keys())
+    if isinstance(data, list):
+        return set(str(s) for s in data)
+    return set()
+
+
+def _strategy_folder(csv_path: Path) -> Optional[Path]:
+    """analysis_results/[ماژول]/[استراتژی]/[کوین]/[فایل].csv -> پوشه استراتژی"""
+    try:
+        idx = csv_path.parts.index(ANALYSIS_DIR.name)
+    except ValueError:
+        return None
+    if len(csv_path.parts) < idx + 3:
+        return None
+    return Path(*csv_path.parts[: idx + 3])  # .../analysis_results/module/strategy
+
+
+def _strategy_name(csv_path: Path) -> Optional[str]:
+    folder = _strategy_folder(csv_path)
+    return folder.name if folder else None
+
+
+def filter_completed_strategies(csv_files: list[Path]) -> list[Path]:
+    """فقط CSVهایی که استراتژی‌شان در all_combinations.json نیست را نگه می‌دارد"""
+    completed = load_completed_strategies()
+    if not completed:
+        return csv_files
+    kept = []
+    for p in csv_files:
+        name = _strategy_name(p)
+        if name is not None and name in completed:
+            continue
+        kept.append(p)
+    return kept
+
+
+# ─── کار ۲: شرط ۳۰ دقیقه + پرچم برای aggregated/ ───────────────────────────────
+
+def collect_aggregated_files() -> list[Path]:
+    """فقط زیرپوشه‌هایی که ≥۳۰ دقیقه تغییر نکرده و .backup_done ندارند"""
+    if not AGGREGATED_DIR.exists():
+        return []
+    now = time.time()
+    result: list[Path] = []
+    for sub in sorted(AGGREGATED_DIR.iterdir()):
+        if not sub.is_dir():
+            continue
+        if (sub / BACKUP_DONE_FLAG).exists():
+            continue
+        enc_files = list(sub.glob("*.enc"))
+        if not enc_files:
+            continue
+        latest_mtime = max(f.stat().st_mtime for f in enc_files)
+        age_minutes = (now - latest_mtime) / 60
+        if age_minutes < AGGREGATED_MIN_AGE_MINUTES:
+            continue
+        result.extend(enc_files)
+    return result
+
+
+# ─── کار ۳: گذاشتن پرچم .backup_done بعد از آپلود موفق ─────────────────────────
+
+def _touch_backup_done(folder: Path) -> None:
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / BACKUP_DONE_FLAG).write_text(datetime.utcnow().isoformat(), encoding="utf-8")
+    except Exception as e:
+        log.warning(f"عدم موفقیت در ایجاد پرچم {folder}: {e}")
+
+
+def mark_uploaded_folders_done(uploaded_rel_paths: list[str]) -> set[Path]:
+    """بعد از آپلود موفق، پرچم .backup_done را در پوشه‌های استراتژی/aggregated می‌گذارد.
+    پوشه‌های پرچم‌گذاری‌شده را برمی‌گرداند (برای ساخت structure.json)."""
+    touched: set[Path] = set()
+    for rel in uploaded_rel_paths:
+        p = Path(rel)
+        if ANALYSIS_DIR.name in p.parts:
+            folder = _strategy_folder(p)
+            if folder:
+                touched.add(folder)
+        elif AGGREGATED_DIR.name in p.parts:
+            try:
+                idx = p.parts.index(AGGREGATED_DIR.name)
+                folder = Path(*p.parts[: idx + 2])
+                touched.add(folder)
+            except ValueError:
+                pass
+    for folder in touched:
+        _touch_backup_done(folder)
+    return touched
+
+
+# ─── کار ۴: فایل‌های یکبار مصرف ─────────────────────────────────────────────────
+
+def collect_onetime_files() -> list[Path]:
+    """جمع‌آوری فایل‌های یکبار مصرف که هنوز .backup_done ندارند"""
+    files: list[Path] = []
+    for target in ONE_TIME_TARGETS:
+        if not target.exists():
+            continue
+        flag_dir = target if target.is_dir() else target.parent
+        if (flag_dir / BACKUP_DONE_FLAG).exists():
+            continue
+        if target.is_file():
+            files.append(target)
+        else:
+            files.extend(
+                p for p in sorted(target.rglob("*"))
+                if p.is_file() and p.name != BACKUP_DONE_FLAG
+            )
+    return files
+
+
+def mark_onetime_targets_done() -> None:
+    """بعد از آپلود موفق فایل‌های یکبار مصرف، پرچم .backup_done می‌گذارد"""
+    for target in ONE_TIME_TARGETS:
+        if not target.exists():
+            continue
+        flag_dir = target if target.is_dir() else target.parent
+        _touch_backup_done(flag_dir)
+
+
+def process_onetime_file(path: Path, password: str) -> bytes:
+    """فشرده‌سازی + رمزنگاری ساده برای فایل‌های یکبار مصرف (بدون نگاشت)"""
+    raw = path.read_bytes()
+    compressed = compress_data(raw)
+    return encrypt_data(compressed, password)
+
+
+# ─── کار ۸: structure.json (هر پوشه) + master_structure.json (ریشه) ───────────
+
+def _sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_structure_json(folder: Path) -> dict:
+    """قبل از بسته‌بندی، structure.json را داخل پوشه می‌سازد"""
+    files_info = []
+    if folder.exists():
+        for f in sorted(folder.iterdir()):
+            if f.is_file() and f.name not in ("structure.json", BACKUP_DONE_FLAG):
+                files_info.append({
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "hash": _sha256_of(f),
+                })
+    struct = {
+        "folder_name": folder.name,
+        "folder_path": str(folder),
+        "files": files_info,
+        "total_files": len(files_info),
+        "total_size_bytes": sum(fi["size"] for fi in files_info),
+        "upload_date": datetime.utcnow().isoformat() + "Z",
+        "telegram_file_id": None,
+    }
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "structure.json").write_text(
+        json.dumps(struct, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return struct
+
+
+def update_structure_telegram_id(folder: Path, file_id: str) -> None:
+    sp = folder / "structure.json"
+    if not sp.exists():
+        return
+    try:
+        d = json.loads(sp.read_text(encoding="utf-8"))
+        d["telegram_file_id"] = file_id
+        sp.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        log.warning(f"عدم بروزرسانی structure.json در {folder}: {e}")
+
+
+def load_master_structure() -> dict:
+    if MASTER_STRUCTURE_FILE.exists():
+        try:
+            return json.loads(MASTER_STRUCTURE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {
+        "last_updated": None,
+        "total_folders": 0,
+        "total_files": 0,
+        "total_size_bytes": 0,
+        "folders": [],
+    }
+
+
+def update_master_structure(folder_struct: dict, package_name: str) -> None:
+    """master_structure.json در ریشه مخزن را با اطلاعات پوشه جدید به‌روز می‌کند"""
+    master = load_master_structure()
+    master["folders"] = [
+        f for f in master["folders"] if f.get("folder_path") != folder_struct["folder_path"]
+    ]
+    master["folders"].append({
+        "folder_name": folder_struct["folder_name"],
+        "folder_path": folder_struct["folder_path"],
+        "total_files": folder_struct["total_files"],
+        "total_size_bytes": folder_struct["total_size_bytes"],
+        "upload_date": folder_struct["upload_date"],
+        "telegram_file_id": folder_struct.get("telegram_file_id"),
+        "package_name": package_name,
+    })
+    master["total_folders"] = len(master["folders"])
+    master["total_files"] = sum(f["total_files"] for f in master["folders"])
+    master["total_size_bytes"] = sum(f["total_size_bytes"] for f in master["folders"])
+    master["last_updated"] = datetime.utcnow().isoformat() + "Z"
+    MASTER_STRUCTURE_FILE.write_text(
+        json.dumps(master, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 # ─── پردازش فایل‌ها ─────────────────────────────────────────────────────────────
 
 def process_analysis_file(path: Path, mapping: dict, password: str) -> bytes:
@@ -541,7 +788,7 @@ def should_run_now(sched: dict, window_minutes: int = 5) -> bool:
 
 def send_metadata(bot_token: str, chat_id: str, password: str) -> None:
     """ارسال دفترچه، نگاشت و پرچم به تلگرام"""
-    meta_files = [LEDGER_FILE, MAPPING_FILE, INTEGRITY_FLAG]
+    meta_files = [LEDGER_FILE, MAPPING_FILE, INTEGRITY_FLAG, SCHEDULE_FILE, MASTER_STRUCTURE_FILE]
     existing = [(p, p.read_bytes()) for p in meta_files if p.exists()]
     if not existing:
         return
@@ -586,10 +833,24 @@ def weekly_full_backup(bot_token: str, chat_id: str, password: str,
                 log.error(f"کلون ناموفق: {repo} – {result.stderr}")
                 continue
 
-            # آرشیو کل مخزن
+            # آرشیو کل مخزن (با حذف فایل‌های یکبار مصرفِ پرچم‌خورده)
             buf = io.BytesIO()
+            skip_names = {".git"}
             with tarfile.open(fileobj=buf, mode="w:xz") as tar:
-                tar.add(tmpdir, arcname=repo)
+                def _filter(tarinfo: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
+                    parts = Path(tarinfo.name).parts
+                    if any(p in skip_names for p in parts):
+                        return None
+                    # رد کردن فایل‌های یکبار مصرفی که پرچم .backup_done دارند
+                    for target in ONE_TIME_TARGETS:
+                        target_parts = target.parts
+                        if parts[1: 1 + len(target_parts)] == target_parts:
+                            # parts[0] = نام مخزن (arcname)
+                            flag_dir = target if target.is_dir() else target.parent
+                            if (flag_dir / BACKUP_DONE_FLAG).exists():
+                                return None
+                    return tarinfo
+                tar.add(tmpdir, arcname=repo, filter=_filter)
             packed = buf.getvalue()
             encrypted = encrypt_data(packed, password)
             fname = f"weekly_{repo}_{today.isoformat()}.tar.xz.enc"
@@ -616,15 +877,14 @@ def load_unused_movies() -> list[Path]:
     return unused
 
 
-def send_movie_message(bot_token: str, chat_id: str) -> None:
-    """انتخاب و ارسال یک پیام فیلم/سریال استفاده‌نشده"""
-    unused = load_unused_movies()
-    if not unused:
-        log.info("هیچ پیام استفاده‌نشده‌ای در movie_messages/ وجود ندارد")
-        return
+def _send_one_movie_message(bot_token: str, chat_id: str, path: Path) -> bool:
+    """ارسال یک فایل movie_messages مشخص. در صورت موفقیت True و used=true می‌کند"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning(f"خطا در خواندن {path}: {e}")
+        return False
 
-    path = random.choice(unused)
-    data = json.loads(path.read_text(encoding="utf-8"))
     text = data.get("text", "")
     image_url = data.get("image_url")
     photo_file_id = data.get("photo_file_id")
@@ -643,14 +903,39 @@ def send_movie_message(bot_token: str, chat_id: str) -> None:
         result = resp.json()
         if not result.get("ok"):
             log.error(f"ارسال پیام فیلم ناموفق: {result.get('description')}")
-            return
+            return False
     except Exception as e:
         log.error(f"خطای ارسال پیام فیلم: {e}")
-        return
+        return False
 
     data["used"] = True
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     log.info(f"✅ پیام فیلم/سریال ارسال شد: {path.name}")
+    return True
+
+
+def send_movie_message(bot_token: str, chat_id: str) -> None:
+    """انتخاب و ارسال یک پیام فیلم/سریال استفاده‌نشده (ارسال تکی – برای دستور send-movie و پیام تست اولیه)"""
+    unused = load_unused_movies()
+    if not unused:
+        log.info("هیچ پیام استفاده‌نشده‌ای در movie_messages/ وجود ندارد")
+        return
+    _send_one_movie_message(bot_token, chat_id, random.choice(unused))
+
+
+def send_movie_messages_after_backup(bot_token: str, chat_id: str) -> None:
+    """بعد از هر بک‌آپ موفق: ۱ یا ۲ پیام رندوم از بین used=false ارسال می‌کند"""
+    unused = load_unused_movies()
+    if not unused:
+        log.info("هیچ پیام استفاده‌نشده‌ای در movie_messages/ وجود ندارد")
+        return
+    count = min(random.randint(1, 2), len(unused))
+    chosen = random.sample(unused, count)
+    sent = 0
+    for path in chosen:
+        if _send_one_movie_message(bot_token, chat_id, path):
+            sent += 1
+    log.info(f"✅ {sent} پیام فیلم/سریال بعد از بک‌آپ موفق ارسال شد")
 
 
 # ─── پردازش پیام‌های فورواردی + لینک اختصاصی + بررسی عضویت ────────────────────
@@ -957,8 +1242,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     log.info("🚀 شروع بک‌آپ...")
 
-    # ─── ۲. جمع‌آوری فایل‌های CSV و تشخیص نگاشت ───
-    csv_files = list(ANALYSIS_DIR.rglob("*.csv")) if ANALYSIS_DIR.exists() else []
+    # ─── ۲. جمع‌آوری CSVها با فیلتر all_combinations.json (کار ۱) ───
+    csv_files_all = list(ANALYSIS_DIR.rglob("*.csv")) if ANALYSIS_DIR.exists() else []
+    csv_files = filter_completed_strategies(csv_files_all)
+    if len(csv_files) != len(csv_files_all):
+        log.info(f"🧹 {len(csv_files_all) - len(csv_files)} فایل به دلیل استراتژی تکمیل‌شده فیلتر شد")
     mapping = auto_detect_mapping(csv_files)
 
     # ─── ۳. پردازش فایل‌ها ───
@@ -977,7 +1265,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
         except Exception as e:
             log.error(f"خطا در پردازش {rel}: {e}")
 
-    enc_files = list(AGGREGATED_DIR.rglob("*.enc")) if AGGREGATED_DIR.exists() else []
+    # کار ۲: فقط زیرپوشه‌های aggregated که ≥۳۰ دقیقه ساکت بوده‌اند و .backup_done ندارند
+    enc_files = collect_aggregated_files()
     for enc_path in enc_files:
         rel = str(enc_path)
         if is_uploaded(ledger, rel):
@@ -988,9 +1277,42 @@ def run_pipeline(args: argparse.Namespace) -> None:
         except Exception as e:
             log.error(f"خطا در پردازش aggregated {rel}: {e}")
 
+    # کار ۴: فایل‌های یکبار مصرف
+    onetime_files = collect_onetime_files()
+    for ot_path in onetime_files:
+        rel = str(ot_path)
+        if is_uploaded(ledger, rel):
+            continue
+        try:
+            processed = process_onetime_file(ot_path, password)
+            to_pack.append((ot_path, processed))
+        except Exception as e:
+            log.error(f"خطا در پردازش فایل یکبار مصرف {rel}: {e}")
+
+    backup_succeeded = False
+
     if not to_pack:
         log.info("هیچ فایل جدیدی برای بک‌آپ وجود ندارد")
     else:
+        # ─── کار ۸ (قبل از بسته‌بندی): structure.json داخل هر پوشه آپلود‌شونده ───
+        touched_folders: set[Path] = set()
+        for path, _data in to_pack:
+            if ANALYSIS_DIR.name in path.parts:
+                folder = _strategy_folder(path)
+            elif AGGREGATED_DIR.name in path.parts:
+                idx = path.parts.index(AGGREGATED_DIR.name)
+                folder = Path(*path.parts[: idx + 2])
+            else:
+                folder = None
+            if folder:
+                touched_folders.add(folder)
+
+        folder_structs: dict[Path, dict] = {}
+        for folder in touched_folders:
+            struct = write_structure_json(folder)
+            folder_structs[folder] = struct
+            to_pack.append((folder / "structure.json", (folder / "structure.json").read_bytes()))
+
         # ─── ۴. بسته‌بندی ───
         packages = build_packages(to_pack, [ANALYSIS_DIR, AGGREGATED_DIR])
 
@@ -1003,6 +1325,24 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 for rel_path in pkg["files"]:
                     record_upload(ledger, rel_path, fid, len(pkg["data"]))
                 log.info(f"✅ ارسال شد: {pkg['name']}")
+                backup_succeeded = True
+
+                # کار ۸: به‌روزرسانی telegram_file_id در structure.json + master_structure.json
+                for folder, struct in folder_structs.items():
+                    if str(folder / "structure.json") in pkg["files"] or any(
+                        f.startswith(str(folder) + os.sep) or f == str(folder) for f in pkg["files"]
+                    ):
+                        update_structure_telegram_id(folder, fid)
+                        struct["telegram_file_id"] = fid
+                        update_master_structure(struct, pkg["name"])
+
+        # کار ۳: پرچم .backup_done در پوشه‌های استراتژی/aggregated آپلود‌شده در این اجرا
+        for folder in touched_folders:
+            _touch_backup_done(folder)
+
+        # کار ۴: پرچم .backup_done برای فایل‌های یکبار مصرف آپلودشده
+        if onetime_files and backup_succeeded:
+            mark_onetime_targets_done()
 
         # ─── ۶. پاکسازی فایل‌های analysis_results ───
         for csv_path in csv_files:
@@ -1013,11 +1353,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 except Exception as e:
                     log.warning(f"حذف ناموفق {csv_path}: {e}")
 
-    # ─── ۷. ارسال پیام فیلم/سریال (فقط در صورت بک‌آپ موفق) ───
-    if to_pack:
-        send_movie_message(bot_token, chat_id)
+    # ─── ۷. ارسال ۱ یا ۲ پیام فیلم/سریال رندوم (فقط در صورت بک‌آپ موفق) ───
+    if backup_succeeded:
+        send_movie_messages_after_backup(bot_token, chat_id)
 
-    # ─── ۸. ارسال متادیتا ───
+    # ─── ۸. ارسال متادیتا (شامل master_structure.json) ───
     send_metadata(bot_token, chat_id, password)
 
     # ─── ۹. ارسال هفتگی ───
