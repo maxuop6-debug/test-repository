@@ -1,338 +1,450 @@
-#!/usr/bin/env python3
-# golden.py - ترکیب طلایی: یافتن استراتژی‌های برتر در شرایط خبری مشابه
-import os
-import sys
-import json
-import csv
+"""
+golden.py – ماژول ترکیب طلایی (Golden)
+شناسایی بهترین استراتژی‌ها برای هر شرایط خبری خاص
+"""
+
 import argparse
-import statistics
-import pickle
-import re
-from datetime import datetime, timedelta
-from collections import defaultdict
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 
-# ================================ ثابت‌ها ================================
-INDICATORS = ['CPI m/m', 'Core CPI m/m', 'PPI m/m', 'Core PPI m/m', 'FOMC', 'CPI y/y']
-THRESHOLD = 0.1
-PROFIT_THRESHOLD = 80.0   # درصد سوددهی لازم برای معرفی استراتژی
+import numpy as np
+import pandas as pd
 
-# ================================ توابع کمکی ================================
-def extract_start_date_from_period(period_str):
-    match = re.search(r'(\d{4}-\d{2}-\d{2})_', period_str)
-    return match.group(1) if match else None
-
-def extract_end_date_from_period(period_str):
-    match = re.search(r'_(\d{4}-\d{2}-\d{2})$', period_str)
-    return match.group(1) if match else None
-
-def find_events_in_range(events, start_date_str, end_date_str):
+try:
+    import pyarrow  # noqa: F401
+    _PARQUET_AVAILABLE = True
+except ImportError:
     try:
-        start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        end = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-    except:
-        return []
-    return [ev for ev in events if start <= ev["date"] <= end]
+        import fastparquet  # noqa: F401
+        _PARQUET_AVAILABLE = True
+    except ImportError:
+        _PARQUET_AVAILABLE = False
 
-def load_news_data(pickle_path):
-    with open(pickle_path, "rb") as f:
-        return pickle.load(f)
 
-def load_all_strategies_results(results_base_dir, returns_cache_json):
-    """
-    بارگذاری همه فایل‌های نتایج از تمام استراتژی‌ها (گروه‌های 1 و 2)
-    و ترکیب با کش بازده.
-    خروجی: لیستی از دیکشنری‌ها شامل اطلاعات هر فایل (folder_name, group, period_name, special_return, real_return)
-    """
-    all_results = []
-    returns_cache = {}
-    if os.path.exists(returns_cache_json):
-        with open(returns_cache_json, "r", encoding="utf-8") as f:
-            returns_cache = json.load(f)
-    for group in ["1", "2"]:
-        group_path = os.path.join(results_base_dir, group)
-        if not os.path.isdir(group_path):
-            continue
-        for folder in os.listdir(group_path):
-            folder_path = os.path.join(group_path, folder)
-            if not os.path.isdir(folder_path):
-                continue
-            for fname in os.listdir(folder_path):
-                if not fname.endswith(".json") or fname == "1.json":
-                    continue
-                file_path = os.path.join(folder_path, fname)
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    info = data.get("اطلاعات_فایل", {}) or {}
-                    period_name = info.get("نام_فایل", "")
-                    # بازده از کش
-                    key = f"{group}_{folder}_{fname}"
-                    if key in returns_cache:
-                        special_ret = returns_cache[key].get("special", 0)
-                        real_ret = returns_cache[key].get("real", 0)
-                    else:
-                        # fallback: از خود فایل
-                        real_ret = float(info.get("بازدهی_کل", "0%").replace("%", ""))
-                        special_ret = real_ret
-                    all_results.append({
-                        "folder_name": folder,
-                        "group": group,
-                        "file_name": fname,
-                        "period_name": period_name,
-                        "real_return": real_ret,
-                        "special_rounded_return": special_ret,
-                    })
-                except:
-                    continue
-    return all_results
+def _save(df: pd.DataFrame, path: Path) -> Path:
+    """ذخیره DataFrame به Parquet یا CSV در صورت عدم وجود engine."""
+    if _PARQUET_AVAILABLE:
+        df.to_parquet(path, index=False)
+        return path
+    csv_path = path.with_suffix(".csv")
+    df.to_csv(csv_path, index=False)
+    log.warning(f"pyarrow/fastparquet موجود نیست – فایل به‌صورت CSV ذخیره شد: {csv_path}")
+    return csv_path
 
-def compute_fingerprint(events, indicators, thr):
-    """
-    محاسبه اثر انگشت خبری بر اساس لیست رویدادها.
-    خروجی رشته‌ای مثل "CPI m/m:Bad | Core CPI m/m:Neutral"
-    """
-    parts = []
-    for ind in indicators:
-        evs = [e for e in events if e["indicator"] == ind]
-        if not evs:
-            continue
-        diffs = [e["actual"] - e["forecast"] for e in evs if e["actual"] is not None and e["forecast"] is not None]
-        if not diffs:
-            continue
-        avg_diff = statistics.mean(diffs)
-        if avg_diff > thr:
-            status = 'Bad'
-        elif avg_diff < -thr:
-            status = 'Good'
+
+def _load(path: Path) -> pd.DataFrame:
+    """بارگذاری Parquet یا CSV."""
+    if path.exists():
+        return pd.read_parquet(path) if _PARQUET_AVAILABLE else pd.read_csv(path)
+    csv_path = path.with_suffix(".csv")
+    if csv_path.exists():
+        return pd.read_csv(csv_path)
+    raise FileNotFoundError(path)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ثابت‌ها
+# ---------------------------------------------------------------------------
+DEFAULT_VERSION_ID = "v1.0.0"
+DEFAULT_ALPHA = 0.1
+BTC_MIN_SAMPLES = 10
+ALT_MIN_SAMPLES = 5
+BTC_DATA_YEARS = 4  # آستانه برای تشخیص BTC/Altcoin
+
+
+# ---------------------------------------------------------------------------
+# گام ۱: بارگذاری داده‌ها
+# ---------------------------------------------------------------------------
+
+def load_signatures(signatures_dir: str) -> pd.DataFrame:
+    """بارگذاری تمام فایل‌های .jsonl از دایرکتوری مشخص."""
+    path = Path(signatures_dir)
+    files = list(path.glob("*.jsonl"))
+    if not files:
+        raise FileNotFoundError(f"هیچ فایل .jsonl در {signatures_dir} یافت نشد.")
+
+    frames = []
+    for f in files:
+        log.info(f"بارگذاری: {f.name}")
+        df = pd.read_json(f, lines=True)
+        frames.append(df)
+
+    data = pd.concat(frames, ignore_index=True)
+    log.info(f"تعداد کل رکوردها: {len(data):,}")
+    return data
+
+
+def load_strategies(strategies_json: str) -> dict:
+    """بارگذاری metadata استراتژی‌ها."""
+    with open(strategies_json, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def load_version_schema(version_schema: str | None) -> str:
+    """استخراج version_id از فایل schema یا مقدار پیش‌فرض."""
+    if not version_schema or not Path(version_schema).exists():
+        return DEFAULT_VERSION_ID
+    with open(version_schema, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    return schema.get("version_id", DEFAULT_VERSION_ID)
+
+
+def load_correlations(output_dir: str) -> pd.DataFrame | None:
+    """بارگذاری correlations.parquet در صورت وجود (گام ۷)."""
+    corr_path = Path(output_dir) / "correlations.parquet"
+    try:
+        df = _load(corr_path)
+        log.info("correlations یافت شد – بازخورد Correlation اعمال می‌شود.")
+        return df
+    except FileNotFoundError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# ساخت امضای خبری
+# ---------------------------------------------------------------------------
+
+def build_signature(row: pd.Series) -> str:
+    """ساخت امضای خبری از فیلدهای یک رکورد."""
+    regime = row.get("market_regime") or "unknown"
+    coin = row.get("coin_composition", "")
+    indicator = row.get("dominant_indicator", "")
+    position = row.get("position", "")
+    distance = row.get("distance_days", "")
+    model = row.get("model", "")
+    return f"{coin}_{indicator}_{position}_{distance}_{model}_{regime}"
+
+
+# ---------------------------------------------------------------------------
+# گام ۲: محاسبه معیارهای خام
+# ---------------------------------------------------------------------------
+
+def consecutive_losses(returns: list[float]) -> int:
+    """محاسبه حداکثر تعداد ضررهای متوالی."""
+    max_consec = 0
+    current = 0
+    for r in returns:
+        if r <= 0:
+            current += 1
+            max_consec = max(max_consec, current)
         else:
-            status = 'Neutral'
-        parts.append(f"{ind}:{status}")
-    return " | ".join(sorted(parts)) if parts else "بدون خبر معنادار"
+            current = 0
+    return max_consec
 
-def compute_monthly_records_from_all_results(all_results):
-    """
-    گروه‌بندی فایل‌ها بر اساس استراتژی و سپس ماه (سه فایل در ماه).
-    خروجی: دیکشنری month -> list of records (هر record شامل folder_name, group, total_return, files, start_date, end_date)
-    """
-    # گروه‌بندی بر اساس استراتژی (folder, group)
-    strategy_map = defaultdict(list)
-    for r in all_results:
-        key = (r["folder_name"], r["group"])
-        strategy_map[key].append(r)
 
-    monthly_records = []  # هر عنصر: {year_month, strategy_name, group, total_return, files, start_date, end_date}
-    for (folder, group), files in strategy_map.items():
-        # گروه‌بندی فایل‌های این استراتژی بر اساس ماه شروع
-        monthly_files = defaultdict(list)
-        for f in files:
-            start = extract_start_date_from_period(f["period_name"])
-            if not start:
-                continue
-            ym = start[:7]
-            monthly_files[ym].append(f)
-        for ym, flist in monthly_files.items():
-            # انتخاب سه فایل با شروع‌های 1، 11، 21
-            selected = []
-            for day in [1, 11, 21]:
-                target = f"{ym}-{day:02d}"
-                found = next((f for f in flist if extract_start_date_from_period(f["period_name"]) == target), None)
-                if found:
-                    selected.append(found)
-            if len(selected) != 3:
-                continue
-            total_return = sum(f["special_rounded_return"] for f in selected) if group == "1" else sum(f["real_return"] for f in selected)
-            start_dates = [extract_start_date_from_period(f["period_name"]) for f in selected]
-            end_dates = [extract_end_date_from_period(f["period_name"]) for f in selected]
-            monthly_records.append({
-                "year_month": ym,
-                "strategy_name": folder,
-                "group": group,
-                "total_return": total_return,
-                "files": [f["file_name"] for f in selected],
-                "start_date": min(start_dates),
-                "end_date": max(end_dates),
-            })
-    return monthly_records
+def compute_raw_metrics(group: pd.DataFrame) -> dict:
+    """محاسبه معیارهای خام برای یک گروه (استراتژی, امضا)."""
+    returns = group["total_return"].tolist()
+    n = len(returns)
 
-def compute_file_based_records(all_results):
-    """
-    برای تحلیل 10 روزه، مستقیماً فایل‌ها را برمی‌گرداند (هر فایل یک بازه 10 روزه)
-    """
-    records = []
-    for r in all_results:
-        start = extract_start_date_from_period(r["period_name"])
-        end = extract_end_date_from_period(r["period_name"])
-        if not start or not end:
-            continue
-        ret = r["special_rounded_return"] if r["group"] == "1" else r["real_return"]
-        records.append({
-            "strategy_name": r["folder_name"],
-            "group": r["group"],
-            "file_name": r["file_name"],
-            "return": ret,
-            "start_date": start,
-            "end_date": end,
-        })
-    return records
+    positive = [r for r in returns if r > 0]
+    negative = [r for r in returns if r <= 0]
 
-# ================================ تحلیل طلایی (ماهانه) ================================
-def golden_monthly_analysis(monthly_records, news_events, output_path):
-    """
-    برای هر ماه، اثر انگشت خبری را محاسبه کرده و سپس استراتژی‌هایی که در گذشته
-    در شرایط مشابه ≥ PROFIT_THRESHOLD سودده بوده‌اند را معرفی می‌کند.
-    """
-    # گروه‌بندی ماه‌ها بر اساس year_month
-    months_dict = defaultdict(list)
-    for rec in monthly_records:
-        months_dict[rec["year_month"]].append(rec)
+    win_rate = (len(positive) / n * 100) if n > 0 else 0.0
 
-    output_rows = []
-    for ym, recs in months_dict.items():
-        # از اولین رکورد برای استخراج بازه (همه رکوردهای همان ماه بازه یکسان دارند)
-        sample = recs[0]
-        month_events = find_events_in_range(news_events, sample["start_date"], sample["end_date"])
-        month_fingerprint = compute_fingerprint(month_events, INDICATORS, THRESHOLD)
+    sum_neg = abs(sum(negative))
+    if sum_neg == 0:
+        profit_factor = None  # all-win – بعداً جایگزین می‌شود
+    else:
+        profit_factor = sum(positive) / sum_neg if positive else 0.0
 
-        # برای هر استراتژی در این ماه، تاریخچه را بررسی می‌کنیم
-        best_strategies = []
-        for rec in recs:
-            strat_name = rec["strategy_name"]
-            group = rec["group"]
-            # پیدا کردن تمام ماه‌های تاریخی (غیر از ماه جاری) با اثر انگشت مشابه
-            matching_records = []
-            for other_ym, other_recs in months_dict.items():
-                if other_ym == ym:
-                    continue
-                for ori in other_recs:
-                    if ori["strategy_name"] != strat_name:
-                        continue
-                    other_events = find_events_in_range(news_events, ori["start_date"], ori["end_date"])
-                    other_fp = compute_fingerprint(other_events, INDICATORS, THRESHOLD)
-                    if other_fp == month_fingerprint:
-                        matching_records.append(ori)
-            if matching_records:
-                profit_count = sum(1 for mr in matching_records if mr["total_return"] > 0)
-                profit_pct = (profit_count / len(matching_records)) * 100
-                if profit_pct >= PROFIT_THRESHOLD:
-                    best_strategies.append({
-                        "name": f"{strat_name} (گروه {group})",
-                        "profit_pct": profit_pct,
-                        "samples": len(matching_records),
-                        "return_this_month": rec["total_return"]
-                    })
-        if best_strategies:
-            best_strategies.sort(key=lambda x: (-x["profit_pct"], -x["samples"]))
-            strategies_str = " | ".join([f"{s['name']} ({s['profit_pct']:.0f}%, n={s['samples']})" for s in best_strategies])
-            output_rows.append({
-                "ماه": ym,
-                "اثر_انگشت_خبری": month_fingerprint,
-                "استراتژی‌های_برتر": strategies_str,
-                "تعداد": len(best_strategies)
-            })
+    max_loss_ratio = consecutive_losses(returns) / n if n > 0 else 0.0
+
+    avg_daily_return = group["avg_daily_return"].mean() if "avg_daily_return" in group.columns else 0.0
+
+    return {
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "max_loss_ratio": max_loss_ratio,
+        "avg_daily_return": avg_daily_return,
+        "sample_count": n,
+    }
+
+
+def resolve_all_win_pf(raw_df: pd.DataFrame) -> pd.DataFrame:
+    """جایگزینی profit_factor=None (all-win) با max_valid_PF * 1.5."""
+    valid_pf = raw_df.loc[raw_df["profit_factor"].notna(), "profit_factor"]
+    max_valid_pf = valid_pf.max() if not valid_pf.empty else 1.0
+    replacement = max_valid_pf * 1.5
+    raw_df["profit_factor"] = raw_df["profit_factor"].fillna(replacement)
+    return raw_df
+
+
+# ---------------------------------------------------------------------------
+# گام ۳: فیلتر کم‌تکرار
+# ---------------------------------------------------------------------------
+
+def is_btc_like(coin: str) -> bool:
+    """تشخیص اینکه ارز به اندازه کافی تاریخچه دارد یا خیر."""
+    # فرض: BTCUSDT و هر ارزی که در نام آن "BTC" باشد به‌عنوان BTC-like
+    return "BTC" in coin.upper()
+
+
+def filter_low_sample(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """حذف گروه‌های با تکرار کم."""
+    initial = len(raw_df)
+
+    def min_samples(coin: str) -> int:
+        return BTC_MIN_SAMPLES if is_btc_like(coin) else ALT_MIN_SAMPLES
+
+    mask = raw_df.apply(lambda r: r["sample_count"] >= min_samples(r["coin_composition"]), axis=1)
+    filtered = raw_df[mask].copy()
+    removed = initial - len(filtered)
+    return filtered, removed
+
+
+# ---------------------------------------------------------------------------
+# گام ۴: نرمال‌سازی با Percentile Rank
+# ---------------------------------------------------------------------------
+
+def percentile_rank(series: pd.Series) -> pd.Series:
+    """محاسبه Percentile Rank برای یک سری."""
+    ranks = series.rank(method="average", pct=True) * 100
+    return ranks
+
+
+def normalize_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """نرمال‌سازی معیارها به تفکیک coin_composition."""
+    df = df.copy()
+
+    for metric in ["win_rate", "profit_factor", "avg_daily_return"]:
+        norm_col = f"{metric}_norm"
+        df[norm_col] = df.groupby("coin_composition")[metric].transform(percentile_rank)
+
+    # max_loss_ratio: هر چه کمتر، بهتر – قبل از نرمال‌سازی معکوس می‌شود
+    df["max_loss_inv"] = 100 - (df["max_loss_ratio"] * 100)
+    df["max_loss_ratio_norm"] = df.groupby("coin_composition")["max_loss_inv"].transform(percentile_rank)
+    df.drop(columns=["max_loss_inv"], inplace=True)
+
+    return df
+
+
+# ---------------------------------------------------------------------------
+# گام ۵: محاسبه امتیاز نهایی
+# ---------------------------------------------------------------------------
+
+def compute_score(row: pd.Series) -> float:
+    """محاسبه امتیاز نهایی با وزن‌های ثابت."""
+    score = (
+        0.30 * row["win_rate_norm"]
+        + 0.30 * row["profit_factor_norm"]
+        + 0.20 * (100 - row["max_loss_ratio_norm"])
+        + 0.20 * row["avg_daily_return_norm"]
+    )
+    return round(float(score), 4)
+
+
+# ---------------------------------------------------------------------------
+# گام ۶: وزن‌دهی استراتژی‌های چند-کوینه
+# ---------------------------------------------------------------------------
+
+def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    اگر یک استراتژی روی بیش از یک کوین اجرا شده باشد،
+    امتیاز نهایی آن میانگین وزنی امتیازهای هر کوین است.
+    وزن = sample_count نسبی.
+    """
+    # گروه‌بندی بر اساس (strategy_id, signature بدون coin)
+    # امضا شامل coin است، بنابراین باید signature پایه (بدون coin) بسازیم
+    # یا از (strategy_id + indicator + position + distance + model + regime) استفاده کنیم
+    # برای سادگی، از همان امضا استفاده می‌کنیم و فقط گروه‌های با چند کوین را شناسایی می‌کنیم
+
+    # کلید گروه‌بندی بدون coin_composition
+    def base_sig(sig: str, coin: str) -> str:
+        return sig.replace(f"{coin}_", "", 1)
+
+    scores_df = scores_df.copy()
+    scores_df["base_signature"] = scores_df.apply(
+        lambda r: base_sig(r["signature"], r["coin_composition"]), axis=1
+    )
+
+    result_rows = []
+    grouped = scores_df.groupby(["strategy_id", "base_signature"])
+
+    for (strat_id, base_sig_val), grp in grouped:
+        if len(grp) == 1:
+            # تک کوین – امتیاز بدون تغییر
+            row = grp.iloc[0].to_dict()
+            result_rows.append(row)
         else:
-            output_rows.append({
-                "ماه": ym,
-                "اثر_انگشت_خبری": month_fingerprint,
-                "استراتژی‌های_برتر": "-",
-                "تعداد": 0
-            })
-    # نوشتن CSV
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["ماه", "اثر_انگشت_خبری", "استراتژی‌های_برتر", "تعداد"])
-        writer.writeheader()
-        writer.writerows(output_rows)
-    print(f"✅ تحلیل ماهانه ترکیب طلایی در {output_path} ذخیره شد.")
+            # چند کوین – میانگین وزنی
+            total_samples = grp["sample_count"].sum()
+            weights = grp["sample_count"] / total_samples
+            final_score = (grp["score"] * weights).sum()
 
-# ================================ تحلیل طلایی (۱۰ روزه) ================================
-def golden_daily_analysis(file_records, news_events, output_path):
-    """
-    مشابه ماهانه ولی بر اساس فایل‌ها (بازه ۱۰ روزه)
-    """
-    output_rows = []
-    # برای هر فایل، اثر انگشت خبری و بازده را محاسبه می‌کنیم
-    file_info = []
-    for rec in file_records:
-        start = rec["start_date"]
-        end = rec["end_date"]
-        events = find_events_in_range(news_events, start, end)
-        fingerprint = compute_fingerprint(events, INDICATORS, THRESHOLD)
-        file_info.append({
-            "strategy_name": rec["strategy_name"],
-            "group": rec["group"],
-            "return": rec["return"],
-            "fingerprint": fingerprint,
-            "file_name": rec["file_name"],
-        })
-    # گروه‌بندی بر اساس اثر انگشت
-    fp_map = defaultdict(list)
-    for fi in file_info:
-        fp_map[fi["fingerprint"]].append(fi)
-    # برای هر فایل (یا هر اثر انگشت) استراتژی‌های برتر را بیاب
-    processed_files = set()
-    for fi in file_info:
-        key = (fi["strategy_name"], fi["group"], fi["fingerprint"])
-        if key in processed_files:
-            continue
-        processed_files.add(key)
-        # پیدا کردن سایر فایل‌ها با همان اثر انگشت (غیر از فایل جاری)
-        same_fp = [f for f in fp_map.get(fi["fingerprint"], []) if not (f["strategy_name"] == fi["strategy_name"] and f["group"] == fi["group"])]
-        if not same_fp:
-            continue
-        # محاسبه درصد سوددهی برای هر استراتژی در این شرایط خبری
-        strat_perf = defaultdict(lambda: {"profit": 0, "total": 0})
-        for f in same_fp:
-            key2 = (f["strategy_name"], f["group"])
-            strat_perf[key2]["total"] += 1
-            if f["return"] > 0:
-                strat_perf[key2]["profit"] += 1
-        best = []
-        for (sname, sgroup), cnt in strat_perf.items():
-            pct = (cnt["profit"] / cnt["total"]) * 100
-            if pct >= PROFIT_THRESHOLD:
-                best.append(f"{sname} (گروه {sgroup}) : {pct:.0f}% (n={cnt['total']})")
-        if best:
-            output_rows.append({
-                "فایل": f"{fi['strategy_name']}/{fi['file_name']}",
-                "اثر_انگشت_خبری": fi["fingerprint"],
-                "استراتژی‌های_برتر_در_این_شرایط": " | ".join(best)
-            })
-    # نوشتن CSV
-    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["فایل", "اثر_انگشت_خبری", "استراتژی‌های_برتر_در_این_شرایط"])
-        writer.writeheader()
-        writer.writerows(output_rows)
-    print(f"✅ تحلیل ۱۰ روزه ترکیب طلایی در {output_path} ذخیره شد.")
+            # نمایند: اولین ردیف با امتیاز به‌روزشده
+            representative = grp.iloc[0].to_dict()
+            representative["score"] = round(float(final_score), 4)
+            representative["coin_composition"] = "+".join(grp["coin_composition"].tolist())
+            representative["signature"] = base_sig_val
+            result_rows.append(representative)
 
-# ================================ اصلی ================================
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--results-base", required=True, help="مسیر پایه نتایج بکتست (شامل 1 و 2)")
-    parser.add_argument("--returns-cache", required=True, help="مسیر کش بازده (JSON)")
-    parser.add_argument("--news-pickle", required=True, help="مسیر فایل pickle اخبار")
-    parser.add_argument("--output-dir", required=True, help="پوشه خروجی نهایی")
-    parser.add_argument("--mode", choices=["monthly", "daily", "both"], default="both", help="نوع تحلیل")
-    args = parser.parse_args()
+    return pd.DataFrame(result_rows)
 
-    print("🔄 بارگذاری اخبار...")
-    news = load_news_data(args.news_pickle)
-    print("🔄 بارگذاری همه نتایج استراتژی‌ها...")
-    all_results = load_all_strategies_results(args.results_base, args.returns_cache)
-    print(f"تعداد کل فایل‌ها: {len(all_results)}")
 
-    if args.mode in ["monthly", "both"]:
-        monthly_recs = compute_monthly_records_from_all_results(all_results)
-        print(f"تعداد ماه‌های قابل تحلیل: {len(monthly_recs)}")
-        out_monthly = os.path.join(args.output_dir, "ترکیب_طلایی_ماهانه.csv")
-        golden_monthly_analysis(monthly_recs, news, out_monthly)
+# ---------------------------------------------------------------------------
+# گام ۷: بازخورد از Correlation (اختیاری)
+# ---------------------------------------------------------------------------
 
-    if args.mode in ["daily", "both"]:
-        file_recs = compute_file_based_records(all_results)
-        print(f"تعداد فایل‌های 10 روزه: {len(file_recs)}")
-        out_daily = os.path.join(args.output_dir, "ترکیب_طلایی_10روزه.csv")
-        golden_daily_analysis(file_recs, news, out_daily)
+def apply_correlation_feedback(
+    scores_df: pd.DataFrame,
+    correlations_df: pd.DataFrame,
+    alpha: float,
+) -> pd.DataFrame:
+    """به‌روزرسانی امتیاز با استفاده از میانگین همبستگی."""
+    # میانگین |r| برای هر (strategy_id, coin_composition)
+    corr_avg = (
+        correlations_df.groupby(["strategy_id", "coin_composition"])["r"]
+        .apply(lambda x: x.abs().mean())
+        .reset_index()
+        .rename(columns={"r": "avg_corr"})
+    )
 
-    print("✅ ماژول golden پایان یافت.")
+    scores_df = scores_df.merge(corr_avg, on=["strategy_id", "coin_composition"], how="left")
+    scores_df["avg_corr"] = scores_df["avg_corr"].fillna(0.0)
+    scores_df["score"] = (scores_df["score"] + alpha * scores_df["avg_corr"]).clip(0, 100).round(4)
+    scores_df.drop(columns=["avg_corr"], inplace=True)
+    return scores_df
+
+
+# ---------------------------------------------------------------------------
+# پردازش اصلی
+# ---------------------------------------------------------------------------
+
+def run(
+    signatures_dir: str,
+    strategies_json: str,
+    version_schema: str | None,
+    ohlc_dir: str | None,
+    output_dir: str,
+    alpha: float,
+) -> None:
+    now_utc = datetime.now(timezone.utc)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # ── بارگذاری ──────────────────────────────────────────────────────────
+    log.info("بارگذاری signatures...")
+    sig_df = load_signatures(signatures_dir)
+
+    log.info("بارگذاری strategies_metadata...")
+    _ = load_strategies(strategies_json)  # برای اعتبارسنجی / استفاده‌های آینده
+
+    version_id = load_version_schema(version_schema)
+    log.info(f"version_id: {version_id}")
+
+    # ── ساخت امضا ─────────────────────────────────────────────────────────
+    log.info("ساخت امضاهای خبری...")
+    sig_df["signature"] = sig_df.apply(build_signature, axis=1)
+
+    # ── گروه‌بندی و محاسبه معیارهای خام ──────────────────────────────────
+    log.info("محاسبه معیارهای خام...")
+    raw_records = []
+    groups = sig_df.groupby(["strategy_folder", "coin_composition", "signature"])
+    total_groups = groups.ngroups
+    log.info(f"تعداد کل گروه‌ها: {total_groups:,}")
+
+    for (strategy_id, coin, signature), group_df in groups:
+        metrics = compute_raw_metrics(group_df)
+        raw_records.append(
+            {
+                "strategy_id": strategy_id,
+                "coin_composition": coin,
+                "signature": signature,
+                **metrics,
+                "created_at": now_utc,
+            }
+        )
+
+    raw_df = pd.DataFrame(raw_records)
+
+    # ── مدیریت all-win ────────────────────────────────────────────────────
+    raw_df = resolve_all_win_pf(raw_df)
+
+    # ── ذخیره golden_raw.parquet ──────────────────────────────────────────
+    raw_out = _save(raw_df, output_path / "golden_raw.parquet")
+    log.info(f"golden_raw ذخیره شد: {raw_out}")
+
+    # ── فیلتر کم‌تکرار ────────────────────────────────────────────────────
+    log.info("فیلتر گروه‌های کم‌تکرار...")
+    filtered_df, removed_count = filter_low_sample(raw_df)
+    log.info(f"گروه‌های حذف‌شده (کم‌تکرار): {removed_count:,} از {len(raw_df):,}")
+    log.info(f"گروه‌های باقیمانده: {len(filtered_df):,}")
+
+    if filtered_df.empty:
+        log.warning("هیچ گروه معتبری پس از فیلتر باقی نماند. خروج.")
+        return
+
+    # ── نرمال‌سازی ────────────────────────────────────────────────────────
+    log.info("نرمال‌سازی معیارها با Percentile Rank...")
+    norm_df = normalize_metrics(filtered_df)
+
+    # ── امتیاز نهایی ──────────────────────────────────────────────────────
+    log.info("محاسبه امتیاز نهایی...")
+    norm_df["score"] = norm_df.apply(compute_score, axis=1)
+
+    # ── وزن‌دهی چند-کوینه ─────────────────────────────────────────────────
+    log.info("وزن‌دهی استراتژی‌های چند-کوینه...")
+    scores_df = weighted_multi_coin_score(norm_df)
+
+    # ── بازخورد Correlation (اختیاری) ────────────────────────────────────
+    corr_df = load_correlations(output_dir)
+    if corr_df is not None:
+        log.info("اعمال بازخورد Correlation...")
+        scores_df = apply_correlation_feedback(scores_df, corr_df, alpha)
+
+    # ── آماده‌سازی golden_scores.parquet ──────────────────────────────────
+    scores_out_df = scores_df[
+        ["strategy_id", "coin_composition", "signature", "score"]
+    ].copy()
+    scores_out_df["version_id"] = version_id
+    scores_out_df["calculated_at"] = now_utc
+
+    scores_out = _save(scores_out_df, output_path / "golden_scores.parquet")
+    log.info(f"golden_scores ذخیره شد: {scores_out}")
+
+    # ── گزارش نهایی ───────────────────────────────────────────────────────
+    log.info("=" * 60)
+    log.info(f"تعداد گروه‌های پردازش‌شده:  {len(filtered_df):,}")
+    log.info(f"تعداد گروه‌های حذف‌شده:     {removed_count:,}")
+    log.info(f"تعداد ردیف‌های نهایی امتیاز: {len(scores_out_df):,}")
+    log.info(f"خروجی‌ها در: {output_path.resolve()}")
+    log.info("=" * 60)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="ماژول Golden – امتیازدهی استراتژی‌ها بر اساس شرایط خبری"
+    )
+    parser.add_argument("--signatures-dir", required=True, help="مسیر پوشه فایل‌های .jsonl signatures")
+    parser.add_argument("--strategies-json", required=True, help="مسیر فایل strategies_metadata.json")
+    parser.add_argument("--version-schema", default=None, help="(اختیاری) مسیر فایل version_schema.json")
+    parser.add_argument("--ohlc-dir", default=None, help="(اختیاری) مسیر پوشه داده‌های OHLC")
+    parser.add_argument("--output-dir", required=True, help="مسیر پوشه خروجی")
+    parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA, help="ضریب بازخورد Correlation (پیش‌فرض: 0.1)")
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    run(
+        signatures_dir=args.signatures_dir,
+        strategies_json=args.strategies_json,
+        version_schema=args.version_schema,
+        ohlc_dir=args.ohlc_dir,
+        output_dir=args.output_dir,
+        alpha=args.alpha,
+    )
