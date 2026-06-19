@@ -8,7 +8,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: analysis-and-aggregation
+  group: loop-runner
   cancel-in-progress: false
 
 jobs:
@@ -266,7 +266,6 @@ jobs:
                 TRADE_FILE="$EXTRACTED_DIR/trades_summary.json"
                 if [ -f "$TRADE_FILE" ]; then
                   echo "      ⏳ خواندن معاملات..."
-                  # اضافه کردن فیلد symbol از نام پوشه (تبدیل به آرایه)
                   COIN_NAME=$(basename "$FOLDER" | cut -d'-' -f1)
                   jq -c --arg sym "$COIN_NAME" '[.trades[] | . + {symbol: $sym}]' "$TRADE_FILE" > "/tmp/agg_${STRAT}/current_trades.json" 2>/dev/null
                   if [ ! -s "/tmp/agg_${STRAT}/current_trades.json" ]; then
@@ -319,38 +318,30 @@ jobs:
                 META_FILE="/tmp/third_repo/strategies/${STRAT}/1.json"
                 META_DONE_FLAG="/tmp/third_repo/strategies/${STRAT}/.metadata_generated"
 
-                # --- بررسی پرچم skip: اگر قبلاً متادیتا ساخته شده، نیازی به بازسازی نیست ---
                 if [ -f "$META_DONE_FLAG" ] && [ -f "$META_FILE" ]; then
                   echo "   ⏭️ پرچم skip یافت شد → متادیتا قبلاً برای $STRAT ساخته شده. رد می‌شود."
                   cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
                   METADATA_SUCCESS=true
                 fi
 
-                # --- اگر فایل 1.json موجود است ولی پرچم نیست → استفاده و ثبت پرچم ---
                 if [ "$METADATA_SUCCESS" = false ] && [ -f "$META_FILE" ]; then
                   echo "   ✅ فایل 1.json از مخزن محلی یافت شد."
                   cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
                   METADATA_SUCCESS=true
-                  # ثبت پرچم skip برای دفعات بعدی
                   touch "$META_DONE_FLAG"
                   echo "   🏁 پرچم skip برای $STRAT ثبت شد."
                 fi
 
-                # --- اگر نه فایل وجود دارد نه پرچم → ساخت از روی فایل .js (منطق generate_metadata) ---
                 if [ "$METADATA_SUCCESS" = false ]; then
                   echo "   ⚠️ فایل 1.json یافت نشد. در حال ساخت خودکار از روی فایل استراتژی..."
-
-                  # ابتدا پوشه‌های موجود را اسکن می‌کنیم (مثل generate_metadata برای strat_dir)
                   STRAT_DIR="/tmp/third_repo/strategies/${STRAT}/"
                   mkdir -p "$STRAT_DIR"
-
                   JS_FILE="/tmp/third_repo/strategies/${STRAT}.js"
                   if [ ! -f "$JS_FILE" ]; then
                     echo "   ❌ فایل استراتژی ${STRAT}.js در مخزن سوم یافت نشد. این استراتژی رد می‌شود."
                     rm -rf "/tmp/agg_${STRAT}"
                     continue
                   fi
-
                   echo "   🔧 ساخت 1.json از روی ${JS_FILE}..."
                   node -e "
                     const fs = require('fs');
@@ -375,7 +366,6 @@ jobs:
                     echo "   ✅ فایل 1.json با موفقیت ساخته شد."
                     cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
                     METADATA_SUCCESS=true
-                    # ثبت پرچم skip برای دفعات بعدی
                     touch "$META_DONE_FLAG"
                     echo "   🏁 پرچم skip برای $STRAT ثبت شد."
                   else
@@ -385,12 +375,10 @@ jobs:
                   fi
                 fi
 
-                # استخراج فیلدهای مورد نیاز
                 MOVE_PERCENTS=$(jq -c '.move_percents // []' "/tmp/agg_${STRAT}/1.json")
                 STOP_LOSS=$(jq '.stop_loss_initial // -2.0' "/tmp/agg_${STRAT}/1.json")
                 MAX_MOVE=$(jq '.max_move_percent // (if .move_percents then .move_percents[-1] else null end)' "/tmp/agg_${STRAT}/1.json")
 
-                # ساخت فایل نهایی با --slurpfile
                 jq -n \
                   --argjson move_percents "$MOVE_PERCENTS" \
                   --argjson stop_loss "$STOP_LOSS" \
@@ -527,7 +515,6 @@ jobs:
             fi
           } >> logs/run.log 2>&1
 
-          # ========== دریافت فایل با retry و cache buster ==========
           echo "🔄 دریافت all_combinations.json با retry..." | tee -a logs/run.log
           for attempt in 1 2 3 4 5; do
             TIMESTAMP=$(date +%s%N)
@@ -579,12 +566,9 @@ jobs:
           {
             echo "🔄 فراخوانی analysis.yml (حالت fixed_batch)..."
             for attempt in 1 2 3; do
+              # حذف پارامترهای اضافی - فقط analysis_module ارسال می‌شود
               if gh workflow run analysis.yml --ref main \
-                -f analysis_module="fixed_batch" \
-                -f analysis_strategy="dummy" \
-                -f analysis_coin="dummy" \
-                -f analysis_interval="dummy" \
-                -f analysis_model="dummy" 2>&1; then
+                -f analysis_module="fixed_batch" 2>&1; then
                 echo "✅ فراخوانی analysis.yml موفق بود (تلاش $attempt)."
                 break
               else
@@ -605,7 +589,6 @@ jobs:
 
   # ============================================================
   # Job 5: اجرای golden (پس از اتمام کارهای ثابت)
-  # وقفه‌پذیر و ادامه‌پذیر: وضعیت در golden_status.json (مخزن سوم) ذخیره می‌شود
   # ============================================================
   dispatch-golden:
     needs: dispatch-fixed
@@ -637,8 +620,6 @@ jobs:
             if [ "$HTTP_CODE" = "200" ]; then
               STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/golden_status.json" --jq '.content' | base64 -d)
               echo "   📄 وضعیت فعلی golden: $STATUS_CONTENT"
-              # وضعیت با processed_signatures/processed_tasks توسط ماژول golden در analysis.yml خوانده
-              # و برای ادامه از آخرین نقطه توقف استفاده می‌شود.
             else
               echo "   ℹ️ golden_status.json یافت نشد. اجرای golden از ابتدا آغاز می‌شود."
             fi
@@ -722,7 +703,6 @@ jobs:
 
   # ============================================================
   # Job 6: اجرای portfolios (پس از اتمام golden)
-  # وقفه‌پذیر و ادامه‌پذیر: وضعیت در portfolios_status.json (مخزن سوم) ذخیره می‌شود
   # ============================================================
   dispatch-portfolios:
     needs: dispatch-golden
@@ -754,8 +734,6 @@ jobs:
             if [ "$HTTP_CODE" = "200" ]; then
               STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/portfolios_status.json" --jq '.content' | base64 -d)
               echo "   📄 وضعیت فعلی portfolios: $STATUS_CONTENT"
-              # وضعیت با processed_signatures/processed_tasks توسط ماژول portfolios در analysis.yml خوانده
-              # و برای ادامه از آخرین نقطه توقف استفاده می‌شود.
             else
               echo "   ℹ️ portfolios_status.json یافت نشد. اجرای portfolios از ابتدا آغاز می‌شود."
             fi
@@ -839,10 +817,9 @@ jobs:
 
   # ============================================================
   # Job 6.5: اجرای correlation (اختیاری، پس از اتمام portfolios)
-  # وقفه‌پذیر و ادامه‌پذیر: وضعیت در correlation_status.json (مخزن سوم) ذخیره می‌شود
   # ============================================================
   dispatch-correlation:
-    needs: dispatch-portfolios
+    needs: [dispatch-portfolios, prepare-dispatch]   # ✅ اصلاح شد
     if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
     runs-on: ubuntu-latest
     steps:
@@ -871,8 +848,6 @@ jobs:
             if [ "$HTTP_CODE" = "200" ]; then
               STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/correlation_status.json" --jq '.content' | base64 -d)
               echo "   📄 وضعیت فعلی correlation: $STATUS_CONTENT"
-              # وضعیت با processed_signatures/processed_tasks توسط ماژول correlation در analysis.yml خوانده
-              # و برای ادامه از آخرین نقطه توقف استفاده می‌شود.
             else
               echo "   ℹ️ correlation_status.json یافت نشد. اجرای correlation از ابتدا آغاز می‌شود."
             fi
