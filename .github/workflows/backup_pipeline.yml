@@ -70,6 +70,8 @@ jobs:
             "backup_ledger.json"
             "schedule_times.json"
             "integrity_pass.flag"
+            "update_offset.json"
+            "startup_test_sent.flag"
           )
 
           for f in "${META_FILES[@]}"; do
