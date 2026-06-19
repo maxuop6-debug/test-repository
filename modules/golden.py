@@ -45,6 +45,7 @@ def _load(path: Path) -> pd.DataFrame:
         return pd.read_csv(csv_path)
     raise FileNotFoundError(path)
 
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -193,7 +194,6 @@ def resolve_all_win_pf(raw_df: pd.DataFrame) -> pd.DataFrame:
 
 def is_btc_like(coin: str) -> bool:
     """تشخیص اینکه ارز به اندازه کافی تاریخچه دارد یا خیر."""
-    # فرض: BTCUSDT و هر ارزی که در نام آن "BTC" باشد به‌عنوان BTC-like
     return "BTC" in coin.upper()
 
 
@@ -261,12 +261,6 @@ def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
     امتیاز نهایی آن میانگین وزنی امتیازهای هر کوین است.
     وزن = sample_count نسبی.
     """
-    # گروه‌بندی بر اساس (strategy_id, signature بدون coin)
-    # امضا شامل coin است، بنابراین باید signature پایه (بدون coin) بسازیم
-    # یا از (strategy_id + indicator + position + distance + model + regime) استفاده کنیم
-    # برای سادگی، از همان امضا استفاده می‌کنیم و فقط گروه‌های با چند کوین را شناسایی می‌کنیم
-
-    # کلید گروه‌بندی بدون coin_composition
     def base_sig(sig: str, coin: str) -> str:
         return sig.replace(f"{coin}_", "", 1)
 
@@ -280,27 +274,26 @@ def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
 
     for (strat_id, base_sig_val), grp in grouped:
         if len(grp) == 1:
-            # تک کوین – امتیاز بدون تغییر
             row = grp.iloc[0].to_dict()
             result_rows.append(row)
         else:
-            # چند کوین – میانگین وزنی
             total_samples = grp["sample_count"].sum()
             weights = grp["sample_count"] / total_samples
             final_score = (grp["score"] * weights).sum()
 
-            # نمایند: اولین ردیف با امتیاز به‌روزشده
             representative = grp.iloc[0].to_dict()
             representative["score"] = round(float(final_score), 4)
             representative["coin_composition"] = "+".join(grp["coin_composition"].tolist())
             representative["signature"] = base_sig_val
+            # sample_count را به‌عنوان مجموع نمونه‌ها نگه می‌داریم
+            representative["sample_count"] = int(total_samples)
             result_rows.append(representative)
 
     return pd.DataFrame(result_rows)
 
 
 # ---------------------------------------------------------------------------
-# گام ۷: بازخورد از Correlation (اختیاری)
+# گام ۷: بازخورد از Correlation (اختیاری) – باگ‌ها رفع شدند
 # ---------------------------------------------------------------------------
 
 def apply_correlation_feedback(
@@ -308,13 +301,22 @@ def apply_correlation_feedback(
     correlations_df: pd.DataFrame,
     alpha: float,
 ) -> pd.DataFrame:
-    """به‌روزرسانی امتیاز با استفاده از میانگین همبستگی."""
-    # میانگین |r| برای هر (strategy_id, coin_composition)
+    """
+    به‌روزرسانی امتیاز با استفاده از میانگین همبستگی.
+    فقط از رکوردهای سطح 'lag' استفاده می‌شود و ستون 'correlation' به‌کار می‌رود.
+    """
+    # ========== رفع باگ ۱: استفاده از ستون "correlation" به جای "r" ==========
+    # ========== رفع باگ ۲: فقط سطح lag در نظر گرفته شود ==========
+    lag_corr = correlations_df[correlations_df["level"] == "lag"].copy()
+    if lag_corr.empty:
+        log.warning("هیچ رکوردی با level='lag' در correlations.parquet یافت نشد. بازخورد اعمال نمی‌شود.")
+        return scores_df
+
     corr_avg = (
-        correlations_df.groupby(["strategy_id", "coin_composition"])["r"]
+        lag_corr.groupby(["strategy_id", "coin_composition"])["correlation"]
         .apply(lambda x: x.abs().mean())
         .reset_index()
-        .rename(columns={"r": "avg_corr"})
+        .rename(columns={"correlation": "avg_corr"})
     )
 
     scores_df = scores_df.merge(corr_avg, on=["strategy_id", "coin_composition"], how="left")
@@ -434,7 +436,7 @@ def run(
     sig_df = load_signatures(signatures_dir)
 
     log.info("بارگذاری strategies_metadata...")
-    _ = load_strategies(strategies_json)  # برای اعتبارسنجی / استفاده‌های آینده
+    _ = load_strategies(strategies_json)
 
     version_id = load_version_schema(version_schema)
     log.info(f"version_id: {version_id}")
@@ -486,7 +488,6 @@ def run(
     # ── گام ۴: پردازش هر قطعه ────────────────────────────────────────────
     interrupted = False
     for chunk_idx in range(start_chunk, total_chunks):
-        # بررسی interrupt.flag قبل از شروع هر قطعه
         if check_interrupt(interrupt_path):
             log.warning(f"interrupt.flag یافت شد - توقف پردازش قبل از قطعه {chunk_idx}.")
             raw_df_partial = pd.DataFrame(raw_records)
@@ -514,7 +515,6 @@ def run(
 
         processed_signatures.update(chunk_signatures)
 
-        # ذخیره تدریجی خروجی خام + به‌روزرسانی وضعیت پس از هر قطعه
         raw_df_partial = pd.DataFrame(raw_records)
         _save(raw_df_partial, output_path / "golden_raw.parquet")
         save_status(status_path, processed_signatures, chunk_idx, total_chunks, "running", chunk_size)
@@ -522,7 +522,7 @@ def run(
 
     if interrupted:
         log.info("پردازش به دلیل interrupt.flag متوقف شد (خروج graceful با کد ۰).")
-        return  # خروج graceful؛ کد بازگشت فرآیند ۰ خواهد بود
+        return
 
     # ── حذف رکوردهای تکراری احتمالی ناشی از resume‌های قبلی ──────────────
     raw_df = pd.DataFrame(raw_records)
@@ -580,7 +580,7 @@ def run(
 
     # ── آماده‌سازی golden_scores.parquet ──────────────────────────────────
     scores_out_df = scores_df[
-        ["strategy_id", "coin_composition", "signature", "score"]
+        ["strategy_id", "coin_composition", "signature", "score", "sample_count"]
     ].copy()
     scores_out_df["version_id"] = version_id
     scores_out_df["calculated_at"] = now_utc
