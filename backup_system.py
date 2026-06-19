@@ -1166,8 +1166,8 @@ def process_forward_updates() -> None:
     offset = _load_offset()
     pending = _load_pending()
 
-    # ── اولین اجرا: ارسال پیام فیلم/سریال و گذاشتن پرچم ──
-    _send_startup_movie(bot_token, main_chat_id)
+    # ⚠️ _send_startup_movie عمداً اینجا حذف شده است.
+    # ارسال پیام فیلم/سریال فقط بعد از بک‌آپ موفق توسط backup_pipeline انجام می‌شود.
 
     updates = _get_updates(bot_token, offset)
     if not updates:
