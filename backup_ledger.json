@@ -1,0 +1,2302 @@
+{
+  "uploads": [
+    {
+      "path": "data/news/.gitkeep",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.837706"
+    },
+    {
+      "path": "data/news/US CPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.837910"
+    },
+    {
+      "path": "data/news/US CPI y_y _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.838058"
+    },
+    {
+      "path": "data/news/US Core CPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.838417"
+    },
+    {
+      "path": "data/news/US Core PPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.838754"
+    },
+    {
+      "path": "data/news/US PPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.839068"
+    },
+    {
+      "path": "data/news/United States Fomc Minutes _ Historical Dates 1971-2026 Data_ Moneycontrol.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.839295"
+    },
+    {
+      "path": "data/news/news/.gitkeep",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.839540"
+    },
+    {
+      "path": "data/news/news/US CPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.839757"
+    },
+    {
+      "path": "data/news/news/US CPI y_y _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.839939"
+    },
+    {
+      "path": "data/news/news/US Core CPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.840156"
+    },
+    {
+      "path": "data/news/news/US Core PPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.840352"
+    },
+    {
+      "path": "data/news/news/US PPI m_m _ Forex Factory.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.840563"
+    },
+    {
+      "path": "data/news/news/United States Fomc Minutes _ Historical Dates 1971-2026 Data_ Moneycontrol.csv",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.840727"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.840937"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.841107"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.841284"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.841515"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.841753"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.842089"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.842364"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.842584"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.842826"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.843064"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.843292"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2018-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.843524"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.843759"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.844021"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.844274"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.844526"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.844784"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.845057"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.845315"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.845581"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.845876"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.846166"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAVqNbA_Oqu0UUagWjVK2tGx6uP4YAAC7RwAAtH_sFFjPyza7RP0kTwE",
+      "size": 10391176,
+      "timestamp": "2026-06-19T21:10:23.846438"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2019-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.082286"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.082685"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.083040"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.083370"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.083643"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.084041"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.084316"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.084602"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.084909"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.085190"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.085472"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.085763"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2020-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.086079"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.086373"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.086670"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.087005"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.087315"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.087626"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.087970"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.088295"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.088624"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAZqNbBBY0RUtSrMva9wxK3VLAQgfwAC7hwAAtH_sFGKzsrvzJ379DwE",
+      "size": 10426628,
+      "timestamp": "2026-06-19T21:10:26.088976"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.289538"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.290036"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2021-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.290403"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.290759"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.291138"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.291496"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.291977"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.292339"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.292705"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.293103"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.293480"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.293882"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.294270"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.294652"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2022-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.295081"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.295472"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.295891"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.296294"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.296696"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.297126"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.297539"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAdqNbBDc9JsylQ_wGGCNa95GsELUAAC7xwAAtH_sFHEq7UGIIgm3TwE",
+      "size": 10277528,
+      "timestamp": "2026-06-19T21:10:28.297979"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.272000"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.272601"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.273103"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.273582"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2023-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.274085"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.274573"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.275081"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.275675"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.276191"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.276693"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.277221"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.277724"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.278249"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.278764"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.279298"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.279845"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2024-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.280374"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.280925"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.281470"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.282031"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.282571"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAhqNbBFlGud6Vs80XiMtP1NSWIxNgAC8BwAAtH_sFH8MJbdLv0AAbQ8BA",
+      "size": 10062920,
+      "timestamp": "2026-06-19T21:10:30.283138"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.172094"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.172787"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.173390"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.173977"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.174556"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.175150"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2025-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.175725"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2026-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.176332"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2026-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.177025"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2026-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.177612"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2026-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.178216"
+    },
+    {
+      "path": "Test-repo/zips/BTCUSDT-5m-2026-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.178836"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.179429"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.180049"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.180653"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.181275"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.181898"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.182515"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.183153"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.183783"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.184512"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.185173"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAlqNbBHFs7oF4mTA7TcpPhgiBBIWwAC8RwAAtH_sFFMW0dNGlhu_jwE",
+      "size": 10120736,
+      "timestamp": "2026-06-19T21:10:32.185830"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2018-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.166922"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.167734"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.168413"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.169062"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.169685"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.170335"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.171021"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.171652"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.172486"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.173220"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.173917"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.174569"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2019-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.175277"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.175956"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.176606"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.177283"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.177975"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.178646"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.179373"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.180083"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.180756"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.181452"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.182153"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBApqNbBJkoPSSzuXxcb_ryqviGOssQAC8hwAAtH_sFFoTrgsTeVRtzwE",
+      "size": 10099172,
+      "timestamp": "2026-06-19T21:10:34.182891"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2020-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.366004"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.366908"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.367634"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.368367"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.369100"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.369841"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.370571"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.371424"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.372188"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.372950"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.373682"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.374443"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2021-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.375212"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.375994"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.376750"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.377526"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.378308"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.379096"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.379886"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.380658"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.381471"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.382279"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAtqNbBLT5u_rw2gl9No4EmmAAEPCgoAAvMcAALR_7BRSdsMktpyP_E8BA",
+      "size": 10328128,
+      "timestamp": "2026-06-19T21:10:36.383084"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.414588"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2022-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.415609"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.416454"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.417284"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.418132"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.418975"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.419813"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.420747"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.421593"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.422442"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.423314"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.424172"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.425027"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2023-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.425889"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.426728"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.427595"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.428462"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.429339"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.430228"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.431114"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.432003"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.432899"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.433771"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBAxqNbBNb8fEPqO481QT4lKRRgyk5wAC9BwAAtH_sFHLsA8r83uuwTwE",
+      "size": 10287300,
+      "timestamp": "2026-06-19T21:10:38.434668"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.605066"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2024-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.606183"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.607163"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.608130"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.609098"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.610077"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.611146"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.612121"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.613094"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.614085"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.615066"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.616043"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.617032"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2025-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.618026"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2026-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.619015"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2026-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.620013"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2026-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.621015"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2026-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.622029"
+    },
+    {
+      "path": "Test-repo/zips/ETHUSDT-5m-2026-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.623032"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2020-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.624038"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2020-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.625057"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2020-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.626081"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2020-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.627114"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2020-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA1qNbBQbhRFY9THu8a4JR8aRLdNjwAC9RwAAtH_sFFnnrFC-D_8rDwE",
+      "size": 10109540,
+      "timestamp": "2026-06-19T21:10:40.628145"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.524653"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.525894"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.526922"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.527949"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.528984"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.530121"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.531151"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.532183"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.533219"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.534255"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.535299"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2021-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.536346"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.537401"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.538461"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.539520"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.540576"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.541651"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.542728"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.543820"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.544903"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.545983"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.547083"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.548198"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2022-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.549308"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.550429"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.551531"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.552644"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA5qNbBSXioXss3H-_DbfVaxLvAtiwAC9hwAAtH_sFFOatIXqhZTTTwE",
+      "size": 10491532,
+      "timestamp": "2026-06-19T21:10:42.553746"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.886344"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.887721"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.888892"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.890032"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.891169"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.892303"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.893448"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2023-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.894592"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.895734"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.896899"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.898069"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.899227"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.900395"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.901564"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.902750"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.903961"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.905140"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.906322"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.907507"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2024-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.908702"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.909912"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.911125"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.912325"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.913527"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.914852"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.916063"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBA9qNbBUd2__ecUSJUjilu9m2iHQCQAC9xwAAtH_sFH9zwyNodGFkzwE",
+      "size": 10453380,
+      "timestamp": "2026-06-19T21:10:44.917280"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.087921"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.089374"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.090653"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.091967"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2025-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.093254"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2026-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.094523"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2026-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.095826"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2026-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.097107"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2026-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.098407"
+    },
+    {
+      "path": "Test-repo/zips/SOLUSDT-5m-2026-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.099684"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.101004"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.102296"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.103591"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.104921"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.106230"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.107531"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.108861"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2018-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.110175"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.111504"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.112857"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.114184"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.115620"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.116982"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.118325"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.119669"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBBqNbBWXmXRVrWtEvVVWI1UoVt5MgAC-BwAAtH_sFGv5MHtPCLHNTwE",
+      "size": 10175352,
+      "timestamp": "2026-06-19T21:10:47.121051"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.313261"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.314901"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.316251"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2019-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.317592"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.318948"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.320307"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.321657"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.323021"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.324374"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.325735"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.327101"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.328462"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.329857"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.331226"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.332593"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2020-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.334002"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.335375"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.336771"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.338286"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.339688"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.341099"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.342502"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.343927"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.345337"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.346749"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBFqNbBYQzaGEXVk5X4xeUOVmXy_lwAC-RwAAtH_sFH8QMzMmMQPKDwE",
+      "size": 10397504,
+      "timestamp": "2026-06-19T21:10:49.348178"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.080150"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2021-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.081863"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.083362"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.084870"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.086355"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.087859"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.089366"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.090872"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.092376"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.093887"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.095385"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.096909"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.098417"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2022-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.099951"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.101459"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.103109"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.104645"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.106194"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.107731"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.109289"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.110837"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.112388"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.113940"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.115481"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.117060"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2023-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.118612"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.120205"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.121766"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBJqNbBbnwNwrTosWQqrf_DzNj24TgAC-hwAAtH_sFHraxjnIwq74TwE",
+      "size": 10297672,
+      "timestamp": "2026-06-19T21:10:52.123339"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.360561"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.362400"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.364016"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.365587"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.367162"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.368773"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.370394"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.371985"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2024-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.373611"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.375334"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.376961"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.378560"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.380164"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.381784"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-06.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.383381"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-07.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.385020"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-08.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.386631"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-09.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.388252"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-10.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.389901"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-11.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.391518"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2025-12.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.393183"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2026-01.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.394847"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2026-02.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.396479"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2026-03.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.398164"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2026-04.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.399817"
+    },
+    {
+      "path": "Test-repo/zips/XRPUSDT-5m-2026-05.zip",
+      "file_id": "BQACAgQAAx0EfQ3lOwACBBNqNbBdVr0d7GnZcsK10Ix_gcXZwgAC-xwAAtH_sFH6DhmXScvyGjwE",
+      "size": 9897436,
+      "timestamp": "2026-06-19T21:10:54.401471"
+    }
+  ]
+}
