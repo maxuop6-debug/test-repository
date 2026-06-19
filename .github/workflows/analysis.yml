@@ -155,7 +155,7 @@ jobs:
           echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
 
       # ================================================================
-      # استپ ۱: دانلود و آماده‌سازی فایل یکپارچه معاملات
+      # استپ ۱: دانلود و آماده‌سازی فایل یکپارچه معاملات (بدون تغییر)
       # ================================================================
       - name: 1. دانلود فایل یکپارچه معاملات (یک بار برای کل قطعه)
         env:
@@ -163,7 +163,6 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          # استخراج نام استراتژی از اولین آیتم قطعه
           CHUNK_JSON=$(cat /tmp/chunk.json)
           STRAT=$(echo "$CHUNK_JSON" | jq -r '.[0].strat' 2>/dev/null || echo "")
           if [ -z "$STRAT" ]; then
@@ -238,9 +237,6 @@ jobs:
             exit 1
           fi
 
-          # ================================================================
-          # بررسی پرچم metadata_injected — اگر موجود بود، این مرحله skip می‌شود
-          # ================================================================
           echo "🔍 بررسی پرچم metadata_injected برای $STRAT ..."
           FLAG_HTTP=$(gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" -i 2>/dev/null | head -n1 | cut -d' ' -f2 || echo "")
           if [ "$FLAG_HTTP" = "200" ]; then
@@ -251,9 +247,6 @@ jobs:
 
           echo "ℹ️ پرچم metadata_injected یافت نشد — بررسی وجود metadata در فایل..."
 
-          # ================================================================
-          # بررسی آیا metadata در فایل یکپارچه هست یا نه
-          # ================================================================
           HAS_METADATA=$(node -e "
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('/tmp/prep/all_trades.json', 'utf8'));
@@ -265,8 +258,6 @@ jobs:
 
           if [ "$HAS_METADATA" = "true" ]; then
             echo "✅ فایل یکپارچه قبلاً metadata دارد."
-
-            # ذخیره پرچم در مخزن سوم تا دفعه بعد این مرحله skip شود
             echo "🚩 ذخیره پرچم metadata_injected..."
             FLAG_CONTENT=$(echo "injected" | base64 -w0)
             gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" \
@@ -274,14 +265,10 @@ jobs:
               -F message="mark metadata as injected for $STRAT" \
               -F content="$FLAG_CONTENT" \
               -F branch="main" 2>/dev/null || echo "⚠️ ذخیره پرچم ناموفق بود (ادامه می‌دهیم)."
-
             echo "✅ فایل یکپارچه آماده شد."
             exit 0
           fi
 
-          # ================================================================
-          # فایل metadata ندارد — باید 1.json را پیدا کنیم و inject کنیم
-          # ================================================================
           echo "⚙️ فایل یکپارچه metadata ندارد (فرمت قدیمی) — در حال inject metadata..."
 
           META_FILE_REMOTE="strategies/${STRAT}/1.json"
@@ -326,14 +313,6 @@ jobs:
 
           echo "$META_CONTENT" > /tmp/prep/meta.json
 
-          MOVE_PERCENTS=$(echo "$META_CONTENT" | jq -c '.move_percents // []')
-          STOP_LOSS=$(echo "$META_CONTENT"    | jq '.stop_loss_initial // -2.0')
-          MAX_MOVE=$(echo "$META_CONTENT"     | jq '.max_move_percent // null')
-
-          echo "   move_percents: $MOVE_PERCENTS"
-          echo "   stop_loss_initial: $STOP_LOSS"
-
-          # ترکیب معاملات موجود با متادیتا
           node -e "
             const fs = require('fs');
             const trades = JSON.parse(fs.readFileSync('/tmp/prep/all_trades.json', 'utf8'));
@@ -356,7 +335,6 @@ jobs:
           fi
           echo "✅ metadata با موفقیت به فایل یکپارچه اضافه شد."
 
-          # ذخیره پرچم در مخزن سوم برای دفعات بعدی
           echo "🚩 ذخیره پرچم metadata_injected برای $STRAT..."
           FLAG_CONTENT=$(echo "injected" | base64 -w0)
           gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" \
@@ -374,16 +352,21 @@ jobs:
       - name: نصب کتابخانه‌های پایتون
         run: pip install pandas requests
 
-      - name: 3. اجرای ماژول تحلیلی برای هر آیتم در قطعه
+      # ================================================================
+      # استپ ۳ (بازنویسی‌شده): اجرای همه‌ی ترکیبات قطعه، بدون آپلود تکی
+      # هیچ gh api ای داخل حلقه نیست. همه‌چیز محلی جمع می‌شود و در پایان
+      # حلقه فقط در یک یا دو درخواست API آپلود می‌شود.
+      # ================================================================
+      - name: 3. اجرای ماژول تحلیلی برای هر آیتم در قطعه (بدون آپلود تکی)
         id: execute_batch
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
+          mkdir -p /tmp/results /tmp/errors
+          echo "[]" > /tmp/done_items.json
+          echo "[]" > /tmp/failed_items.json
+
           CHUNK_JSON=$(cat /tmp/chunk.json)
           LENGTH=$(echo "$CHUNK_JSON" | jq length)
-          echo "🚀 شروع پردازش $LENGTH ترکیب در job ${{ matrix.chunk_index }}"
+          echo "🚀 شروع پردازش $LENGTH ترکیب در job ${{ matrix.chunk_index }} (بدون تماس API داخل حلقه)"
 
           for i in $(seq 0 $((LENGTH-1))); do
             ITEM=$(echo "$CHUNK_JSON" | jq -c ".[$i]")
@@ -407,163 +390,244 @@ jobs:
             if [ -n "$CHUNK_START" ] && [ -n "$CHUNK_END" ]; then
               CMD="$CMD --chunk-start $CHUNK_START --chunk-end $CHUNK_END"
             fi
-            echo "دستور: $CMD"
+            : > /tmp/item_output.log
             set -o pipefail
-            eval $CMD 2>&1 | tee -a /tmp/output.log
+            eval $CMD 2>&1 | tee /tmp/item_output.log
             EXIT_CODE=${PIPESTATUS[0]}
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ خطا در اجرای ماژول برای ترکیب $COIN $INTERVAL $MODEL"
-              SAFE_STRAT=$(echo "$STRAT" | sed 's/[^a-zA-Z0-9._-]/_/g')
-              ERROR_FILE="error_${MODULE}_${COIN}_${SAFE_STRAT}_${INTERVAL}_${MODEL}.enc"
-              node -e "
-                const crypto=require('crypto'),fs=require('fs');
-                const pass=process.env.RESULTS_PASSWORD;
-                const data=fs.readFileSync('/tmp/output.log');
-                const key=crypto.scryptSync(pass,'salt',32);
-                const iv=crypto.randomBytes(16);
-                const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
-                const enc=Buffer.concat([cipher.update(data),cipher.final()]);
-                fs.writeFileSync('$ERROR_FILE', Buffer.concat([iv,enc]));
-              "
-              mkdir -p errors && cp $ERROR_FILE errors/
-              RETRY=0; MAX=10000
-              while [ $RETRY -lt $MAX ]; do
-                if gh api "repos/$THIRD_REPO/contents/analysis_results/logs/$ERROR_FILE" \
-                  -X PUT \
-                  -F message="error log" \
-                  -F content="$(base64 -w0 < errors/$ERROR_FILE)" \
-                  -F branch="main" 2>&1; then
-                  break
-                else
-                  RETRY=$((RETRY+1))
-                  sleep $(( (RANDOM % 10) + 1 ))
-                fi
-              done
-              exit 1
-            fi
-            OUTPUT_FILE="${STRAT}_${COIN}_${INTERVAL}_${MODEL}.csv"
-            echo "[DEBUG] فایل خروجی برای $COIN: $OUTPUT_FILE"
+            set +o pipefail
 
-            # آپلود خروجی
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "   ❌ خطا در اجرای ماژول برای ترکیب $COIN $INTERVAL $MODEL (پردازش بقیه‌ی قطعه ادامه می‌یابد)"
+              SAFE_STRAT=$(echo "$STRAT" | sed 's/[^a-zA-Z0-9._-]/_/g')
+              ERR_NAME="error_${MODULE}_${SAFE_COIN}_${SAFE_STRAT}_${INTERVAL}_${MODEL}.log"
+              cp /tmp/item_output.log "/tmp/errors/${ERR_NAME}"
+
+              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
+              continue
+            fi
+
+            OUTPUT_FILE="${STRAT}_${COIN}_${INTERVAL}_${MODEL}.csv"
             if [ -f "$OUTPUT_FILE" ]; then
-              echo "   🔐 رمزنگاری فایل خروجی..."
-              node -e "
-                const crypto=require('crypto'),fs=require('fs');
-                const pass=process.env.RESULTS_PASSWORD;
-                const data=fs.readFileSync('$OUTPUT_FILE');
-                const key=crypto.scryptSync(pass,'salt',32);
-                const iv=crypto.randomBytes(16);
-                const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
-                const enc=Buffer.concat([cipher.update(data),cipher.final()]);
-                fs.writeFileSync('${OUTPUT_FILE}.enc', Buffer.concat([iv,enc]));
-              "
-              base64 -w0 < "${OUTPUT_FILE}.enc" > /tmp/out_base64.txt
-              DEST="analysis_results/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.csv.enc"
-              echo "   📤 آپلود به $DEST ..."
-              set +e
-              HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -i 2>/dev/null | head -n 1 | cut -d' ' -f2)
-              set -e
-              if [ "$HTTP_CODE" = "200" ]; then
-                echo "   ℹ️ فایل قبلاً وجود دارد. آپلود نمی‌شود."
-              else
-                set +e
-                RETRY=0
-                MAX=10000
-                UPLOAD_SUCCESS=false
-                while [ $RETRY -lt $MAX ]; do
-                  echo "   تلاش $((RETRY+1)) از $MAX"
-                  RESPONSE=$(gh api "repos/$THIRD_REPO/contents/$DEST" \
-                    -X PUT \
-                    -F message="analysis output" \
-                    -F content="@/tmp/out_base64.txt" \
-                    -F branch="main" 2>&1)
-                  EXIT_CODE=$?
-                  if [ $EXIT_CODE -eq 0 ]; then
-                    echo "   ✅ آپلود موفق"
-                    UPLOAD_SUCCESS=true
-                    break
-                  else
-                    echo "   ❌ خطا: $RESPONSE"
-                    RETRY=$((RETRY+1))
-                    if [ $RETRY -lt $MAX ]; then
-                      SLEEP_TIME=$(( (RANDOM % 10) + 1 ))
-                      sleep $SLEEP_TIME
-                    fi
-                  fi
-                done
-                set -e
-                if [ "$UPLOAD_SUCCESS" = false ]; then
-                  echo "   ❌ آپلود پس از $MAX تلاش ناموفق"
-                  exit 1
-                fi
-              fi
+              DEST_DIR="/tmp/results/${MODULE}/${STRAT}/${SAFE_COIN}"
+              mkdir -p "$DEST_DIR"
+              mv "$OUTPUT_FILE" "$DEST_DIR/${INTERVAL}_${MODEL}.csv"
+
+              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                /tmp/done_items.json > /tmp/done_items.json.tmp && mv /tmp/done_items.json.tmp /tmp/done_items.json
             else
-              echo "   ⚠️ فایل خروجی $OUTPUT_FILE وجود ندارد!"
+              echo "   ⚠️ فایل خروجی $OUTPUT_FILE وجود ندارد! به‌عنوان شکست ثبت می‌شود."
+              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
             fi
           done
 
-  # cleanup اصلاح‌شده: به‌جای عدد هاردکد 7500، دقیقاً همان TOTAL_COMBOS که در
-  # generate-matrix محاسبه و چانک‌بندی شد حذف می‌شود -- فقط یک GET و یک PUT، نه per-job.
-  # آیتم‌های جدیدی که هم‌زمان به انتهای all_combinations.json اضافه می‌شوند دست‌نخورده می‌مانند.
+          DONE_COUNT=$(jq length /tmp/done_items.json)
+          FAILED_COUNT=$(jq length /tmp/failed_items.json)
+          echo "✅ موفق: $DONE_COUNT   ❌ ناموفق: $FAILED_COUNT"
+          echo "done_count=$DONE_COUNT" >> $GITHUB_OUTPUT
+          echo "failed_count=$FAILED_COUNT" >> $GITHUB_OUTPUT
+
+      # ================================================================
+      # استپ ۴ (جدید): آپلود یک‌جای نتایج این قطعه — حداکثر ۲ تماس API
+      # برای کل قطعه (یکی برای نتایج، یکی برای خطاها)، نه per-item.
+      # نام و فرمت خروجی (chunk_X_runid.enc حاوی tar.gz) دقیقاً همان چیزی
+      # است که job های golden و portfolios از پوشه‌ی batch_results انتظار دارند.
+      # ================================================================
+      - name: 4. آپلود یک‌جای نتایج و خطاهای قطعه (batch upload)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          upload_with_retry() {
+            local dest="$1"
+            local file_b64="$2"
+            local msg="$3"
+            local retry=0
+            local max=30
+            while [ $retry -lt $max ]; do
+              if gh api "repos/$THIRD_REPO/contents/$dest" \
+                -X PUT \
+                -F message="$msg" \
+                -F content="@$file_b64" \
+                -F branch="main" >/tmp/upload_resp.json 2>&1; then
+                echo "   ✅ آپلود موفق: $dest"
+                return 0
+              else
+                retry=$((retry+1))
+                echo "   ⚠️ تلاش $retry از $max برای $dest ناموفق بود. پاسخ: $(cat /tmp/upload_resp.json)"
+                sleep $(( (RANDOM % 8) + 2 ))
+              fi
+            done
+            echo "   ❌ آپلود $dest پس از $max تلاش ناموفق ماند."
+            return 1
+          }
+
+          RUN_TAG="chunk_${{ matrix.chunk_index }}_${{ github.run_id }}_${{ github.run_attempt }}"
+          UPLOAD_FAILED=0
+
+          # --- نتایج موفق: یک tar.gz، رمزنگاری‌شده، یک آپلود ---
+          if [ -d /tmp/results ] && [ "$(find /tmp/results -type f | wc -l)" -gt 0 ]; then
+            tar czf /tmp/results_bundle.tar.gz -C /tmp/results .
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('/tmp/results_bundle.tar.gz');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=crypto.randomBytes(16);
+              const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+              const enc=Buffer.concat([cipher.update(data),cipher.final()]);
+              fs.writeFileSync('/tmp/results_bundle.enc', Buffer.concat([iv,enc]));
+            "
+            base64 -w0 < /tmp/results_bundle.enc > /tmp/results_bundle_b64.txt
+            DEST="batch_results/${RUN_TAG}.enc"
+            upload_with_retry "$DEST" "/tmp/results_bundle_b64.txt" "batch results ${RUN_TAG}" || UPLOAD_FAILED=1
+          else
+            echo "ℹ️ هیچ خروجی موفقی برای آپلود در این قطعه وجود ندارد."
+          fi
+
+          # --- خطاها: یک tar.gz، رمزنگاری‌شده، یک آپلود ---
+          if [ -d /tmp/errors ] && [ "$(find /tmp/errors -type f | wc -l)" -gt 0 ]; then
+            tar czf /tmp/errors_bundle.tar.gz -C /tmp/errors .
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('/tmp/errors_bundle.tar.gz');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=crypto.randomBytes(16);
+              const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+              const enc=Buffer.concat([cipher.update(data),cipher.final()]);
+              fs.writeFileSync('/tmp/errors_bundle.enc', Buffer.concat([iv,enc]));
+            "
+            base64 -w0 < /tmp/errors_bundle.enc > /tmp/errors_bundle_b64.txt
+            DEST="analysis_errors/${RUN_TAG}_errors.enc"
+            upload_with_retry "$DEST" "/tmp/errors_bundle_b64.txt" "batch errors ${RUN_TAG}" || true
+          fi
+
+          if [ "$UPLOAD_FAILED" -eq 1 ]; then
+            echo "❌ آپلود نتایج موفق این قطعه شکست خورد — این job fail می‌شود تا cleanup این ترکیبات را به‌اشتباه done علامت نزند."
+            exit 1
+          fi
+
+      # ================================================================
+      # استپ ۵ (جدید): ذخیره‌ی لیست ترکیبات «موفق این قطعه» به‌صورت artifact
+      # هیچ تماس API ندارد. این جایگزین حذف per-item از فایل مشترک است و
+      # کاملاً race-free است چون هر job فقط artifact خودش را می‌نویسد.
+      # ================================================================
+      - name: 5. آپلود artifact لیست ترکیبات موفق این قطعه
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: done-items-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: /tmp/done_items.json
+          retention-days: 1
+
+  # ================================================================
+  # cleanup (بازنویسی‌شده): به‌جای حذف بر اساس شمارش (که با شکست بخشی از
+  # آیتم‌ها هماهنگ نیست)، فقط دقیقاً همان ترکیباتی که در artifact های
+  # done-items-* آمده‌اند حذف می‌شوند. این کار race-free است چون هر بسته
+  # artifact مستقل خودش را نوشته و اینجا فقط یک‌بار، در یک job، با یک GET
+  # و یک PUT، merge و حذف انجام می‌شود.
+  # ================================================================
   cleanup:
     runs-on: ubuntu-latest
     needs: [generate-matrix, batch]
     if: ${{ always() && needs.batch.result == 'success' && inputs.analysis_module == 'fixed_batch' && needs.generate-matrix.outputs.empty == 'false' }}
     steps:
-      - name: حذف دقیق TOTAL_COMBOS آیتم پردازش‌شده از all_combinations.json
+      - name: دانلود همه‌ی artifact های done-items این run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: done-items-*-${{ github.run_id }}
+          path: /tmp/done_artifacts
+          merge-multiple: false
+
+      - name: ادغام لیست‌های done و حذف دقیق همان ترکیبات از all_combinations.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           CURL="/usr/bin/curl"
-          PROCESSED_COUNT="${{ needs.generate-matrix.outputs.total_combos }}"
-          echo "[DEBUG] تعداد آیتم‌هایی که این run پردازش کرد: $PROCESSED_COUNT"
 
-          # دانلود نسخه‌ی فعلی فایل (ممکن است آیتم‌های جدیدی هم‌زمان به انتهایش اضافه شده باشند)
-          $CURL -s -o /tmp/current.json \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=${{ github.run_id }}"
-          if [ ! -s /tmp/current.json ]; then
-            echo "ERROR: دریافت فایل ناموفق"; exit 1
+          # ادغام همه‌ی فایل‌های done_items.json در یک آرایه‌ی واحد
+          find /tmp/done_artifacts -name 'done_items.json' -print0 \
+            | xargs -0 jq -s 'add' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
+          [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
+
+          MERGED_COUNT=$(jq length /tmp/merged_done.json)
+          echo "[DEBUG] تعداد کل ترکیبات موفقِ این run (از همه‌ی بسته‌ها): $MERGED_COUNT"
+
+          if [ "$MERGED_COUNT" -eq 0 ]; then
+            echo "ℹ️ هیچ ترکیب موفقی برای حذف وجود ندارد. خروج بدون تغییر فایل."
+            exit 0
           fi
 
-          CURRENT_TOTAL=$(jq length /tmp/current.json)
-          if [ "$CURRENT_TOTAL" -lt "$PROCESSED_COUNT" ]; then
-            echo "⚠️ فایل فعلی ($CURRENT_TOTAL آیتم) کوچک‌تر از تعداد پردازش‌شده ($PROCESSED_COUNT) است."
-            echo "   احتمالاً فایل بین‌راه دستکاری شده — برای ایمنی از کل CURRENT_TOTAL استفاده می‌شود."
-            PROCESSED_COUNT=$CURRENT_TOTAL
-          fi
+          # تلاش با optimistic locking: اگر sha هنگام PUT منقضی شده بود
+          # (مثلاً به‌خاطر اضافه‌شدن آیتم جدید توسط فرآیند دیگر)، دوباره
+          # فایل را می‌خوانیم، دوباره فیلتر می‌کنیم و retry می‌کنیم.
+          RETRY=0
+          MAX=15
+          while [ $RETRY -lt $MAX ]; do
+            $CURL -s -o /tmp/current.json \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$(date +%s)"
+            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
+              echo "ERROR: دریافت فایل فعلی ناموفق بود."; exit 1
+            fi
 
-          SHA=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json" | jq -r '.sha')
-          if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
-            echo "ERROR: دریافت SHA ناموفق"; exit 1
-          fi
+            SHA=$($CURL -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json" | jq -r '.sha')
+            if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
+              echo "ERROR: دریافت SHA ناموفق بود."; exit 1
+            fi
 
-          # حذف فقط همان تعداد دقیقی که پردازش شد (نه عدد ثابت)
-          jq ".[$PROCESSED_COUNT:]" /tmp/current.json > /tmp/new_content.json
-          base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
+            # حذف دقیق آیتم‌هایی که در merged_done.json هستند (تطبیق روی همه‌ی فیلدها)
+            jq -s '
+              .[0] as $current | .[1] as $done
+              | $current - ($current | map(select(. as $item | $done | any(. == $item))))
+            ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
 
-          cat > /tmp/payload.json <<EOF
+            BEFORE=$(jq length /tmp/current.json)
+            AFTER=$(jq length /tmp/new_content.json)
+            echo "[DEBUG] قبل از حذف: $BEFORE  بعد از حذف: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
+
+            base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
+            cat > /tmp/payload.json <<EOF
           {
-            "message": "remove $PROCESSED_COUNT processed combinations",
+            "message": "remove $((BEFORE-AFTER)) processed combinations (run ${{ github.run_id }})",
             "content": "$(cat /tmp/new_content_base64.txt)",
             "sha": "$SHA",
             "branch": "main"
           }
           EOF
 
-          HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @/tmp/payload.json \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json")
+            HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data-binary @/tmp/payload.json \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json")
 
-          if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
-            echo "✅ $PROCESSED_COUNT آیتم پردازش‌شده با موفقیت حذف شدند."
-          else
-            echo "ERROR: آپلود ناموفق ($HTTP_CODE)"; cat /tmp/upload_response.txt; exit 1
+            if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
+              echo "✅ $((BEFORE-AFTER)) ترکیب پردازش‌شده با موفقیت حذف شدند."
+              break
+            elif [ "$HTTP_CODE" -eq 409 ] || [ "$HTTP_CODE" -eq 422 ]; then
+              echo "⚠️ تداخل sha (کد $HTTP_CODE) — فایل توسط فرآیند دیگری تغییر کرده. تلاش مجدد..."
+              RETRY=$((RETRY+1))
+              sleep $(( (RANDOM % 5) + 2 ))
+              continue
+            else
+              echo "ERROR: آپلود ناموفق ($HTTP_CODE)"; cat /tmp/upload_response.txt; exit 1
+            fi
+          done
+
+          if [ $RETRY -ge $MAX ]; then
+            echo "ERROR: پس از $MAX تلاش، حذف به‌خاطر تداخل sha انجام نشد."
+            exit 1
           fi
 
           rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt
