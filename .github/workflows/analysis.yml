@@ -52,7 +52,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # تنها تماس API گیت‌هاب در کل مرحله‌ی batch -- فقط همین یک‌بار، نه به ازای هر job
       - name: دانلود all_combinations.json و تقسیم به فایل‌های چانک محلی
         id: fetch_batch
         env:
@@ -83,7 +82,6 @@ jobs:
           echo "[DEBUG] تعداد کل ترکیب‌ها: $TOTAL_COMBOS"
           echo "total_combos=$TOTAL_COMBOS" >> $GITHUB_OUTPUT
 
-          # chunk_size=80 -> حداکثر 102 job برای 8100 آیتم (زیر سقف 256 ماتریس)
           CHUNK_SIZE=80
           CHUNK_COUNT=$(( (TOTAL_COMBOS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           if [ "$CHUNK_COUNT" -gt 256 ]; then
@@ -113,8 +111,6 @@ jobs:
           echo "empty=false" >> $GITHUB_OUTPUT
           echo "========== [DEBUG] پایان fetch_batch =========="
 
-      # به‌جای آپلود chunk_meta.json به مخزن سوم: همه چانک‌ها در یک artifact واحد
-      # (artifact = Actions storage داخلی، هیچ تماسی با api.github.com ندارد)
       - name: آپلود چانک‌ها به‌صورت یک artifact مشترک برای job های batch
         if: steps.fetch_batch.outputs.empty == 'false'
         uses: actions/upload-artifact@v4
@@ -138,7 +134,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # جایگزین تماس API قبلی: دیگر هیچ curl/gh api به مخزن سوم برای ترکیب‌ها لازم نیست
       - name: دانلود artifact مشترک چانک‌ها
         uses: actions/download-artifact@v4
         with:
@@ -353,14 +348,12 @@ jobs:
         run: pip install pandas requests
 
       # ================================================================
-      # استپ ۳ (بازنویسی‌شده): اجرای همه‌ی ترکیبات قطعه، بدون آپلود تکی
-      # هیچ gh api ای داخل حلقه نیست. همه‌چیز محلی جمع می‌شود و در پایان
-      # حلقه فقط در یک یا دو درخواست API آپلود می‌شود.
+      # استپ ۳ (بازنویسی‌شده): اجرای همه‌ی ترکیبات قطعه + استخراج امضا
       # ================================================================
-      - name: 3. اجرای ماژول تحلیلی برای هر آیتم در قطعه (بدون آپلود تکی)
+      - name: 3. اجرای ماژول تحلیلی و استخراج امضا برای هر آیتم در قطعه
         id: execute_batch
         run: |
-          mkdir -p /tmp/results /tmp/errors
+          mkdir -p /tmp/results /tmp/errors /tmp/signatures
           echo "[]" > /tmp/done_items.json
           echo "[]" > /tmp/failed_items.json
 
@@ -414,6 +407,35 @@ jobs:
               mkdir -p "$DEST_DIR"
               mv "$OUTPUT_FILE" "$DEST_DIR/${INTERVAL}_${MODEL}.csv"
 
+              # ============================================================
+              # استخراج امضا (فقط برای combo_10day و combo_monthly)
+              # ============================================================
+              if [[ "$MODULE" == "combo_10day" || "$MODULE" == "combo_monthly" ]]; then
+                EXTRACT_SCRIPT="modules/extract_signatures_10day.py"
+                if [ "$MODULE" == "combo_monthly" ]; then
+                  EXTRACT_SCRIPT="modules/extract_signatures_monthly.py"
+                fi
+                echo "      📝 استخراج امضا با $EXTRACT_SCRIPT ..."
+                python $EXTRACT_SCRIPT \
+                  --trades-json /tmp/prep/all_trades.json \
+                  --news-dir data/news \
+                  --interval "$INTERVAL" \
+                  --strategy-folder "$STRAT" \
+                  --coin "$COIN" \
+                  --model "$MODEL" \
+                  --min-sample-count 5 \
+                  --out "/tmp/signatures/${STRAT}_${COIN}_${INTERVAL}_${MODEL}.jsonl" 2>&1 | tee -a /tmp/item_output.log
+                EXTRACT_EXIT=$?
+                if [ $EXTRACT_EXIT -eq 0 ] && [ -f "/tmp/signatures/${STRAT}_${COIN}_${INTERVAL}_${MODEL}.jsonl" ]; then
+                  mkdir -p "/tmp/results/signatures/${MODULE}/${STRAT}/${SAFE_COIN}"
+                  mv "/tmp/signatures/${STRAT}_${COIN}_${INTERVAL}_${MODEL}.jsonl" \
+                     "/tmp/results/signatures/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.jsonl"
+                  echo "      ✅ امضا استخراج شد."
+                else
+                  echo "      ⚠️ استخراج امضا با کد $EXTRACT_EXIT ناموفق بود (ادامه)."
+                fi
+              fi
+
               jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
                 '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
                 /tmp/done_items.json > /tmp/done_items.json.tmp && mv /tmp/done_items.json.tmp /tmp/done_items.json
@@ -432,10 +454,7 @@ jobs:
           echo "failed_count=$FAILED_COUNT" >> $GITHUB_OUTPUT
 
       # ================================================================
-      # استپ ۴ (جدید): آپلود یک‌جای نتایج این قطعه — حداکثر ۲ تماس API
-      # برای کل قطعه (یکی برای نتایج، یکی برای خطاها)، نه per-item.
-      # نام و فرمت خروجی (chunk_X_runid.enc حاوی tar.gz) دقیقاً همان چیزی
-      # است که job های golden و portfolios از پوشه‌ی batch_results انتظار دارند.
+      # استپ ۴: آپلود یک‌جای نتایج و خطاهای قطعه (batch upload)
       # ================================================================
       - name: 4. آپلود یک‌جای نتایج و خطاهای قطعه (batch upload)
         if: always()
@@ -515,9 +534,7 @@ jobs:
           fi
 
       # ================================================================
-      # استپ ۵ (جدید): ذخیره‌ی لیست ترکیبات «موفق این قطعه» به‌صورت artifact
-      # هیچ تماس API ندارد. این جایگزین حذف per-item از فایل مشترک است و
-      # کاملاً race-free است چون هر job فقط artifact خودش را می‌نویسد.
+      # استپ ۵: ذخیره‌ی لیست ترکیبات «موفق این قطعه» به‌صورت artifact
       # ================================================================
       - name: 5. آپلود artifact لیست ترکیبات موفق این قطعه
         if: always()
@@ -528,11 +545,7 @@ jobs:
           retention-days: 1
 
   # ================================================================
-  # cleanup (بازنویسی‌شده): به‌جای حذف بر اساس شمارش (که با شکست بخشی از
-  # آیتم‌ها هماهنگ نیست)، فقط دقیقاً همان ترکیباتی که در artifact های
-  # done-items-* آمده‌اند حذف می‌شوند. این کار race-free است چون هر بسته
-  # artifact مستقل خودش را نوشته و اینجا فقط یک‌بار، در یک job، با یک GET
-  # و یک PUT، merge و حذف انجام می‌شود.
+  # cleanup (بازنویسی‌شده): حذف دقیق ترکیبات موفق
   # ================================================================
   cleanup:
     runs-on: ubuntu-latest
@@ -553,7 +566,6 @@ jobs:
         run: |
           CURL="/usr/bin/curl"
 
-          # ادغام همه‌ی فایل‌های done_items.json در یک آرایه‌ی واحد
           find /tmp/done_artifacts -name 'done_items.json' -print0 \
             | xargs -0 jq -s 'add' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
           [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
@@ -566,9 +578,6 @@ jobs:
             exit 0
           fi
 
-          # تلاش با optimistic locking: اگر sha هنگام PUT منقضی شده بود
-          # (مثلاً به‌خاطر اضافه‌شدن آیتم جدید توسط فرآیند دیگر)، دوباره
-          # فایل را می‌خوانیم، دوباره فیلتر می‌کنیم و retry می‌کنیم.
           RETRY=0
           MAX=15
           while [ $RETRY -lt $MAX ]; do
@@ -586,7 +595,6 @@ jobs:
               echo "ERROR: دریافت SHA ناموفق بود."; exit 1
             fi
 
-            # حذف دقیق آیتم‌هایی که در merged_done.json هستند (تطبیق روی همه‌ی فیلدها)
             jq -s '
               .[0] as $current | .[1] as $done
               | $current - ($current | map(select(. as $item | $done | any(. == $item))))
