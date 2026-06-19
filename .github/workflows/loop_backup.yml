@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: backup-loop
+  group: telegram-loop
   cancel-in-progress: false
 
 jobs:
@@ -51,9 +51,10 @@ jobs:
           git config user.name  "GitHub Actions – Backup Bot"
           git config user.email "actions@github.com"
 
-          [ -f "pending_links.json" ]        && git add "pending_links.json"
           [ -f "update_offset.json" ]        && git add "update_offset.json"
           [ -f "startup_test_sent.flag" ]    && git add "startup_test_sent.flag"
+          [ -f "pending_links.json" ]        && git add "pending_links.json"
+          git add movie_messages/ 2>/dev/null || true
 
           if ! git diff --cached --quiet; then
             git commit -m "chore: forward-processor state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
