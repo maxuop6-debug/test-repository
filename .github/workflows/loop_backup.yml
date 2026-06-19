@@ -10,7 +10,7 @@ concurrency:
 jobs:
   loop:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 330   # کمی بیشتر از ۵ ساعت برای مانور
 
     steps:
       - name: Checkout repository
@@ -26,24 +26,34 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip requests
 
-      # ─── پردازش پیام‌های فورواردی + پاسخ به لینک‌های اختصاصی (/start) ──────────
-      - name: Process forwarded messages and deep links
+      # ─── حلقه ۵ ساعته: هر ۳۰ ثانیه آپدیت می‌گیرد ───────────────────────────
+      - name: Run 5-hour polling loop
         env:
           TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
           MAIN_CHANNEL_USERNAME: ${{ secrets.MAIN_CHANNEL_USERNAME }}
           INTERMEDIATE_CHAT_ID:  ${{ secrets.INTERMEDIATE_CHAT_ID }}
-        run: python backup_system.py process-updates
+        run: |
+          END_TIME=$(( $(date +%s) + 5*3600 ))   # ۵ ساعت از الان
+          echo "حلقه تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
 
-      # ─── commit تغییرات pending_links.json و update_offset.json ──────────────
+          while [ $(date +%s) -lt $END_TIME ]; do
+            python backup_system.py process-updates || true
+            sleep 30
+          done
+
+          echo "✅ حلقه ۵ ساعته تمام شد"
+
+      # ─── commit تغییرات (offset + pending_links + پرچم تست) ─────────────────
       - name: Commit forward-processor state
         run: |
           git config user.name  "GitHub Actions – Backup Bot"
           git config user.email "actions@github.com"
 
-          [ -f "pending_links.json" ] && git add "pending_links.json"
-          [ -f "update_offset.json" ] && git add "update_offset.json"
+          [ -f "pending_links.json" ]        && git add "pending_links.json"
+          [ -f "update_offset.json" ]        && git add "update_offset.json"
+          [ -f "startup_test_sent.flag" ]    && git add "startup_test_sent.flag"
 
           if ! git diff --cached --quiet; then
             git commit -m "chore: forward-processor state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
@@ -52,11 +62,9 @@ jobs:
             echo "تغییری برای commit وجود ندارد"
           fi
 
-      # ─── انتظار و فراخوانی مجدد backup_pipeline (چرخه ۲۴ ساعته) ──────────────
-      - name: Wait then trigger backup_pipeline
+      # ─── بعد از ۵ ساعت، backup_pipeline را صدا بزن (چرخه ادامه پیدا کند) ──
+      - name: Trigger backup_pipeline after loop ends
         env:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          sleep 30
-          python backup_system.py trigger-loop --workflow backup_pipeline.yml
+        run: python backup_system.py trigger-loop --workflow backup_pipeline.yml
