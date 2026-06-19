@@ -1,4 +1,4 @@
-name.  اتمام چرخه: Loop Backup
+name: Loop Backup
 
 on:
   workflow_dispatch:
@@ -13,6 +13,11 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -21,9 +26,33 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip requests
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      # ─── پردازش پیام‌های فورواردی + پاسخ به لینک‌های اختصاصی (/start) ──────────
+      - name: Process forwarded messages and deep links
+        env:
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAIN_CHANNEL_USERNAME: ${{ secrets.MAIN_CHANNEL_USERNAME }}
+          INTERMEDIATE_CHAT_ID:  ${{ secrets.INTERMEDIATE_CHAT_ID }}
+        run: python backup_system.py process-updates
 
+      # ─── commit تغییرات pending_links.json و update_offset.json ──────────────
+      - name: Commit forward-processor state
+        run: |
+          git config user.name  "GitHub Actions – Backup Bot"
+          git config user.email "actions@github.com"
+
+          [ -f "pending_links.json" ] && git add "pending_links.json"
+          [ -f "update_offset.json" ] && git add "update_offset.json"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: forward-processor state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git push
+          else
+            echo "تغییری برای commit وجود ندارد"
+          fi
+
+      # ─── انتظار و فراخوانی مجدد backup_pipeline (چرخه ۲۴ ساعته) ──────────────
       - name: Wait then trigger backup_pipeline
         env:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
