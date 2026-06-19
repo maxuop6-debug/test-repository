@@ -1238,7 +1238,41 @@ def run_pipeline(args: argparse.Namespace) -> None:
     if not integrity_test(password, bot_token, chat_id):
         sys.exit(1)
 
-    # ─── ۱. زمان‌بندی ───
+    # ─── ۱. فایل‌های یکبار مصرف – مستقل از زمان‌بندی، همیشه اول کار ───
+    ledger = load_ledger()
+    onetime_files = collect_onetime_files()
+    onetime_flag_names_to_mark: set[str] = set()
+    onetime_to_pack: list[tuple[Path, bytes]] = []
+
+    for ot_path, flag_name in onetime_files:
+        rel = str(ot_path)
+        if is_uploaded(ledger, rel):
+            continue
+        try:
+            processed = process_onetime_file(ot_path, password)
+            onetime_to_pack.append((ot_path, processed))
+            onetime_flag_names_to_mark.add(flag_name)
+            log.info(f"یکبار مصرف آماده آپلود: {rel}")
+        except Exception as e:
+            log.error(f"خطا در پردازش فایل یکبار مصرف {rel}: {e}")
+
+    if onetime_to_pack:
+        log.info(f"🚀 آپلود {len(onetime_to_pack)} فایل یکبار مصرف...")
+        packages = build_packages(onetime_to_pack, [])
+        onetime_succeeded = False
+        for pkg in packages:
+            fid = telegram_send_document(bot_token, chat_id,
+                                          pkg["data"], pkg["name"],
+                                          caption=f"📦 یکبار مصرف: {pkg['name']}\n{len(pkg['files'])} فایل")
+            if fid:
+                for rel_path in pkg["files"]:
+                    record_upload(ledger, rel_path, fid, len(pkg["data"]))
+                log.info(f"✅ یکبار مصرف ارسال شد: {pkg['name']}")
+                onetime_succeeded = True
+        if onetime_succeeded:
+            mark_onetime_done(onetime_flag_names_to_mark)
+
+    # ─── ۲. زمان‌بندی – بقیه کارها فقط در زمان مقرر ───
     sched = generate_schedule()
     if not args.force and not should_run_now(sched):
         log.info("⏰ زمان بک‌آپ نرسیده – خروج")
@@ -1254,7 +1288,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
     mapping = auto_detect_mapping(csv_files)
 
     # ─── ۳. پردازش فایل‌ها ───
-    ledger = load_ledger()
     to_pack: list[tuple[Path, bytes]] = []
 
     for csv_path in csv_files:
@@ -1280,20 +1313,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
             to_pack.append((enc_path, processed))
         except Exception as e:
             log.error(f"خطا در پردازش aggregated {rel}: {e}")
-
-    # کار ۴: فایل‌های یکبار مصرف
-    onetime_files = collect_onetime_files()   # list[tuple[Path, flag_name]]
-    onetime_flag_names_to_mark: set[str] = set()
-    for ot_path, flag_name in onetime_files:
-        rel = str(ot_path)
-        if is_uploaded(ledger, rel):
-            continue
-        try:
-            processed = process_onetime_file(ot_path, password)
-            to_pack.append((ot_path, processed))
-            onetime_flag_names_to_mark.add(flag_name)
-        except Exception as e:
-            log.error(f"خطا در پردازش فایل یکبار مصرف {rel}: {e}")
 
     backup_succeeded = False
 
@@ -1345,10 +1364,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
         # کار ۳: پرچم .backup_done در پوشه‌های استراتژی/aggregated آپلود‌شده در این اجرا
         for folder in touched_folders:
             _touch_backup_done(folder)
-
-        # کار ۴: پرچم یکبار مصرف داخل مخزن اصلی (نه داخل Test-repo)
-        if onetime_flag_names_to_mark and backup_succeeded:
-            mark_onetime_done(onetime_flag_names_to_mark)
 
         # ─── ۶. پاکسازی فایل‌های analysis_results ───
         for csv_path in csv_files:
