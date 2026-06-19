@@ -46,6 +46,7 @@ MAPPING_FILE = Path("auto_mapping.json")
 LEDGER_FILE = Path("backup_ledger.json")
 SCHEDULE_FILE = Path("schedule_times.json")
 INTEGRITY_FLAG = Path("integrity_pass.flag")
+STARTUP_TEST_FLAG = Path("startup_test_sent.flag")   # پرچم پیام تستی اولین اجرا
 IRAN_UTC_OFFSET = 3.5                  # ساعت (UTC+3:30)
 
 # ─── ثابت‌های بخش فیلم/سریال و پردازش فورواردی ─────────────────────────────────
@@ -815,6 +816,30 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
                           reply_markup=keyboard)
 
 
+def _send_startup_test_message(bot_token: str, chat_id: str) -> None:
+    """ارسال یک پیام تستی در اولین اجرا، سپس پرچم می‌گذارد تا دیگر تکرار نشود"""
+    if STARTUP_TEST_FLAG.exists():
+        return  # قبلاً ارسال شده – اسکیپ
+    msg = (
+        "✅ ربات با موفقیت راه‌اندازی شد!\n"
+        f"🕐 زمان: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
+        "📡 سیستم آماده دریافت پیام است."
+    )
+    try:
+        resp = requests.post(
+            f"{TELEGRAM_API}/bot{bot_token}/sendMessage",
+            json={"chat_id": chat_id, "text": msg},
+            timeout=15,
+        )
+        if resp.json().get("ok"):
+            STARTUP_TEST_FLAG.write_text(datetime.utcnow().isoformat())
+            log.info("✅ پیام تستی اولین اجرا ارسال شد")
+        else:
+            log.warning(f"ارسال پیام تستی ناموفق: {resp.json().get('description')}")
+    except Exception as e:
+        log.error(f"خطا در ارسال پیام تستی: {e}")
+
+
 def process_forward_updates() -> None:
     """دریافت آپدیت‌های جدید تلگرام و پردازش پیام‌های فورواردی + دستورات /start"""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -832,6 +857,9 @@ def process_forward_updates() -> None:
         log.error(f"متغیرهای محیطی زیر تنظیم نشده‌اند: {', '.join(missing)}")
         return
 
+    # ── پیام تستی فقط یک‌بار در اولین راه‌اندازی ──
+    _send_startup_test_message(bot_token, main_chat_id)
+
     offset = _load_offset()
     pending = _load_pending()
 
@@ -841,7 +869,7 @@ def process_forward_updates() -> None:
         return
 
     for update in updates:
-        offset = update["update_id"] + 1
+        new_offset = update["update_id"] + 1
         try:
             if "channel_post" in update:
                 _process_forwarded_update(update, bot_token, bot_username, main_chat_id,
@@ -851,9 +879,13 @@ def process_forward_updates() -> None:
                                         main_channel_username, pending)
         except Exception as e:
             log.error(f"خطا در پردازش آپدیت {update.get('update_id')}: {e}")
+        finally:
+            # offset رو همیشه ذخیره کن، حتی اگر خطا بخوره
+            if new_offset > offset:
+                offset = new_offset
+                _save_offset(offset)
 
-    _save_offset(offset)
-    log.info(f"✅ {len(updates)} آپدیت پردازش شد")
+    log.info(f"✅ {len(updates)} آپدیت پردازش شد، offset={offset}")
 
 
 
