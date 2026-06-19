@@ -54,14 +54,15 @@ ALL_COMBINATIONS_FILE = Path("all_combinations.json")
 MASTER_STRUCTURE_FILE = Path("master_structure.json")
 BACKUP_DONE_FLAG = ".backup_done"
 AGGREGATED_MIN_AGE_MINUTES = 30
+ONETIME_FLAGS_DIR = Path(".onetime_flags")   # پرچم‌های یکبار مصرف داخل مخزن اصلی
 
-# فایل‌های یکبار مصرف: هرکدام می‌تواند پوشه یا فایل باشد
+# فایل‌های یکبار مصرف: (مسیر هدف، نام پرچم داخل .onetime_flags/)
 ONE_TIME_TARGETS = [
-    Path("data/news"),
-    Path("encrypted_data"),
-    Path("Test-repo/data.enc"),
-    Path("Test-repo/zips"),
-    Path("encrypted_data/src"),
+    (Path("data/news"),          "data_news"),
+    (Path("encrypted_data"),     "encrypted_data"),
+    (Path("Test-repo/data.enc"), "test_repo_data_enc"),
+    (Path("Test-repo/zips"),     "test_repo_zips"),
+    (Path("encrypted_data/src"), "encrypted_data_src"),
 ]
 
 # ─── ثابت‌های بخش فیلم/سریال و پردازش فورواردی ─────────────────────────────────
@@ -535,32 +536,42 @@ def mark_uploaded_folders_done(uploaded_rel_paths: list[str]) -> set[Path]:
 
 # ─── کار ۴: فایل‌های یکبار مصرف ─────────────────────────────────────────────────
 
-def collect_onetime_files() -> list[Path]:
-    """جمع‌آوری فایل‌های یکبار مصرف که هنوز .backup_done ندارند"""
-    files: list[Path] = []
-    for target in ONE_TIME_TARGETS:
-        if not target.exists():
+def _onetime_flag_path(flag_name: str) -> Path:
+    """مسیر پرچم یکبار مصرف داخل مخزن اصلی"""
+    return ONETIME_FLAGS_DIR / f"{flag_name}{BACKUP_DONE_FLAG}"
+
+
+def collect_onetime_files() -> list[tuple[Path, str]]:
+    """جمع‌آوری فایل‌های یکبار مصرف که هنوز پرچم ندارند
+    برمی‌گرداند: لیستی از (مسیر_فایل, نام_پرچم)"""
+    result: list[tuple[Path, str]] = []
+    for target, flag_name in ONE_TIME_TARGETS:
+        # اگر پرچم داخل مخزن اصلی وجود داشت، اسکیپ کن
+        if _onetime_flag_path(flag_name).exists():
+            log.debug(f"یکبار مصرف قبلاً بکاپ شده: {target}")
             continue
-        flag_dir = target if target.is_dir() else target.parent
-        if (flag_dir / BACKUP_DONE_FLAG).exists():
+        if not target.exists():
+            log.debug(f"هدف یکبار مصرف وجود ندارد: {target}")
             continue
         if target.is_file():
-            files.append(target)
+            result.append((target, flag_name))
         else:
-            files.extend(
-                p for p in sorted(target.rglob("*"))
-                if p.is_file() and p.name != BACKUP_DONE_FLAG
-            )
-    return files
+            for p in sorted(target.rglob("*")):
+                if p.is_file() and p.name != BACKUP_DONE_FLAG:
+                    result.append((p, flag_name))
+    return result
 
 
-def mark_onetime_targets_done() -> None:
-    """بعد از آپلود موفق فایل‌های یکبار مصرف، پرچم .backup_done می‌گذارد"""
-    for target in ONE_TIME_TARGETS:
-        if not target.exists():
-            continue
-        flag_dir = target if target.is_dir() else target.parent
-        _touch_backup_done(flag_dir)
+def mark_onetime_done(flag_names: set[str]) -> None:
+    """بعد از آپلود موفق، پرچم یکبار مصرف را داخل مخزن اصلی می‌گذارد"""
+    ONETIME_FLAGS_DIR.mkdir(exist_ok=True)
+    for flag_name in flag_names:
+        flag = _onetime_flag_path(flag_name)
+        try:
+            flag.write_text(datetime.utcnow().isoformat(), encoding="utf-8")
+            log.info(f"✅ پرچم یکبار مصرف گذاشته شد: {flag}")
+        except Exception as e:
+            log.warning(f"خطا در گذاشتن پرچم {flag}: {e}")
 
 
 def process_onetime_file(path: Path, password: str) -> bytes:
@@ -1166,8 +1177,8 @@ def process_forward_updates() -> None:
     offset = _load_offset()
     pending = _load_pending()
 
-    # ⚠️ _send_startup_movie عمداً اینجا حذف شده است.
-    # ارسال پیام فیلم/سریال فقط بعد از بک‌آپ موفق توسط backup_pipeline انجام می‌شود.
+    # ── اولین اجرا: ارسال پیام فیلم/سریال و گذاشتن پرچم ──
+    _send_startup_movie(bot_token, main_chat_id)
 
     updates = _get_updates(bot_token, offset)
     if not updates:
@@ -1231,9 +1242,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
     sched = generate_schedule()
     if not args.force and not should_run_now(sched):
         log.info("⏰ زمان بک‌آپ نرسیده – خروج")
-        # باز هم چرخه را فراخوانی کن
-        if gh_token and repo_full:
-            trigger_loop_workflow(gh_token, repo_full, "loop_backup.yml")
         return
 
     log.info("🚀 شروع بک‌آپ...")
@@ -1274,14 +1282,16 @@ def run_pipeline(args: argparse.Namespace) -> None:
             log.error(f"خطا در پردازش aggregated {rel}: {e}")
 
     # کار ۴: فایل‌های یکبار مصرف
-    onetime_files = collect_onetime_files()
-    for ot_path in onetime_files:
+    onetime_files = collect_onetime_files()   # list[tuple[Path, flag_name]]
+    onetime_flag_names_to_mark: set[str] = set()
+    for ot_path, flag_name in onetime_files:
         rel = str(ot_path)
         if is_uploaded(ledger, rel):
             continue
         try:
             processed = process_onetime_file(ot_path, password)
             to_pack.append((ot_path, processed))
+            onetime_flag_names_to_mark.add(flag_name)
         except Exception as e:
             log.error(f"خطا در پردازش فایل یکبار مصرف {rel}: {e}")
 
@@ -1336,9 +1346,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
         for folder in touched_folders:
             _touch_backup_done(folder)
 
-        # کار ۴: پرچم .backup_done برای فایل‌های یکبار مصرف آپلودشده
-        if onetime_files and backup_succeeded:
-            mark_onetime_targets_done()
+        # کار ۴: پرچم یکبار مصرف داخل مخزن اصلی (نه داخل Test-repo)
+        if onetime_flag_names_to_mark and backup_succeeded:
+            mark_onetime_done(onetime_flag_names_to_mark)
 
         # ─── ۶. پاکسازی فایل‌های analysis_results ───
         for csv_path in csv_files:
@@ -1359,10 +1369,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # ─── ۹. ارسال هفتگی ───
     weekly_repos = os.environ.get("WEEKLY_REPOS", "now-test-repo").split(",")
     weekly_full_backup(bot_token, chat_id, password, [r.strip() for r in weekly_repos])
-
-    # ─── ۱۰. فراخوانی چرخه ───
-    if gh_token and repo_full:
-        trigger_loop_workflow(gh_token, repo_full, "loop_backup.yml")
 
     log.info("✅ پایپ‌لاین با موفقیت تمام شد")
 
