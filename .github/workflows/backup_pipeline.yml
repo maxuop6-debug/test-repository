@@ -11,25 +11,35 @@ on:
         options:
           - 'false'
           - 'true'
-  schedule:
-    - cron: '0 * * * *'   # هر ساعت – بررسی زمان‌بندی در پایتون انجام می‌شود
 
 concurrency:
-  group: backup-loop
+  group: backup-pipeline
   cancel-in-progress: false
 
 jobs:
   backup:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 330   # ۵ ساعت + کمی مانور
 
     steps:
       # ─── دریافت کد ───────────────────────────────────────────────────────────
-      - name: Checkout repository
+      - name: Checkout now-test-repo
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+
+      # ─── clone کردن Test-repo برای فایل‌های یکبار مصرف ─────────────────────
+      - name: Clone Test-repo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          ACTOR="${GITHUB_ACTOR}"
+          REPO_OWNER="${{ github.repository_owner }}"
+          git clone --depth 1 \
+            "https://${ACTOR}:${GITHUB_TOKEN}@github.com/${REPO_OWNER}/Test-repo.git" \
+            Test-repo || echo "⚠️ کلون Test-repo ناموفق بود (ادامه می‌دهیم)"
 
       # ─── نصب Python ──────────────────────────────────────────────────────────
       - name: Set up Python
@@ -37,12 +47,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      # ─── نصب وابستگی‌ها (یک‌بار برای کل job) ──────────────────────────────
+      # ─── نصب وابستگی‌ها ──────────────────────────────────────────────────────
       - name: Install dependencies
         run: pip install --upgrade pip requests cryptography
 
-      # ─── اجرای پایپ‌لاین اصلی (شامل بک‌آپ + ارسال پیام فیلم در صورت موفقیت) ───
-      - name: Run backup pipeline
+      # ─── حلقه ۵ ساعته: هر ۳۰ دقیقه بررسی زمان‌بندی و آپلود ────────────────
+      - name: Run 5-hour backup loop
         env:
           RESULTS_PASSWORD:   ${{ secrets.RESULTS_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -50,48 +60,77 @@ jobs:
           GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY:  ${{ github.repository }}
           GITHUB_ACTOR:       ${{ github.actor }}
-          WEEKLY_REPOS:       "now-test-repo"
+          WEEKLY_REPOS:       "now-test-repo,Test-repo,test-repository"
           FORCE_RUN:          ${{ github.event.inputs.force || 'false' }}
         run: |
+          END_TIME=$(( $(date +%s) + 5*3600 ))
+          echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
+
           FORCE_FLAG=""
           if [ "$FORCE_RUN" = "true" ]; then
             FORCE_FLAG="--force"
           fi
-          python backup_system.py run $FORCE_FLAG
 
-      # ─── commit فایل‌های metadata + دیتابیس فیلم ───────────────────────────────
-      - name: Commit metadata files
+          # اجرای اول بلافاصله
+          python backup_system.py run $FORCE_FLAG || true
+
+          # commit بعد از هر اجرا
+          git config user.name  "GitHub Actions – Backup Bot"
+          git config user.email "actions@github.com"
+
+          while [ $(date +%s) -lt $END_TIME ]; do
+            sleep 1800   # ۳۰ دقیقه صبر
+
+            # pull آخرین تغییرات (loop_backup ممکن است commit کرده باشد)
+            git pull --rebase origin main 2>/dev/null || true
+
+            # اجرای بک‌آپ
+            python backup_system.py run || true
+
+            # commit تغییرات
+            META_FILES=(
+              "auto_mapping.json"
+              "backup_ledger.json"
+              "schedule_times.json"
+              "integrity_pass.flag"
+              "master_structure.json"
+              "update_offset.json"
+              "startup_test_sent.flag"
+            )
+            for f in "${META_FILES[@]}"; do
+              [ -f "$f" ] && git add "$f"
+            done
+            git add -u analysis_results/ 2>/dev/null || true
+            git add -u movie_messages/   2>/dev/null || true
+
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: backup metadata $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              git push origin main || true
+            fi
+          done
+
+          echo "✅ حلقه ۵ ساعته تمام شد"
+
+      # ─── commit نهایی ─────────────────────────────────────────────────────────
+      - name: Final commit
         run: |
           git config user.name  "GitHub Actions – Backup Bot"
           git config user.email "actions@github.com"
 
-          META_FILES=(
-            "auto_mapping.json"
-            "backup_ledger.json"
-            "schedule_times.json"
-            "integrity_pass.flag"
-            "update_offset.json"
-            "startup_test_sent.flag"
-          )
-
-          for f in "${META_FILES[@]}"; do
+          for f in auto_mapping.json backup_ledger.json schedule_times.json \
+                   integrity_pass.flag master_structure.json update_offset.json \
+                   startup_test_sent.flag; do
             [ -f "$f" ] && git add "$f"
           done
-
-          # ثبت حذف فایل‌های analysis_results که پاک شده‌اند
           git add -u analysis_results/ 2>/dev/null || true
-
-          # ثبت تغییر فلگ used در دیتابیس فیلم/سریال
-          git add -u movie_messages/ 2>/dev/null || true
+          git add -u movie_messages/   2>/dev/null || true
 
           if ! git diff --cached --quiet; then
-            git commit -m "chore: backup metadata $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            git push
-          else
-            echo "تغییری برای commit وجود ندارد"
+            git commit -m "chore: final backup state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git push origin main || true
           fi
 
-      # ─── گزارش خطا (از backup_system.py استفاده می‌کند) ─────────────────────
+      # ─── گزارش خطا ───────────────────────────────────────────────────────────
       - name: Notify on failure
         if: failure()
         env:
@@ -99,8 +138,8 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python backup_system.py notify-failure
 
-      # ─── چرخه: فراخوانی loop_backup (همیشه، حتی در صورت شکست) ───────────────
-      - name: Trigger loop (always)
+      # ─── انتهای ۵ ساعت: loop_backup رو صدا بزن تا چرخه ادامه پیدا کنه ──────
+      - name: Trigger loop_backup (chain continues)
         if: always()
         env:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
