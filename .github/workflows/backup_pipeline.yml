@@ -1,1 +1,154 @@
+name: Backup Pipeline
 
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'اجرای اجباری بدون بررسی زمان'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+concurrency:
+  group: backup-pipeline
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      # ─── ۱. checkout مخزن اصلی ───────────────────────────────────────────────
+      - name: Checkout now-test-repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # ─── ۲. clone مخازن یکبار مصرف فقط اگر پرچم نداشته باشند ───────────────
+      # پرچم‌ها داخل مخزن اصلی در .onetime_flags/ نگهداری می‌شوند
+      - name: Clone one-time repos if not backed up
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          ACTOR="${{ github.actor }}"
+
+          # Test-repo: شامل data.enc و zips/
+          if [ -f ".onetime_flags/test_repo_data_enc.backup_done" ] && \
+             [ -f ".onetime_flags/test_repo_zips.backup_done" ]; then
+            echo "✅ Test-repo قبلاً بکاپ شده – clone نمی‌کنیم"
+          else
+            git clone --depth 1 \
+              "https://${ACTOR}:${GITHUB_TOKEN}@github.com/${OWNER}/Test-repo.git" \
+              Test-repo \
+              && echo "✅ Test-repo clone شد" \
+              || echo "⚠️ Test-repo کلون نشد"
+          fi
+
+          # test-repository: شامل data/news/ و encrypted_data/
+          if [ -f ".onetime_flags/data_news.backup_done" ] && \
+             [ -f ".onetime_flags/encrypted_data.backup_done" ] && \
+             [ -f ".onetime_flags/encrypted_data_src.backup_done" ]; then
+            echo "✅ test-repository قبلاً بکاپ شده – clone نمی‌کنیم"
+          else
+            git clone --depth 1 \
+              "https://${ACTOR}:${GITHUB_TOKEN}@github.com/${OWNER}/test-repository.git" \
+              test-repository-clone \
+              && echo "✅ test-repository clone شد" \
+              || echo "⚠️ test-repository کلون نشد"
+            # مسیرهای مورد نیاز را در جای درست قرار بده
+            [ -d "test-repository-clone/data/news" ] && \
+              mkdir -p data && cp -r test-repository-clone/data/news data/news || true
+            [ -d "test-repository-clone/encrypted_data" ] && \
+              cp -r test-repository-clone/encrypted_data . || true
+          fi
+
+      # ─── ۳. نصب Python + وابستگی‌ها ─────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install --upgrade pip requests cryptography
+
+      # ─── ۴. حلقه ۵ ساعته: همه کارها اینجاست ────────────────────────────────
+      - name: Run 5-hour backup loop
+        env:
+          RESULTS_PASSWORD:      ${{ secrets.RESULTS_PASSWORD }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAIN_CHANNEL_USERNAME: ${{ secrets.MAIN_CHANNEL_USERNAME }}
+          INTERMEDIATE_CHAT_ID:  ${{ secrets.INTERMEDIATE_CHAT_ID }}
+          GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:     ${{ github.repository }}
+          GITHUB_ACTOR:          ${{ github.actor }}
+          WEEKLY_REPOS:          "now-test-repo,Test-repo,test-repository"
+          FORCE_RUN:             ${{ github.event.inputs.force || 'false' }}
+        run: |
+          git config user.name  "GitHub Actions – Backup Bot"
+          git config user.email "actions@github.com"
+
+          FORCE_FLAG=""
+          [ "$FORCE_RUN" = "true" ] && FORCE_FLAG="--force"
+
+          END_TIME=$(( $(date +%s) + 5*3600 ))
+          echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
+
+          do_run_and_commit() {
+            git pull --rebase origin main 2>/dev/null || true
+
+            python backup_system.py run $FORCE_FLAG || true
+            FORCE_FLAG=""
+
+            for f in auto_mapping.json backup_ledger.json schedule_times.json \
+                     integrity_pass.flag master_structure.json update_offset.json \
+                     startup_test_sent.flag pending_links.json; do
+              [ -f "$f" ] && git add "$f"
+            done
+            git add -u analysis_results/ 2>/dev/null || true
+            git add -u movie_messages/   2>/dev/null || true
+            git add -u aggregated/       2>/dev/null || true
+            # پرچم‌های یکبار مصرف داخل مخزن اصلی
+            git add .onetime_flags/      2>/dev/null || true
+            # پرچم‌های aggregated/.backup_done
+            find aggregated/ -name ".backup_done" -exec git add {} \; 2>/dev/null || true
+
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: backup state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              git push origin main || true
+            fi
+          }
+
+          # اجرای اول بلافاصله
+          do_run_and_commit
+
+          # هر ۳۰ دقیقه تا پایان ۵ ساعت
+          while [ $(date +%s) -lt $END_TIME ]; do
+            sleep 1800
+            [ $(date +%s) -lt $END_TIME ] && do_run_and_commit
+          done
+
+          echo "✅ حلقه ۵ ساعته تمام شد"
+
+      # ─── ۵. گزارش خطا ────────────────────────────────────────────────────────
+      - name: Notify on failure
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python backup_system.py notify-failure
+
+      # ─── ۶. بعد از ۵ ساعت: loop_backup رو صدا بزن ───────────────────────────
+      - name: Trigger loop_backup
+        if: always()
+        env:
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python backup_system.py trigger-loop --workflow loop_backup.yml
