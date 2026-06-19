@@ -1,4 +1,4 @@
-name: Loop Backup
+name.  اتمام چرخه: Loop Backup
 
 on:
   workflow_dispatch:
