@@ -321,6 +321,18 @@ jobs:
             CHUNK_END="${{ github.event.inputs.chunk_end }}"
 
             echo "   📊 پردازش: $STRAT / $COIN / $INTERVAL / $MODEL"
+
+            # ============================================================
+            # ماژول deep پارامترهای متفاوتی دارد – فعلاً اسکیپ می‌شود
+            # ============================================================
+            if [ "$MODULE" == "deep" ]; then
+              echo "   ⚠️ ماژول deep پشتیبانی نمی‌شود – رد می‌شود."
+              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
+              continue
+            fi
+
             CMD="python modules/${MODULE}.py \
               --trades-json /tmp/prep/all_trades.json \
               --news-dir data/news \
