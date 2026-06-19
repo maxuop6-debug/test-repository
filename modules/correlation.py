@@ -50,7 +50,7 @@ ALL_FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 MIN_SAMPLE_GLOBAL_CONDITIONAL_DEFAULT = 50
 MIN_SAMPLE_LAG = 30
 LOO_LOWER_BOUND = 10
-LOO_UPPER_BOUND = 50  # سطح ۲: 10 <= n < 50 => LOO ; n >= 50 => fold-based
+LOO_UPPER_BOUND = 50
 MIN_R_THRESHOLD = 0.3
 GOLDEN_SCORE_THRESHOLD = 70
 
@@ -171,6 +171,7 @@ def apply_golden_prefilter(
 
     valid_strategies = set(golden_df.loc[golden_df[score_col] >= threshold, id_col])
     if "strategy_folder" not in df.columns:
+        logger.warning("ستون strategy_folder در داده‌های signatures وجود ندارد.")
         return df
 
     before = len(df)
@@ -194,11 +195,9 @@ def _parse_signature_string(sig: str) -> Dict[str, Any]:
     parts = sig.split("_") if isinstance(sig, str) else []
     parsed: Dict[str, Any] = {}
     if len(parts) >= 4:
-        # تلاش برای پیدا کردن position (pre/post) و distance_days (عدد) در میان قطعات
         for i, p in enumerate(parts):
             if p in ("pre", "post"):
                 parsed["position"] = p
-                # عدد بعدی معمولاً distance_days است
                 if i + 1 < len(parts) and parts[i + 1].isdigit():
                     parsed["distance_days"] = int(parts[i + 1])
                 break
@@ -231,7 +230,6 @@ def enrich_with_news_features(df: pd.DataFrame, news_df: Optional[pd.DataFrame])
     """فیلدهای موجود را اولویت بده؛ موارد缺失 را از news.pickle (در صورت وجود) پر کن."""
     df = df.copy()
 
-    # استخراج fallback از رشته signature برای position/distance_days
     if "signature" in df.columns:
         needs_position = "position" not in df.columns or df["position"].isna().any()
         needs_distance = "distance_days" not in df.columns or df["distance_days"].isna().any()
@@ -246,7 +244,6 @@ def enrich_with_news_features(df: pd.DataFrame, news_df: Optional[pd.DataFrame])
                     df["distance_days"], errors="coerce"
                 ).fillna(parsed.apply(lambda d: d.get("distance_days")))
 
-    # اگر فیلدهای عددی خبری缺失 هستند و news_df موجود است، از پنجره زمانی پر کن
     needed_cols = ["diff_avg", "diff_std", "event_count", "indicator_diversity"]
     missing_any = any(c not in df.columns or df[c].isna().any() for c in needed_cols)
 
@@ -351,7 +348,7 @@ def _fold_based_spearman(x: pd.Series, y: pd.Series) -> Tuple[float, float, int]
 
     sorted_idx = list(valid_idx)
     half = len(sorted_idx) // 2
-    test_idx = sorted_idx[half:]  # نیم دوم به عنوان تست
+    test_idx = sorted_idx[half:]
     if len(test_idx) < 3:
         test_idx = sorted_idx
 
@@ -665,15 +662,12 @@ def compute_conditional_correlations(
     for (coin, sig), group in df.groupby(["coin_composition", "signature"]):
         sample_count = len(group)
         if sample_count < LOO_LOWER_BOUND:
-            continue  # حذف امضاهای با داده ناکافی
+            continue
 
         method = _choose_method(sample_count)
         if method is None:
             continue
 
-        # اگر fold اما کمتر از آستانه نمونه global باشد، باز هم fold را قبول کن
-        # چون آستانه fold از کانفیگ min_sample_count کلی پیروی نمی‌کند؛ طبق اسپک
-        # سطح ۲ از ۱۰ تا ۵۰ LOO و >= ۵۰ fold (یا برابر min_sample_count کانفیگ‌شده).
         effective_full_threshold = max(min_sample_count, LOO_UPPER_BOUND)
         if method == "fold" and sample_count < effective_full_threshold:
             method = "loo" if sample_count >= LOO_LOWER_BOUND else None
@@ -724,8 +718,6 @@ def compute_lag_correlations(df: pd.DataFrame) -> List[Dict[str, Any]]:
         if len(group) < MIN_SAMPLE_LAG:
             continue
 
-        date_to_row = {row["period_start"]: i for i, row in group.iterrows()}
-
         for lag in LAGS_DAYS:
             for feature in ALL_FEATURES:
                 if feature not in group.columns:
@@ -736,16 +728,12 @@ def compute_lag_correlations(df: pd.DataFrame) -> List[Dict[str, Any]]:
 
                 for i, row in group.iterrows():
                     target_date = row["period_start"] - timedelta(days=lag)
-                    # نزدیک‌ترین تاریخ موجود را با تطابق دقیق یا نزدیک‌ترین قبلی پیدا کن
                     candidates = group[group["period_start"] <= target_date]
                     if candidates.empty:
                         continue
                     lag_row = candidates.iloc[-1]
 
                     feat_val = lag_row[feature]
-                    if feature in CATEGORICAL_FEATURES:
-                        # برای categorical، مقدار را بعداً encode می‌کنیم
-                        pass
                     lagged_feature_vals.append(feat_val)
                     current_return_vals.append(row["total_return"])
 
@@ -870,7 +858,7 @@ def print_summary_report(df: pd.DataFrame) -> None:
 
 
 # ==========================================================================
-# تابع اصلی
+# تابع اصلی (بازنویسی شده با مدیریت بهتر resume و chunking)
 # ==========================================================================
 
 def run_correlation_pipeline(
@@ -890,7 +878,7 @@ def run_correlation_pipeline(
     status_file = status_file or default_status_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    # گام ۱: بارگذاری
+    # ---- گام ۱: بارگذاری داده‌ها ----
     df = load_signatures(signatures_dir)
     if df.empty:
         raise ValueError("هیچ داده‌ای از signatures بارگذاری نشد؛ پایپ‌لاین متوقف شد.")
@@ -904,10 +892,10 @@ def run_correlation_pipeline(
     if df.empty:
         raise ValueError("پس از پیش‌فیلتر Golden، هیچ رکوردی باقی نماند.")
 
-    # گام ۲: استخراج/تکمیل ویژگی‌های خبری
+    # ---- گام ۲: استخراج/تکمیل ویژگی‌های خبری ----
     df = enrich_with_news_features(df, news_df)
 
-    # --- گام ۰: بارگذاری وضعیت قبلی (در صورت --resume) ---
+    # ---- گام ۰: بارگذاری وضعیت قبلی (در صورت --resume) ----
     prev_status = load_status(status_file) if resume else None
     processed_signatures: List[List[str]] = (
         prev_status.get("processed_signatures", []) if prev_status else []
@@ -917,15 +905,12 @@ def run_correlation_pipeline(
 
     all_results: List[Dict[str, Any]] = load_partial_results(output_dir) if prev_status else []
 
-    # --- گام ۳: لیست امضاهای منحصربه‌فرد ---
+    # ---- گام ۳: لیست امضاهای منحصربه‌فرد و تقسیم به چانک ----
     all_signatures = get_unique_signatures(df)
     total_signatures = len(all_signatures)
     remaining_signatures = [s for s in all_signatures if s not in processed_set]
 
-    # --- گام ۴: تقسیم به قطعات ---
     chunks = chunk_list(remaining_signatures, chunk_size)
-    total_chunks = (len(processed_signatures) // chunk_size if chunk_size else 0) + len(chunks)
-    # total_chunks اینجا برآوردی است؛ مقدار دقیق پس از محاسبه با چانک‌های قبلی به‌روزرسانی می‌شود.
     total_chunks = start_chunk_index + len(chunks)
 
     logger.info(
@@ -933,7 +918,7 @@ def run_correlation_pipeline(
         total_signatures, len(processed_set), len(remaining_signatures), len(chunks),
     )
 
-    # --- سطح ۱ (Global): فقط یک بار در کل اجرا، اگر هنوز محاسبه نشده ---
+    # ---- سطح ۱ (Global): فقط یک بار در کل اجرا ----
     already_has_global = any(r.get("level") == "global" for r in all_results)
     if not already_has_global:
         if check_interrupt_flag(output_dir, interrupt_flag_path):
@@ -945,7 +930,7 @@ def run_correlation_pipeline(
         all_results.extend(global_results)
         save_partial_results(output_dir, all_results)
 
-    # --- سطح ۴ (Lag): فقط یک بار در کل اجرا، اگر هنوز محاسبه نشده ---
+    # ---- سطح ۴ (Lag): فقط یک بار در کل اجرا ----
     already_has_lag = any(r.get("level") == "lag" for r in all_results)
     if not already_has_lag:
         if check_interrupt_flag(output_dir, interrupt_flag_path):
@@ -957,7 +942,7 @@ def run_correlation_pipeline(
         all_results.extend(lag_results)
         save_partial_results(output_dir, all_results)
 
-    # --- گام ۵: پردازش هر قطعه (سطح ۲ - conditional) ---
+    # ---- سطح ۲ (Conditional): پردازش چانک به چانک ----
     interrupted = False
     current_chunk_index = start_chunk_index - 1
     for offset, chunk in enumerate(chunks):
@@ -965,7 +950,7 @@ def run_correlation_pipeline(
 
         if check_interrupt_flag(output_dir, interrupt_flag_path):
             interrupted = True
-            current_chunk_index -= 1  # این قطعه پردازش نشد
+            current_chunk_index -= 1  # این چانک پردازش نشد
             break
 
         chunk_results = compute_conditional_correlations_for_signatures(df, chunk, min_sample_count)
@@ -984,10 +969,9 @@ def run_correlation_pipeline(
     if interrupted:
         save_status(status_file, processed_signatures, current_chunk_index, total_chunks, "interrupted", chunk_size)
         logger.warning("اجرا به دلیل وجود interrupt.flag متوقف شد (graceful). برای ادامه از --resume استفاده کنید.")
-        # نتایج موقت قبلاً ذخیره شده‌اند؛ خروج با کد ۰ در main انجام می‌شود.
         return ""
 
-    # --- گام ۶: پس از اتمام همه قطعات ---
+    # ---- پس از اتمام همه چانک‌ها ----
     output_df = build_output_dataframe(all_results, version_schema)
     output_path = save_output(output_df, output_dir)
 
