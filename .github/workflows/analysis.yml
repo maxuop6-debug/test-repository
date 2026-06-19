@@ -21,7 +21,7 @@ on:
         default: ''
 
 concurrency:
-  group: analysis-and-aggregation
+  group: analysis-runner
   cancel-in-progress: false
 
 jobs:
