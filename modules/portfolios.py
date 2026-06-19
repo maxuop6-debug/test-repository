@@ -1,228 +1,513 @@
 #!/usr/bin/env python3
-# portfolios.py - یافتن سبدهای مکمل بهینه با حداکثر نرخ بقا
-import os
-import sys
-import json
-import csv
+"""
+portfolios.py - ماژول دوم: سبدهای مکمل (Complementary Portfolios)
+
+این ماژول با استفاده از خروجی ماژول Golden (golden_scores.parquet) و داده‌های
+خام per-period (signatures/*.jsonl)، ترکیب‌های بهینه ۲ و ۳ استراتژیِ هم‌گروه
+(coin_composition, signature) را پیدا می‌کند: ترکیب‌هایی که بیشترین نرخ بقا
+(Survival Rate) و جبران‌سازی متقابل (Compensation) و کمترین همبستگی شرطی را
+دارند. خروجی نهایی در portfolios.parquet ذخیره می‌شود.
+
+نیازمندی‌ها:
+    pip install pandas numpy scipy pyarrow
+
+اجرا:
+    python portfolios.py \
+        --signatures-dir /tmp/signatures \
+        --golden-scores /tmp/golden_scores.parquet \
+        --strategies-json /tmp/strategies_metadata.json \
+        --version-schema /tmp/version_schema.json \
+        --output-dir /tmp/portfolios_output \
+        --top-n 15
+
+نکته درباره‌ی «تاریخ انتشار شاخص غالب» (Step 3 سند):
+    رکوردهای signatures که در سند نمونه آمده‌اند فاقد فیلد صریح release_date
+    هستند. این پیاده‌سازی، release_date را از روی period_start/period_end و
+    موقعیت (pre/post) استخراج‌شده از رشته‌ی signature تخمین می‌زند:
+    اگر position == 'post' آنگاه release_date ≈ period_start (دوره از لحظه‌ی
+    انتشار شروع می‌شود)، و اگر position == 'pre' آنگاه release_date ≈
+    period_end (دوره تا لحظه‌ی انتشار ادامه دارد). اگر در داده‌ی ورودی فیلد
+    صریح 'position' یا 'release_date' وجود داشته باشد، آن فیلد به‌جای این
+    استنتاج استفاده می‌شود (اولویت با داده‌ی صریح است).
+"""
+
+from __future__ import annotations
+
 import argparse
 import itertools
-from collections import defaultdict
+import json
+import logging
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
 
-# ================================ توابع کمکی ================================
-def extract_start_date_from_period(period_str):
-    import re
-    match = re.search(r'(\d{4}-\d{2}-\d{2})_', period_str)
-    return match.group(1) if match else None
+import numpy as np
+import pandas as pd
+from scipy.stats import spearmanr
 
-def load_all_strategies_results(results_base_dir, returns_cache_json):
-    """
-    بارگذاری همه فایل‌های نتایج از تمام استراتژی‌ها (گروه‌های 1 و 2)
-    و ترکیب با کش بازده.
-    خروجی: لیستی از دیکشنری‌ها شامل اطلاعات هر فایل (folder_name, group, period_name, special_return, real_return)
-    """
-    all_results = []
-    returns_cache = {}
-    if os.path.exists(returns_cache_json):
-        with open(returns_cache_json, "r", encoding="utf-8") as f:
-            returns_cache = json.load(f)
-    for group in ["1", "2"]:
-        group_path = os.path.join(results_base_dir, group)
-        if not os.path.isdir(group_path):
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+log = logging.getLogger("portfolios")
+
+# -----------------------------------------------------------------------------
+# ثابت‌ها (مطابق سند، بخش‌های ۲ تا ۹)
+# -----------------------------------------------------------------------------
+GOLDEN_SCORE_THRESHOLD = 70.0        # گام ۲
+MIN_PAIR_OVERLAP = 10                # نکته ۸.۳ — حداقل دوره مشترک برای یک جفت
+MIN_PORTFOLIO_SAMPLES = 10           # گام ۵ — حداقل sample_count سبد
+CORR_PERCENTILE_THRESHOLD = 25       # گام ۴ — صدک آستانه همبستگی
+PORTFOLIO_SIZES = (2, 3)             # گام ۵ / نکته ۸.۴ — فقط سبدهای ۲ و ۳ تایی
+ABS_MIN_SURVIVAL_RATE = 50.0         # گام ۸
+ABS_MIN_COMPENSATION_RATIO = 1.0     # گام ۸
+ABS_MIN_AVG_RETURN = 0.0             # گام ۸
+SCORE_WEIGHTS = {                    # گام ۹
+    "survival": 0.35,
+    "compensation": 0.25,
+    "correlation": 0.25,
+    "return": 0.15,
+}
+DEFAULT_VERSION_ID = "v1.0.0"        # نکته ۸.۵
+
+# تشخیص best-effort موقعیت (pre/post) از رشته‌ی signature، چون indicator/model
+# ممکن است خودشان حاوی "_" باشند و split ساده را غیرقابل‌اعتماد می‌کند.
+_POSITION_RE = re.compile(r"_(pre|post)_(\d+)_")
+
+
+# -----------------------------------------------------------------------------
+# گام ۱: بارگذاری داده‌ها
+# -----------------------------------------------------------------------------
+
+def load_signatures(signatures_dir: Path) -> pd.DataFrame:
+    """تمام فایل‌های .jsonl را از دایرکتوری signatures بارگذاری و یکی می‌کند."""
+    files = sorted(signatures_dir.glob("*.jsonl"))
+    if not files:
+        raise FileNotFoundError(f"هیچ فایل .jsonl در {signatures_dir} پیدا نشد.")
+
+    frames = []
+    for fp in files:
+        log.info("در حال خواندن %s", fp.name)
+        try:
+            df = pd.read_json(fp, lines=True)
+        except ValueError as exc:
+            log.warning("رد شدن از %s به دلیل خطای پارس JSON: %s", fp.name, exc)
             continue
-        for folder in os.listdir(group_path):
-            folder_path = os.path.join(group_path, folder)
-            if not os.path.isdir(folder_path):
-                continue
-            for fname in os.listdir(folder_path):
-                if not fname.endswith(".json") or fname == "1.json":
-                    continue
-                file_path = os.path.join(folder_path, fname)
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    info = data.get("اطلاعات_فایل", {}) or {}
-                    period_name = info.get("نام_فایل", "")
-                    key = f"{group}_{folder}_{fname}"
-                    if key in returns_cache:
-                        special_ret = returns_cache[key].get("special", 0)
-                        real_ret = returns_cache[key].get("real", 0)
-                    else:
-                        real_ret = float(info.get("بازدهی_کل", "0%").replace("%", ""))
-                        special_ret = real_ret
-                    all_results.append({
-                        "folder_name": folder,
-                        "group": group,
-                        "file_name": fname,
-                        "period_name": period_name,
-                        "real_return": real_ret,
-                        "special_rounded_return": special_ret,
-                    })
-                except:
-                    continue
-    return all_results
-
-def compute_strategy_monthly_matrix(all_results):
-    """
-    برای هر استراتژی (folder + group) یک دیکشنری از بازده ماهانه بر اساس year_month می‌سازد.
-    خروجی: strategy_monthly = { strategy_key: { year_month: return } }
-    همچنین لیست همه ماه‌های موجود را برمی‌گرداند.
-    """
-    strategy_monthly = defaultdict(dict)
-    all_months = set()
-    for r in all_results:
-        start = extract_start_date_from_period(r["period_name"])
-        if not start:
+        if df.empty:
             continue
-        ym = start[:7]   # YYYY-MM
-        all_months.add(ym)
-        key = f"{r['folder_name']} (گروه {r['group']})"
-        ret = r["special_rounded_return"] if r["group"] == "1" else r["real_return"]
-        strategy_monthly[key][ym] = ret
-    all_months = sorted(all_months)
-    return strategy_monthly, all_months
+        df["__source_file"] = fp.name
+        frames.append(df)
 
-def build_binary_matrix(strategy_monthly, all_months):
-    """
-    ساخت ماتریس باینری (سودده = 1، ضررده = 0) برای هر استراتژی.
-    خروجی: dict strategy -> list of 0/1 به ترتیب months.
-    """
-    matrix = {}
-    for strat, monthly_data in strategy_monthly.items():
-        vec = []
-        for ym in all_months:
-            ret = monthly_data.get(ym)
-            if ret is None:
-                vec.append(None)   # داده ناموجود
-            else:
-                vec.append(1 if ret > 0 else 0)
-        matrix[strat] = vec
-    return matrix, all_months
+    if not frames:
+        raise ValueError("هیچ رکورد معتبری در فایل‌های signatures پیدا نشد.")
 
-def calculate_survival_rate(combo_strategies, matrix, all_months):
+    data = pd.concat(frames, ignore_index=True)
+
+    required_cols = {
+        "coin_composition", "signature", "strategy_folder",
+        "period_start", "period_end", "total_return",
+    }
+    missing = required_cols - set(data.columns)
+    if missing:
+        raise ValueError(f"ستون‌های ضروری در داده‌های signatures یافت نشد: {missing}")
+
+    data["strategy_id"] = data["strategy_folder"].astype(str)
+    data["period_start"] = pd.to_datetime(data["period_start"])
+    data["period_end"] = pd.to_datetime(data["period_end"])
+    data["total_return"] = pd.to_numeric(data["total_return"], errors="coerce")
+    data = data.dropna(subset=["total_return"])
+
+    log.info("مجموع رکوردهای signatures بارگذاری‌شده: %d", len(data))
+    return data
+
+
+def load_golden_scores(path: Path) -> pd.DataFrame:
+    df = pd.read_parquet(path)
+    required_cols = {"strategy_id", "coin_composition", "signature", "score"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"ستون‌های ضروری در golden_scores یافت نشد: {missing}")
+    df["strategy_id"] = df["strategy_id"].astype(str)
+    return df
+
+
+def load_strategies_metadata(path: Path) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    if isinstance(raw, list):
+        return {str(item.get("folder")): item for item in raw}
+    if isinstance(raw, dict):
+        return raw
+    raise ValueError("فرمت strategies_metadata.json ناشناخته است.")
+
+
+def load_version_schema(path: Optional[Path]) -> str:
+    """در صورت وجود version_schema.json، version_id را از آن می‌خواند."""
+    if path is None or not path.exists():
+        return DEFAULT_VERSION_ID
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        for key in ("version_id", "version", "id"):
+            if key in raw:
+                return str(raw[key])
+        log.warning("کلید version_id در version_schema.json یافت نشد — استفاده از پیش‌فرض.")
+        return DEFAULT_VERSION_ID
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("خطا در خواندن version_schema.json: %s — استفاده از پیش‌فرض.", exc)
+        return DEFAULT_VERSION_ID
+
+
+# -----------------------------------------------------------------------------
+# گام ۲: پیش‌فیلتر استراتژی‌ها با Golden
+# -----------------------------------------------------------------------------
+
+def prefilter_candidates(signatures: pd.DataFrame, golden: pd.DataFrame) -> pd.DataFrame:
+    """فقط استراتژی‌هایی با امتیاز Golden >= آستانه را نگه می‌دارد."""
+    qualified = golden[golden["score"] >= GOLDEN_SCORE_THRESHOLD][
+        ["strategy_id", "coin_composition", "signature"]
+    ].drop_duplicates()
+
+    merged = signatures.merge(
+        qualified,
+        on=["strategy_id", "coin_composition", "signature"],
+        how="inner",
+    )
+    log.info(
+        "پیش‌فیلتر Golden (score >= %s): %d/%d رکورد signatures واجد شرایط شدند",
+        GOLDEN_SCORE_THRESHOLD, len(merged), len(signatures),
+    )
+    return merged
+
+
+# -----------------------------------------------------------------------------
+# گام ۳: همبستگی شرطی (Conditional Correlation) — تشخیص اشتراک زمانی
+# -----------------------------------------------------------------------------
+
+def parse_position(signature: str) -> Optional[str]:
+    """استخراج best-effort موقعیت 'pre'/'post' از رشته‌ی signature."""
+    m = _POSITION_RE.search(signature)
+    return m.group(1) if m else None
+
+
+def compute_release_date(row: pd.Series) -> pd.Timestamp:
     """
-    محاسبه نرخ بقا برای ترکیبی از استراتژی‌ها (حداقل یکی سودده باشد).
-    همچنین میانگین بازده ماهانه را محاسبه می‌کند.
-    بازگشت: (survival_rate, avg_return, valid_months)
+    تخمین تاریخ انتشار شاخص غالب برای یک رکورد دوره (نگاه کنید به یادداشت
+    بالای فایل برای توضیح کامل فرض این تابع).
     """
-    survival_count = 0
-    total_return_sum = 0.0
-    valid_months = 0
-    for month_idx in range(len(all_months)):
-        # بررسی آیا همه استراتژی‌های ترکیب داده دارند؟
-        values = []
-        returns = []
-        for strat in combo_strategies:
-            v = matrix[strat][month_idx]
-            if v is None:
-                break
-            values.append(v)
-            # بازده واقعی (برای میانگین) - باید از دیکشنری اصلی استخراج کنیم
-            # برای سادگی فرض می‌کنیم بازده را از همان جا داریم ولی فعلاً صرفاً باینری
-            # برای محاسبه دقیق میانگین بازده، نیاز به نگهداری بازده واقعی داریم.
-        if len(values) != len(combo_strategies):
+    if "release_date" in row and pd.notna(row["release_date"]):
+        return pd.to_datetime(row["release_date"])
+
+    position = row["position"] if "position" in row and pd.notna(row.get("position")) else None
+    if position is None:
+        position = parse_position(row["signature"])
+
+    if position == "pre":
+        return row["period_end"]
+    # پیش‌فرض برای 'post' یا نامشخص: ابتدای دوره
+    return row["period_start"]
+
+
+def build_release_dates(group: pd.DataFrame) -> pd.DataFrame:
+    group = group.copy()
+    group["release_date"] = group.apply(compute_release_date, axis=1)
+    return group
+
+
+def compute_correlation_matrix(group: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    برای یک گروه (coin_composition, signature) ماتریس همبستگی شرطی Spearman
+    بین استراتژی‌ها را محاسبه می‌کند.
+
+    خروجی:
+        corr_df: ستون‌های [a, b, correlation, n] — یک ردیف به ازای هر جفت
+                 استراتژی با حداقل MIN_PAIR_OVERLAP دوره‌ی مشترک.
+        valid_periods: دیکشنری {strategy_id: set(release_date های معتبر)}
+    """
+    # اگر یک استراتژی در یک release_date چند رکورد داشته باشد (مثلاً به‌خاطر
+    # وجود چند فایل منبع)، میانگین آن‌ها در نظر گرفته می‌شود.
+    pivot = group.pivot_table(
+        index="release_date",
+        columns="strategy_id",
+        values="total_return",
+        aggfunc="mean",
+    )
+
+    valid_periods = {strat: set(pivot[strat].dropna().index) for strat in pivot.columns}
+
+    strategies = list(pivot.columns)
+    rows = []
+    for a, b in itertools.combinations(strategies, 2):
+        shared = valid_periods[a] & valid_periods[b]
+        if len(shared) < MIN_PAIR_OVERLAP:
             continue
-        valid_months += 1
-        if any(v == 1 for v in values):
-            survival_count += 1
-        # میانگین بازده: اگر بخواهیم واقعی را محاسبه کنیم باید بازده عددی را هم ذخیره کنیم.
-        # فعلاً ساده می‌گیریم.
-    survival_rate = (survival_count / valid_months) * 100 if valid_months > 0 else 0
-    return survival_rate, 0.0, valid_months
-
-def calculate_avg_return(combo_strategies, strategy_monthly, all_months):
-    """محاسبه میانگین بازده ماهانه ترکیب (میانگین ساده بازده‌ها)"""
-    total_return = 0.0
-    valid_months = 0
-    for ym in all_months:
-        returns = []
-        for strat in combo_strategies:
-            ret = strategy_monthly[strat].get(ym)
-            if ret is None:
-                break
-            returns.append(ret)
-        if len(returns) != len(combo_strategies):
+        shared_sorted = sorted(shared)
+        series_a = pivot.loc[shared_sorted, a]
+        series_b = pivot.loc[shared_sorted, b]
+        if series_a.nunique() < 2 or series_b.nunique() < 2:
+            continue  # spearman نیازمند واریانس غیرصفر است
+        corr, _ = spearmanr(series_a, series_b)
+        if np.isnan(corr):
             continue
-        valid_months += 1
-        total_return += sum(returns) / len(returns)
-    avg_return = total_return / valid_months if valid_months > 0 else 0
-    return avg_return
+        rows.append({"a": a, "b": b, "correlation": float(corr), "n": len(shared)})
 
-def find_optimal_portfolios(strategy_monthly, matrix, all_months, top_n=15):
+    corr_df = pd.DataFrame(rows, columns=["a", "b", "correlation", "n"])
+    return corr_df, valid_periods
+
+
+# -----------------------------------------------------------------------------
+# گام ۴: تعیین آستانه همبستگی (داده‌محور) و فیلتر جفت‌ها
+# -----------------------------------------------------------------------------
+
+def filter_pairs_by_correlation(corr_df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
+    """جفت‌هایی با همبستگی بیشتر از صدک ۲۵ام (در همان گروه) را حذف می‌کند."""
+    if corr_df.empty:
+        return corr_df, float("nan")
+    threshold = float(np.percentile(corr_df["correlation"], CORR_PERCENTILE_THRESHOLD))
+    kept = corr_df[corr_df["correlation"] <= threshold].copy()
+    return kept, threshold
+
+
+# -----------------------------------------------------------------------------
+# گام ۷: معیارهای سبد
+# -----------------------------------------------------------------------------
+
+def compensation_ratio(returns: pd.DataFrame) -> float:
     """
-    بررسی تمام ترکیب‌های ۲، ۳ و ۴ استراتژی و یافتن بهترین‌ها بر اساس نرخ بقا و سپس میانگین بازده.
+    returns: دوره (release_date) x عضو، فقط دوره‌های مشترک سبد (sample_count).
+
+    سود جبران‌کننده = سود یک عضو در دوره‌ای که حداقل یک عضو دیگر در همان دوره
+    ضرر کرده است. نسبت = مجموع این سودها / مجموع زیان‌های جبران‌شده.
     """
-    strategies = list(strategy_monthly.keys())
-    if len(strategies) < 2:
+    gains, losses = 0.0, 0.0
+    for _, row in returns.iterrows():
+        losers = row[row < 0]
+        gainers = row[row > 0]
+        if len(losers) > 0 and len(gainers) > 0:
+            losses += float(-losers.sum())
+            gains += float(gainers.sum())
+    if losses == 0:
+        return 1.0
+    return gains / losses
+
+
+def survival_rate(returns: pd.DataFrame) -> float:
+    period_sums = returns.sum(axis=1)
+    if len(period_sums) == 0:
+        return 0.0
+    return float((period_sums > 0).sum()) / float(len(period_sums)) * 100.0
+
+
+def avg_return(returns: pd.DataFrame) -> float:
+    period_sums = returns.sum(axis=1)
+    if len(period_sums) == 0:
+        return 0.0
+    return float(period_sums.mean())
+
+
+def avg_correlation(members: tuple, corr_lookup: dict) -> float:
+    pairs = list(itertools.combinations(sorted(members), 2))
+    vals = [corr_lookup[p] for p in pairs if p in corr_lookup]
+    if not vals:
+        return float("nan")
+    return float(np.mean(vals))
+
+
+# -----------------------------------------------------------------------------
+# گام ۹: نرمال‌سازی Percentile Rank
+# -----------------------------------------------------------------------------
+
+def percentile_rank(series: pd.Series) -> pd.Series:
+    """رتبه‌بندی صدکی بین ۰ تا ۱۰۰ (مقدار بزرگ‌تر => رتبه بالاتر)."""
+    if len(series) <= 1:
+        return pd.Series(100.0, index=series.index)
+    return series.rank(pct=True) * 100.0
+
+
+# -----------------------------------------------------------------------------
+# گام‌های ۵-۹ روی یک گروه (coin_composition, signature)
+# -----------------------------------------------------------------------------
+
+def evaluate_group(
+    coin_composition: str,
+    signature: str,
+    group: pd.DataFrame,
+    top_n: int,
+) -> list[dict]:
+    group = build_release_dates(group)
+
+    corr_df, valid_periods = compute_correlation_matrix(group)
+    if corr_df.empty:
         return []
-    results = []
-    total_combos = 0
-    for size in [2, 3, 4]:
-        for combo in itertools.combinations(strategies, size):
-            total_combos += 1
-            # نرخ بقا
-            survival = calculate_survival_rate(combo, matrix, all_months)[0]
-            # میانگین بازده
-            avg_ret = calculate_avg_return(combo, strategy_monthly, all_months)
-            results.append({
-                "combo": combo,
-                "size": size,
-                "survival_rate": survival,
-                "avg_return": avg_ret,
+
+    kept_pairs, _threshold = filter_pairs_by_correlation(corr_df)
+    if kept_pairs.empty:
+        return []
+
+    corr_lookup = {(r.a, r.b): r.correlation for r in kept_pairs.itertuples()}
+    candidate_strategies = sorted(set(kept_pairs["a"]) | set(kept_pairs["b"]))
+    if len(candidate_strategies) < 2:
+        return []
+
+    pivot = group.pivot_table(
+        index="release_date", columns="strategy_id", values="total_return", aggfunc="mean"
+    )
+
+    portfolios = []
+    for size in PORTFOLIO_SIZES:
+        for members in itertools.combinations(candidate_strategies, size):
+            pairs = list(itertools.combinations(sorted(members), 2))
+            # همه‌ی جفت‌های سبد باید از فیلتر همبستگی عبور کرده باشند (گام ۴ و ۵)
+            if not all(p in corr_lookup for p in pairs):
+                continue
+
+            shared_periods = set.intersection(*(valid_periods[m] for m in members))
+            if len(shared_periods) < MIN_PORTFOLIO_SAMPLES:  # گام ۵ و ۶
+                continue
+
+            returns = pivot.loc[sorted(shared_periods), list(members)]
+
+            sr = survival_rate(returns)
+            comp = compensation_ratio(returns)
+            ar = avg_return(returns)
+            ac = avg_correlation(members, corr_lookup)
+
+            # گام ۸: فیلتر مطلق قبل از رنکینگ
+            if sr < ABS_MIN_SURVIVAL_RATE:
+                continue
+            if comp < ABS_MIN_COMPENSATION_RATIO:
+                continue
+            if ar < ABS_MIN_AVG_RETURN:
+                continue
+
+            portfolios.append({
+                "coin_composition": coin_composition,
+                "signature": signature,
+                "members": list(members),
+                "survival_rate": sr,
+                "compensation_ratio": comp,
+                "avg_return": ar,
+                "avg_correlation": ac,
+                "sample_count": len(shared_periods),
             })
-    # مرتب‌سازی بر اساس نرخ بقا (نزولی) سپس میانگین بازده (نزولی)
-    results.sort(key=lambda x: (-x["survival_rate"], -x["avg_return"]))
-    return results[:top_n]
 
-def save_portfolios_csv(portfolios, output_path):
-    """ذخیره سبدهای برتر در فایل CSV"""
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["رتبه", "تعداد_استراتژی", "اعضای_سبد", "نرخ_بقا_%", "میانگین_بازدهی_ماهانه_%"])
-        for i, p in enumerate(portfolios, 1):
-            writer.writerow([
-                i,
-                p["size"],
-                " | ".join(p["combo"]),
-                f"{p['survival_rate']:.1f}",
-                f"{p['avg_return']:.3f}"
-            ])
-    print(f"✅ {len(portfolios)} سبد مکمل برتر در {output_path} ذخیره شد.")
-
-# ================================ اصلی ================================
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--results-base", required=True, help="مسیر پایه نتایج بکتست (شامل 1 و 2)")
-    parser.add_argument("--returns-cache", required=True, help="مسیر کش بازده (JSON)")
-    parser.add_argument("--output-dir", required=True, help="پوشه خروجی نهایی")
-    parser.add_argument("--top", type=int, default=15, help="تعداد سبدهای برتر")
-    args = parser.parse_args()
-
-    print("🔄 بارگذاری نتایج استراتژی‌ها...")
-    all_results = load_all_strategies_results(args.results_base, args.returns_cache)
-    print(f"تعداد کل فایل‌ها: {len(all_results)}")
-
-    print("🔄 ساخت ماتریس ماهانه...")
-    strategy_monthly, all_months = compute_strategy_monthly_matrix(all_results)
-    print(f"تعداد استراتژی‌های فعال: {len(strategy_monthly)}")
-    print(f"تعداد ماه‌های مشترک: {len(all_months)}")
-
-    if len(strategy_monthly) < 2:
-        print("❌ حداقل دو استراتژی برای تحلیل مکمل نیاز است.")
-        sys.exit(1)
-
-    matrix, _ = build_binary_matrix(strategy_monthly, all_months)
-
-    print("🔄 جستجوی سبدهای بهینه...")
-    portfolios = find_optimal_portfolios(strategy_monthly, matrix, all_months, top_n=args.top)
     if not portfolios:
-        print("⚠️ هیچ سبدی یافت نشد.")
-        sys.exit(0)
+        return []
 
-    out_path = os.path.join(args.output_dir, "سبدهای_مکمل_برتر.csv")
-    save_portfolios_csv(portfolios, out_path)
+    pf_df = pd.DataFrame(portfolios)
 
-    print("✅ ماژول portfolios پایان یافت.")
+    # گام ۹: نرمال‌سازی و امتیازدهی
+    pf_df["comp_norm"] = percentile_rank(pf_df["compensation_ratio"])
+    pf_df["return_norm"] = percentile_rank(pf_df["avg_return"])
+    pf_df["corr_norm"] = percentile_rank(-pf_df["avg_correlation"])  # کمتر=بهتر
+
+    pf_df["score"] = (
+        SCORE_WEIGHTS["survival"] * pf_df["survival_rate"]
+        + SCORE_WEIGHTS["compensation"] * pf_df["comp_norm"]
+        + SCORE_WEIGHTS["correlation"] * pf_df["corr_norm"]
+        + SCORE_WEIGHTS["return"] * pf_df["return_norm"]
+    )
+
+    pf_df = pf_df.sort_values("score", ascending=False).head(top_n)
+    pf_df = pf_df.drop(columns=["comp_norm", "corr_norm", "return_norm", "sample_count"])
+
+    return pf_df.to_dict("records")
+
+
+# -----------------------------------------------------------------------------
+# خط‌لوله اصلی
+# -----------------------------------------------------------------------------
+
+def run(
+    signatures_dir: Path,
+    golden_scores_path: Path,
+    strategies_json_path: Path,
+    version_schema_path: Optional[Path],
+    output_dir: Path,
+    top_n: int,
+) -> Path:
+    signatures = load_signatures(signatures_dir)
+    golden = load_golden_scores(golden_scores_path)
+    _strategies_meta = load_strategies_metadata(strategies_json_path)  # رزرو برای اعتبارسنجی/توسعه آینده
+    version_id = load_version_schema(version_schema_path)
+
+    candidates = prefilter_candidates(signatures, golden)
+    if candidates.empty:
+        log.warning("هیچ استراتژی واجد شرایط (Golden score >= %s) یافت نشد.", GOLDEN_SCORE_THRESHOLD)
+
+    all_portfolios: list[dict] = []
+    groups = candidates.groupby(["coin_composition", "signature"])
+    log.info("تعداد گروه‌های (coin_composition, signature): %d", groups.ngroups)
+
+    for (coin_composition, signature), group in groups:
+        if group["strategy_id"].nunique() < 2:
+            continue
+        all_portfolios.extend(evaluate_group(coin_composition, signature, group, top_n))
+
+    columns = [
+        "coin_composition", "signature", "members", "survival_rate",
+        "compensation_ratio", "avg_return", "avg_correlation", "score",
+        "version_id", "created_at",
+    ]
+
+    if not all_portfolios:
+        log.warning("هیچ سبدی شرایط لازم را احراز نکرد. فایل خروجی خالی ساخته می‌شود.")
+        out_df = pd.DataFrame(columns=columns)
+    else:
+        out_df = pd.DataFrame(all_portfolios)
+        out_df["version_id"] = version_id
+        out_df["created_at"] = datetime.now(timezone.utc)
+        out_df = out_df[columns]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "portfolios.parquet"
+    out_df.to_parquet(output_path, index=False)
+    log.info("ذخیره شد: %s (%d سبد)", output_path, len(out_df))
+
+    return output_path
+
+
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
+
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="ماژول سبدهای مکمل (Portfolios) — ساخت و امتیازدهی سبدهای ۲ و ۳ استراتژی",
+    )
+    parser.add_argument("--signatures-dir", required=True, type=Path,
+                         help="مسیر پوشه‌ی فایل‌های .jsonl signatures")
+    parser.add_argument("--golden-scores", required=True, type=Path,
+                         help="مسیر فایل golden_scores.parquet")
+    parser.add_argument("--strategies-json", required=True, type=Path,
+                         help="مسیر فایل strategies_metadata.json")
+    parser.add_argument("--version-schema", required=False, type=Path, default=None,
+                         help="مسیر فایل version_schema.json (اختیاری)")
+    parser.add_argument("--output-dir", required=True, type=Path,
+                         help="مسیر پوشه‌ی خروجی برای ذخیره‌ی portfolios.parquet")
+    parser.add_argument("--top-n", required=False, type=int, default=15,
+                         help="تعداد سبدهای برتر برای هر امضا (پیش‌فرض ۱۵)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    try:
+        run(
+            signatures_dir=args.signatures_dir,
+            golden_scores_path=args.golden_scores,
+            strategies_json_path=args.strategies_json,
+            version_schema_path=args.version_schema,
+            output_dir=args.output_dir,
+            top_n=args.top_n,
+        )
+    except Exception:
+        log.exception("اجرای ماژول Portfolios با خطا مواجه شد.")
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
