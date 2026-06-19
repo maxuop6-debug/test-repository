@@ -298,6 +298,59 @@ jobs:
           python-version: '3.10'
       - run: pip install pandas requests
 
+      - name: 3b. دانلود داده‌های قیمت OHLC از مخزن دوم (اختیاری)
+        id: ohlc_fetch
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          OHLC_REPO: ${{ secrets.OHLC_REPO }}
+        run: |
+          set +e
+          if [ -z "$OHLC_REPO" ]; then
+            echo "ℹ️ OHLC_REPO تنظیم نشده — صرف‌نظر از دانلود داده‌های قیمت."
+            exit 0
+          fi
+
+          mkdir -p /tmp/ohlc
+          LIST_JSON=$(gh api "repos/$OHLC_REPO/contents/data/All_Coins_Combined" 2>/tmp/ohlc_list_error.log)
+          if [ -z "$LIST_JSON" ] || ! echo "$LIST_JSON" | jq empty 2>/dev/null; then
+            echo "⚠️ دریافت لیست فایل‌های OHLC ناموفق بود — ادامه بدون داده‌های قیمت."
+            echo "$(cat /tmp/ohlc_list_error.log)"
+            exit 0
+          fi
+
+          CSV_COUNT=$(echo "$LIST_JSON" | jq '[.[] | select(.name | endswith(".csv"))] | length')
+          if [ "$CSV_COUNT" -eq 0 ]; then
+            echo "⚠️ هیچ فایل CSV در data/All_Coins_Combined یافت نشد — ادامه بدون داده‌های قیمت."
+            exit 0
+          fi
+
+          DOWNLOAD_FAILED=0
+          echo "$LIST_JSON" | jq -c '.[] | select(.name | endswith(".csv"))' | while read -r ITEM; do
+            FNAME=$(echo "$ITEM" | jq -r '.name')
+            FPATH=$(echo "$ITEM" | jq -r '.path')
+            CONTENT=$(gh api "repos/$OHLC_REPO/contents/$FPATH" -q '.content' 2>/tmp/ohlc_item_error.log)
+            if [ -z "$CONTENT" ]; then
+              echo "   ⚠️ دانلود $FNAME ناموفق بود."
+              echo "1" >> /tmp/ohlc_fail_flag
+              continue
+            fi
+            echo "$CONTENT" | tr -d '\n' | base64 -d > "/tmp/ohlc/$FNAME" 2>/tmp/ohlc_decode_error.log
+            if [ $? -ne 0 ] || [ ! -s "/tmp/ohlc/$FNAME" ]; then
+              echo "   ⚠️ دیکد $FNAME ناموفق بود."
+              echo "1" >> /tmp/ohlc_fail_flag
+              rm -f "/tmp/ohlc/$FNAME"
+            fi
+          done
+
+          DOWNLOADED_COUNT=$(find /tmp/ohlc -name '*.csv' 2>/dev/null | wc -l)
+          if [ "$DOWNLOADED_COUNT" -eq 0 ]; then
+            echo "⚠️ هیچ فایل OHLC با موفقیت دانلود نشد — ادامه بدون داده‌های قیمت."
+            exit 0
+          fi
+
+          echo "✅ تعداد $DOWNLOADED_COUNT فایل OHLC دانلود شد."
+          echo "OHLC_DIR=/tmp/ohlc" >> $GITHUB_ENV
+
       - name: 4. اجرای ماژول تحلیلی و استخراج امضا
         id: execute_batch
         run: |
@@ -370,15 +423,19 @@ jobs:
                 [ "$MODULE" == "combo_monthly" ] && EXTRACT_SCRIPT="modules/extract_signatures_monthly.py"
                 SIG_OUT="/tmp/results/signatures/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.jsonl"
                 mkdir -p "$(dirname $SIG_OUT)"
-                python $EXTRACT_SCRIPT \
+                EXTRACT_CMD="python $EXTRACT_SCRIPT \
                   --trades-json /tmp/prep/all_trades.json \
                   --news-dir data/news \
-                  --interval "$INTERVAL" \
-                  --strategy-folder "$STRAT" \
-                  --coin "$COIN" \
-                  --model "$MODEL" \
+                  --interval $INTERVAL \
+                  --strategy-folder $STRAT \
+                  --coin $COIN \
+                  --model $MODEL \
                   --min-sample-count 5 \
-                  --out "$SIG_OUT" 2>&1 | tee -a /tmp/item_output.log
+                  --out $SIG_OUT"
+                if [ -n "$OHLC_DIR" ]; then
+                  EXTRACT_CMD="$EXTRACT_CMD --ohlc-dir $OHLC_DIR"
+                fi
+                eval $EXTRACT_CMD 2>&1 | tee -a /tmp/item_output.log
                 [ $? -eq 0 ] && echo "      ✅ امضا استخراج شد." || echo "      ⚠️ استخراج امضا ناموفق بود (ادامه)."
               fi
 
