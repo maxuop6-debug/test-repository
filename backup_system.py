@@ -1093,13 +1093,9 @@ def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
         movie_entry["photo_file_id"] = photo_id
     movie_file = MOVIES_DIR / f"movie_{uid}.json"
     movie_file.write_text(json.dumps(movie_entry, ensure_ascii=False, indent=2), encoding="utf-8")
-    log.info(f"💾 پیام در movie_messages ذخیره شد: {movie_file.name}")
-
-    if photo_id:
-        _tg_send_photo(bot_token, main_chat_id, photo_id, msg)
-    else:
-        _tg_send_message(bot_token, main_chat_id, msg)
-    log.info(f"✅ پیام فورواردی پردازش و ارسال شد (uid={uid})")
+    log.info(f"💾 پیام در movie_messages ذخیره شد و برای ارسال بعد از بک‌آپ موفق صف شد: {movie_file.name}")
+    # ⚠️ عمداً اینجا چیزی به main_chat_id ارسال نمی‌شود.
+    # ارسال واقعی فقط در send_movie_messages_after_backup (بعد از هر بک‌آپ موفق، ۱ یا ۲ پیام رندوم) انجام می‌شود.
 
 
 def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
