@@ -46,12 +46,14 @@ jobs:
     outputs:
       matrix_items: ${{ steps.fetch_batch.outputs.matrix_items }}
       empty: ${{ steps.fetch_batch.outputs.empty }}
-      total_chunks: ${{ steps.fetch_batch.outputs.chunk_count }}
+      total_combos: ${{ steps.fetch_batch.outputs.total_combos }}
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: دانلود all_combinations.json و تقسیم به قطعات (با خروجی فقط اندیس)
+
+      # تنها تماس API گیت‌هاب در کل مرحله‌ی batch -- فقط همین یک‌بار، نه به ازای هر job
+      - name: دانلود all_combinations.json و تقسیم به فایل‌های چانک محلی
         id: fetch_batch
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -60,10 +62,8 @@ jobs:
           unalias curl 2>/dev/null || true
           CURL="/usr/bin/curl"
           echo "========== [DEBUG] شروع generate-matrix =========="
-          echo "THIRD_REPO: $THIRD_REPO"
-          mkdir -p /tmp/batch
+          mkdir -p /tmp/chunks
 
-          echo "[DEBUG] دریافت محتوای خام all_combinations.json با curl..."
           TIMESTAMP=${{ github.run_id }}
           HTTP_CODE=$($CURL -s -o /tmp/all_combinations.json -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
@@ -71,92 +71,57 @@ jobs:
             "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$TIMESTAMP")
 
           echo "[DEBUG] HTTP status code: $HTTP_CODE"
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ فایل all_combinations.json یافت نشد (کد $HTTP_CODE)"
+          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/all_combinations.json ] || ! jq empty /tmp/all_combinations.json 2>/dev/null; then
+            echo "❌ فایل all_combinations.json نامعتبر یا یافت نشد (کد $HTTP_CODE)"
             echo "empty=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          FILE_SIZE=$(stat -c%s /tmp/all_combinations.json)
-          echo "[DEBUG] حجم فایل: $FILE_SIZE bytes"
-
-          if [ ! -s /tmp/all_combinations.json ]; then
-            echo "❌ فایل خالی است"
-            echo "empty=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          if ! jq empty /tmp/all_combinations.json 2>/dev/null; then
-            echo "❌ JSON نامعتبر"
-            echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            echo "total_combos=0" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           TOTAL_COMBOS=$(jq length /tmp/all_combinations.json)
           echo "[DEBUG] تعداد کل ترکیب‌ها: $TOTAL_COMBOS"
+          echo "total_combos=$TOTAL_COMBOS" >> $GITHUB_OUTPUT
 
-          # chunk_size=80 -> max 237 job برای 18900 آیتم (زیر 256)
+          # chunk_size=80 -> حداکثر 102 job برای 8100 آیتم (زیر سقف 256 ماتریس)
           CHUNK_SIZE=80
           CHUNK_COUNT=$(( (TOTAL_COMBOS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-          echo "[DEBUG] تعداد قطعات $CHUNK_SIZE تایی: $CHUNK_COUNT"
-
           if [ "$CHUNK_COUNT" -gt 256 ]; then
-            echo "⚠️ تعداد chunks ($CHUNK_COUNT) از 256 بیشتر است! chunk_size را افزایش می‌دهیم..."
             CHUNK_SIZE=$(( (TOTAL_COMBOS + 255) / 256 ))
             CHUNK_COUNT=$(( (TOTAL_COMBOS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-            echo "[DEBUG] chunk_size جدید: $CHUNK_SIZE، تعداد chunks: $CHUNK_COUNT"
           fi
+          echo "[DEBUG] chunk_size=$CHUNK_SIZE چانک_count=$CHUNK_COUNT"
 
-          # ذخیره chunk_size برای استفاده در job batch
-          echo "$CHUNK_SIZE" > /tmp/batch/chunk_size.txt
-          echo "$CHUNK_COUNT" > /tmp/batch/chunk_count.txt
-
-          if [ "$CHUNK_COUNT" -gt 0 ]; then
-            INDICES="["
-            for ((i=0; i<$CHUNK_COUNT; i++)); do
-              if [ $i -gt 0 ]; then
-                INDICES+=", "
-              fi
-              INDICES+="$i"
-            done
-            INDICES+="]"
-            echo "DEBUG: INDICES = $INDICES"
-            echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
-            echo "empty=false" >> $GITHUB_OUTPUT
-          else
+          if [ "$TOTAL_COMBOS" -eq 0 ]; then
             echo "empty=true" >> $GITHUB_OUTPUT
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            echo "total_combos=0" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-          echo "chunk_count=$CHUNK_COUNT" >> $GITHUB_OUTPUT
-          echo "chunk_size=$CHUNK_SIZE" >> $GITHUB_OUTPUT
-
-          # آپلود chunk_size و chunk_count به مخزن سوم
-          CHUNK_META="{\"chunk_size\": $CHUNK_SIZE, \"total_chunks\": $CHUNK_COUNT, \"total_combos\": $TOTAL_COMBOS}"
-          echo "$CHUNK_META" > /tmp/batch/chunk_meta.json
-          EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/chunk_meta.json" -q '.sha' 2>/dev/null || echo "")
-          if [ -n "$EXISTING_SHA" ]; then
-            gh api "repos/$THIRD_REPO/contents/chunk_meta.json" \
-              -X PUT \
-              -F message="update chunk meta" \
-              -F content="$(base64 -w0 < /tmp/batch/chunk_meta.json)" \
-              -F sha="$EXISTING_SHA" \
-              -F branch="main" 2>/dev/null || true
-          else
-            gh api "repos/$THIRD_REPO/contents/chunk_meta.json" \
-              -X PUT \
-              -F message="create chunk meta" \
-              -F content="$(base64 -w0 < /tmp/batch/chunk_meta.json)" \
-              -F branch="main" 2>/dev/null || true
-          fi
+          INDICES="["
+          for ((i=0; i<CHUNK_COUNT; i++)); do
+            START=$((i * CHUNK_SIZE))
+            END=$((START + CHUNK_SIZE))
+            jq ".[$START:$END]" /tmp/all_combinations.json > /tmp/chunks/chunk_${i}.json
+            if [ $i -gt 0 ]; then INDICES+=", "; fi
+            INDICES+="$i"
+          done
+          INDICES+="]"
+          echo "[DEBUG] INDICES=$INDICES"
+          echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
+          echo "empty=false" >> $GITHUB_OUTPUT
           echo "========== [DEBUG] پایان fetch_batch =========="
 
-      - name: تنظیم خروجی ماتریس
-        id: set-matrix
-        run: |
-          echo "========== [DEBUG] تنظیم خروجی ماتریس =========="
-          CHUNK_COUNT=$(cat /tmp/batch/chunk_count.txt 2>/dev/null || echo "0")
-          echo "[DEBUG] تعداد chunks: $CHUNK_COUNT"
+      # به‌جای آپلود chunk_meta.json به مخزن سوم: همه چانک‌ها در یک artifact واحد
+      # (artifact = Actions storage داخلی، هیچ تماسی با api.github.com ندارد)
+      - name: آپلود چانک‌ها به‌صورت یک artifact مشترک برای job های batch
+        if: steps.fetch_batch.outputs.empty == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: combo-chunks-${{ github.run_id }}
+          path: /tmp/chunks/
+          retention-days: 1
 
   batch:
     needs: [generate-matrix]
@@ -173,38 +138,20 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: دانلود all_combinations.json و استخراج chunk مربوطه
+      # جایگزین تماس API قبلی: دیگر هیچ curl/gh api به مخزن سوم برای ترکیب‌ها لازم نیست
+      - name: دانلود artifact مشترک چانک‌ها
+        uses: actions/download-artifact@v4
+        with:
+          name: combo-chunks-${{ github.run_id }}
+          path: /tmp/chunks
+
+      - name: انتخاب فایل chunk مخصوص این job
         id: chunk_params
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          CURL="/usr/bin/curl"
           CHUNK_INDEX=${{ matrix.chunk_index }}
-
-          # دریافت chunk_meta
-          CHUNK_META=$(gh api "repos/$THIRD_REPO/contents/chunk_meta.json" \
-            -H "Accept: application/vnd.github.v3.raw" 2>/dev/null)
-          CHUNK_SIZE=$(echo "$CHUNK_META" | jq -r '.chunk_size // 80')
-          TOTAL_COMBOS=$(echo "$CHUNK_META" | jq -r '.total_combos // 0')
-          echo "[DEBUG] chunk_index=$CHUNK_INDEX, chunk_size=$CHUNK_SIZE, total_combos=$TOTAL_COMBOS"
-
-          # دانلود all_combinations.json
-          $CURL -s -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=${{ github.run_id }}" \
-            -o /tmp/all_combinations.json
-
-          # استخراج chunk مربوطه
-          START=$((CHUNK_INDEX * CHUNK_SIZE))
-          END=$((START + CHUNK_SIZE))
-          if [ "$END" -gt "$TOTAL_COMBOS" ]; then
-            END=$TOTAL_COMBOS
-          fi
-          jq ".[$START:$END]" /tmp/all_combinations.json > /tmp/chunk.json
+          cp /tmp/chunks/chunk_${CHUNK_INDEX}.json /tmp/chunk.json
           CHUNK_LENGTH=$(jq length /tmp/chunk.json)
-          echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
-
+          echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است (بدون تماس API)."
           echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
 
       # ================================================================
@@ -555,52 +502,52 @@ jobs:
             fi
           done
 
+  # cleanup اصلاح‌شده: به‌جای عدد هاردکد 7500، دقیقاً همان TOTAL_COMBOS که در
+  # generate-matrix محاسبه و چانک‌بندی شد حذف می‌شود -- فقط یک GET و یک PUT، نه per-job.
+  # آیتم‌های جدیدی که هم‌زمان به انتهای all_combinations.json اضافه می‌شوند دست‌نخورده می‌مانند.
   cleanup:
     runs-on: ubuntu-latest
-    needs: [batch]
-    if: ${{ always() && needs.batch.result == 'success' && inputs.analysis_module == 'fixed_batch' }}
+    needs: [generate-matrix, batch]
+    if: ${{ always() && needs.batch.result == 'success' && inputs.analysis_module == 'fixed_batch' && needs.generate-matrix.outputs.empty == 'false' }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: حذف ۷۵۰۰ پرانتز اول از all_combinations.json (با sha)
+      - name: حذف دقیق TOTAL_COMBOS آیتم پردازش‌شده از all_combinations.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          unalias -a 2>/dev/null || true
           CURL="/usr/bin/curl"
-          WGET="/usr/bin/wget"
-          JQ="/usr/bin/jq"
-          BASE64="/usr/bin/base64"
+          PROCESSED_COUNT="${{ needs.generate-matrix.outputs.total_combos }}"
+          echo "[DEBUG] تعداد آیتم‌هایی که این run پردازش کرد: $PROCESSED_COUNT"
 
-          echo "LOG1: شروع مرحله cleanup"
-          TIMESTAMP=${{ github.run_id }}
+          # دانلود نسخه‌ی فعلی فایل (ممکن است آیتم‌های جدیدی هم‌زمان به انتهایش اضافه شده باشند)
+          $CURL -s -o /tmp/current.json \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=${{ github.run_id }}"
+          if [ ! -s /tmp/current.json ]; then
+            echo "ERROR: دریافت فایل ناموفق"; exit 1
+          fi
 
-          $WGET -q -O /tmp/current.json --header="Authorization: token $GH_TOKEN" \
-            --header="Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$TIMESTAMP"
-          if [ $? -ne 0 ] || [ ! -s /tmp/current.json ]; then
-            echo "ERROR: دریافت فایل ناموفق"
-            exit 1
+          CURRENT_TOTAL=$(jq length /tmp/current.json)
+          if [ "$CURRENT_TOTAL" -lt "$PROCESSED_COUNT" ]; then
+            echo "⚠️ فایل فعلی ($CURRENT_TOTAL آیتم) کوچک‌تر از تعداد پردازش‌شده ($PROCESSED_COUNT) است."
+            echo "   احتمالاً فایل بین‌راه دستکاری شده — برای ایمنی از کل CURRENT_TOTAL استفاده می‌شود."
+            PROCESSED_COUNT=$CURRENT_TOTAL
           fi
 
           SHA=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json" | $JQ -r '.sha')
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json" | jq -r '.sha')
           if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
-            echo "ERROR: دریافت SHA ناموفق"
-            exit 1
+            echo "ERROR: دریافت SHA ناموفق"; exit 1
           fi
 
-          # حذف 7500 آیتم اول (250 job * 30 ترکیب = 7500)
-          BATCH_SIZE=7500
-          NEW_CONTENT=$(cat /tmp/current.json | $JQ ".[$BATCH_SIZE:]")
-          echo "$NEW_CONTENT" > /tmp/new_content.json
-          $BASE64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
+          # حذف فقط همان تعداد دقیقی که پردازش شد (نه عدد ثابت)
+          jq ".[$PROCESSED_COUNT:]" /tmp/current.json > /tmp/new_content.json
+          base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
 
           cat > /tmp/payload.json <<EOF
           {
-            "message": "remove processed batch",
+            "message": "remove $PROCESSED_COUNT processed combinations",
             "content": "$(cat /tmp/new_content_base64.txt)",
             "sha": "$SHA",
             "branch": "main"
@@ -614,11 +561,9 @@ jobs:
             "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json")
 
           if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
-            echo "✅ $BATCH_SIZE پرانتز اول از all_combinations.json حذف شدند."
+            echo "✅ $PROCESSED_COUNT آیتم پردازش‌شده با موفقیت حذف شدند."
           else
-            echo "ERROR: آپلود ناموفق"
-            cat /tmp/upload_response.txt
-            exit 1
+            echo "ERROR: آپلود ناموفق ($HTTP_CODE)"; cat /tmp/upload_response.txt; exit 1
           fi
 
           rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt
