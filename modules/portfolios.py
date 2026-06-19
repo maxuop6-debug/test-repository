@@ -18,7 +18,9 @@ portfolios.py - ماژول دوم: سبدهای مکمل (Complementary Portfoli
         --strategies-json /tmp/strategies_metadata.json \
         --version-schema /tmp/version_schema.json \
         --output-dir /tmp/portfolios_output \
-        --top-n 15
+        --top-n 15 \
+        --status-file /tmp/portfolios_status.json \
+        --resume
 
 نکته درباره‌ی «تاریخ انتشار شاخص غالب» (Step 3 سند):
     رکوردهای signatures که در سند نمونه آمده‌اند فاقد فیلد صریح release_date
@@ -37,6 +39,7 @@ import argparse
 import itertools
 import json
 import logging
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -54,27 +57,123 @@ logging.basicConfig(
 log = logging.getLogger("portfolios")
 
 # -----------------------------------------------------------------------------
-# ثابت‌ها (مطابق سند، بخش‌های ۲ تا ۹)
+# ثابت‌ها
 # -----------------------------------------------------------------------------
-GOLDEN_SCORE_THRESHOLD = 70.0        # گام ۲
-MIN_PAIR_OVERLAP = 10                # نکته ۸.۳ — حداقل دوره مشترک برای یک جفت
-MIN_PORTFOLIO_SAMPLES = 10           # گام ۵ — حداقل sample_count سبد
-CORR_PERCENTILE_THRESHOLD = 25       # گام ۴ — صدک آستانه همبستگی
-PORTFOLIO_SIZES = (2, 3)             # گام ۵ / نکته ۸.۴ — فقط سبدهای ۲ و ۳ تایی
-ABS_MIN_SURVIVAL_RATE = 50.0         # گام ۸
-ABS_MIN_COMPENSATION_RATIO = 1.0     # گام ۸
-ABS_MIN_AVG_RETURN = 0.0             # گام ۸
-SCORE_WEIGHTS = {                    # گام ۹
+GOLDEN_SCORE_THRESHOLD = 70.0
+MIN_PAIR_OVERLAP = 10
+MIN_PORTFOLIO_SAMPLES = 10
+CORR_PERCENTILE_THRESHOLD = 25
+PORTFOLIO_SIZES = (2, 3)
+ABS_MIN_SURVIVAL_RATE = 50.0
+ABS_MIN_COMPENSATION_RATIO = 1.0
+ABS_MIN_AVG_RETURN = 0.0
+SCORE_WEIGHTS = {
     "survival": 0.35,
     "compensation": 0.25,
     "correlation": 0.25,
     "return": 0.15,
 }
-DEFAULT_VERSION_ID = "v1.0.0"        # نکته ۸.۵
+DEFAULT_VERSION_ID = "v1.0.0"
+DEFAULT_CHUNK_SIZE = 20
 
-# تشخیص best-effort موقعیت (pre/post) از رشته‌ی signature، چون indicator/model
-# ممکن است خودشان حاوی "_" باشند و split ساده را غیرقابل‌اعتماد می‌کند.
 _POSITION_RE = re.compile(r"_(pre|post)_(\d+)_")
+
+# -----------------------------------------------------------------------------
+# بررسی کتابخانه‌ی Parquet
+# -----------------------------------------------------------------------------
+try:
+    import pyarrow  # noqa: F401
+    _HAS_PARQUET = True
+except ImportError:
+    try:
+        import fastparquet  # noqa: F401
+        _HAS_PARQUET = True
+    except ImportError:
+        _HAS_PARQUET = False
+        log.warning(
+            "pyarrow یا fastparquet نصب نیستند — خروجی به‌صورت CSV ذخیره خواهد شد."
+        )
+
+
+def _save_dataframe(df: pd.DataFrame, path: Path) -> Path:
+    """ذخیره DataFrame با Parquet یا CSV به‌عنوان fallback."""
+    if _HAS_PARQUET:
+        out = path.with_suffix(".parquet")
+        df.to_parquet(out, index=False)
+    else:
+        out = path.with_suffix(".csv")
+        df.to_csv(out, index=False)
+        log.warning("خروجی به‌صورت CSV ذخیره شد (جایگزین Parquet): %s", out)
+    return out
+
+
+def _read_parquet_or_csv(path: Path) -> pd.DataFrame:
+    """خواندن فایل Parquet یا CSV."""
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path)
+    elif path.suffix == ".csv":
+        return pd.read_csv(path)
+    # تلاش با هر دو پسوند
+    for suffix in (".parquet", ".csv"):
+        candidate = path.with_suffix(suffix)
+        if candidate.exists():
+            return _read_parquet_or_csv(candidate)
+    raise FileNotFoundError(f"فایل {path} پیدا نشد.")
+
+
+# -----------------------------------------------------------------------------
+# مدیریت وضعیت (Status Management)
+# -----------------------------------------------------------------------------
+
+def _default_status() -> dict:
+    return {
+        "processed_signatures": [],
+        "last_chunk_index": -1,
+        "total_chunks": 0,
+        "chunk_size": DEFAULT_CHUNK_SIZE,
+        "status": "running",
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def load_status(status_file: Path) -> dict:
+    """بارگذاری فایل وضعیت در صورت وجود، در غیر این صورت وضعیت پیش‌فرض."""
+    if status_file.exists():
+        try:
+            with open(status_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            log.info("وضعیت قبلی بارگذاری شد از %s (آخرین chunk: %d)",
+                     status_file, data.get("last_chunk_index", -1))
+            return data
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("خطا در خواندن فایل وضعیت: %s — از ابتدا شروع می‌شود.", exc)
+    return _default_status()
+
+
+def save_status(status_file: Path, status: dict) -> None:
+    """ذخیره وضعیت در فایل JSON."""
+    status["last_updated"] = datetime.now(timezone.utc).isoformat()
+    try:
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = status_file.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False, indent=2)
+        tmp.replace(status_file)
+    except OSError as exc:
+        log.error("خطا در ذخیره فایل وضعیت: %s", exc)
+
+
+def check_interrupt_flag(output_dir: Path) -> bool:
+    """بررسی وجود فایل interrupt.flag."""
+    candidates = [
+        output_dir / "interrupt.flag",
+        Path("interrupt.flag"),
+    ]
+    for p in candidates:
+        if p.exists():
+            log.warning("فایل interrupt.flag شناسایی شد: %s", p)
+            return True
+    return False
 
 
 # -----------------------------------------------------------------------------
@@ -124,7 +223,7 @@ def load_signatures(signatures_dir: Path) -> pd.DataFrame:
 
 
 def load_golden_scores(path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(path)
+    df = _read_parquet_or_csv(path)
     required_cols = {"strategy_id", "coin_composition", "signature", "score"}
     missing = required_cols - set(df.columns)
     if missing:
@@ -144,7 +243,6 @@ def load_strategies_metadata(path: Path) -> dict:
 
 
 def load_version_schema(path: Optional[Path]) -> str:
-    """در صورت وجود version_schema.json، version_id را از آن می‌خواند."""
     if path is None or not path.exists():
         return DEFAULT_VERSION_ID
     try:
@@ -183,7 +281,7 @@ def prefilter_candidates(signatures: pd.DataFrame, golden: pd.DataFrame) -> pd.D
 
 
 # -----------------------------------------------------------------------------
-# گام ۳: همبستگی شرطی (Conditional Correlation) — تشخیص اشتراک زمانی
+# گام ۳: همبستگی شرطی — تشخیص اشتراک زمانی
 # -----------------------------------------------------------------------------
 
 def parse_position(signature: str) -> Optional[str]:
@@ -193,10 +291,7 @@ def parse_position(signature: str) -> Optional[str]:
 
 
 def compute_release_date(row: pd.Series) -> pd.Timestamp:
-    """
-    تخمین تاریخ انتشار شاخص غالب برای یک رکورد دوره (نگاه کنید به یادداشت
-    بالای فایل برای توضیح کامل فرض این تابع).
-    """
+    """تخمین تاریخ انتشار شاخص غالب برای یک رکورد دوره."""
     if "release_date" in row and pd.notna(row["release_date"]):
         return pd.to_datetime(row["release_date"])
 
@@ -206,7 +301,6 @@ def compute_release_date(row: pd.Series) -> pd.Timestamp:
 
     if position == "pre":
         return row["period_end"]
-    # پیش‌فرض برای 'post' یا نامشخص: ابتدای دوره
     return row["period_start"]
 
 
@@ -218,16 +312,12 @@ def build_release_dates(group: pd.DataFrame) -> pd.DataFrame:
 
 def compute_correlation_matrix(group: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """
-    برای یک گروه (coin_composition, signature) ماتریس همبستگی شرطی Spearman
-    بین استراتژی‌ها را محاسبه می‌کند.
+    محاسبه ماتریس همبستگی شرطی Spearman برای یک گروه (coin_composition, signature).
 
     خروجی:
-        corr_df: ستون‌های [a, b, correlation, n] — یک ردیف به ازای هر جفت
-                 استراتژی با حداقل MIN_PAIR_OVERLAP دوره‌ی مشترک.
+        corr_df: ستون‌های [a, b, correlation, n]
         valid_periods: دیکشنری {strategy_id: set(release_date های معتبر)}
     """
-    # اگر یک استراتژی در یک release_date چند رکورد داشته باشد (مثلاً به‌خاطر
-    # وجود چند فایل منبع)، میانگین آن‌ها در نظر گرفته می‌شود.
     pivot = group.pivot_table(
         index="release_date",
         columns="strategy_id",
@@ -247,7 +337,7 @@ def compute_correlation_matrix(group: pd.DataFrame) -> tuple[pd.DataFrame, dict]
         series_a = pivot.loc[shared_sorted, a]
         series_b = pivot.loc[shared_sorted, b]
         if series_a.nunique() < 2 or series_b.nunique() < 2:
-            continue  # spearman نیازمند واریانس غیرصفر است
+            continue
         corr, _ = spearmanr(series_a, series_b)
         if np.isnan(corr):
             continue
@@ -262,7 +352,7 @@ def compute_correlation_matrix(group: pd.DataFrame) -> tuple[pd.DataFrame, dict]
 # -----------------------------------------------------------------------------
 
 def filter_pairs_by_correlation(corr_df: pd.DataFrame) -> tuple[pd.DataFrame, float]:
-    """جفت‌هایی با همبستگی بیشتر از صدک ۲۵ام (در همان گروه) را حذف می‌کند."""
+    """جفت‌هایی با همبستگی بیشتر از صدک ۲۵ام را حذف می‌کند."""
     if corr_df.empty:
         return corr_df, float("nan")
     threshold = float(np.percentile(corr_df["correlation"], CORR_PERCENTILE_THRESHOLD))
@@ -276,10 +366,8 @@ def filter_pairs_by_correlation(corr_df: pd.DataFrame) -> tuple[pd.DataFrame, fl
 
 def compensation_ratio(returns: pd.DataFrame) -> float:
     """
-    returns: دوره (release_date) x عضو، فقط دوره‌های مشترک سبد (sample_count).
-
-    سود جبران‌کننده = سود یک عضو در دوره‌ای که حداقل یک عضو دیگر در همان دوره
-    ضرر کرده است. نسبت = مجموع این سودها / مجموع زیان‌های جبران‌شده.
+    نرخ جبران‌سازی: مجموع سودهای جبران‌کننده / مجموع زیان‌های جبران‌شده.
+    اگر مخرج ۰ باشد = ۱.
     """
     gains, losses = 0.0, 0.0
     for _, row in returns.iterrows():
@@ -294,6 +382,7 @@ def compensation_ratio(returns: pd.DataFrame) -> float:
 
 
 def survival_rate(returns: pd.DataFrame) -> float:
+    """درصد دوره‌هایی که مجموع بازده سبد مثبت بوده است."""
     period_sums = returns.sum(axis=1)
     if len(period_sums) == 0:
         return 0.0
@@ -301,6 +390,7 @@ def survival_rate(returns: pd.DataFrame) -> float:
 
 
 def avg_return(returns: pd.DataFrame) -> float:
+    """میانگین مجموع بازده سبد در دوره‌های معتبر."""
     period_sums = returns.sum(axis=1)
     if len(period_sums) == 0:
         return 0.0
@@ -308,6 +398,7 @@ def avg_return(returns: pd.DataFrame) -> float:
 
 
 def avg_correlation(members: tuple, corr_lookup: dict) -> float:
+    """میانگین همبستگی جفتی بین اعضای سبد."""
     pairs = list(itertools.combinations(sorted(members), 2))
     vals = [corr_lookup[p] for p in pairs if p in corr_lookup]
     if not vals:
@@ -336,6 +427,7 @@ def evaluate_group(
     group: pd.DataFrame,
     top_n: int,
 ) -> list[dict]:
+    """ارزیابی و رتبه‌بندی سبدهای ۲ و ۳ استراتژی برای یک گروه."""
     group = build_release_dates(group)
 
     corr_df, valid_periods = compute_correlation_matrix(group)
@@ -359,12 +451,11 @@ def evaluate_group(
     for size in PORTFOLIO_SIZES:
         for members in itertools.combinations(candidate_strategies, size):
             pairs = list(itertools.combinations(sorted(members), 2))
-            # همه‌ی جفت‌های سبد باید از فیلتر همبستگی عبور کرده باشند (گام ۴ و ۵)
             if not all(p in corr_lookup for p in pairs):
                 continue
 
             shared_periods = set.intersection(*(valid_periods[m] for m in members))
-            if len(shared_periods) < MIN_PORTFOLIO_SAMPLES:  # گام ۵ و ۶
+            if len(shared_periods) < MIN_PORTFOLIO_SAMPLES:
                 continue
 
             returns = pivot.loc[sorted(shared_periods), list(members)]
@@ -417,7 +508,7 @@ def evaluate_group(
 
 
 # -----------------------------------------------------------------------------
-# خط‌لوله اصلی
+# خط‌لوله اصلی با پشتیبانی از chunk-based / resume / interrupt
 # -----------------------------------------------------------------------------
 
 def run(
@@ -427,30 +518,151 @@ def run(
     version_schema_path: Optional[Path],
     output_dir: Path,
     top_n: int,
+    status_file: Path,
+    resume: bool,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- گام ۰: بارگذاری وضعیت قبلی ----
+    status = load_status(status_file) if resume else _default_status()
+    processed_set: set[tuple] = {
+        tuple(sig) if isinstance(sig, list) else sig
+        for sig in status.get("processed_signatures", [])
+    }
+
+    if resume and processed_set:
+        log.info("ادامه از آخرین وقفه — %d امضا قبلاً پردازش شده‌اند.", len(processed_set))
+
+    # ---- گام ۱: بارگذاری داده‌ها ----
     signatures = load_signatures(signatures_dir)
     golden = load_golden_scores(golden_scores_path)
-    _strategies_meta = load_strategies_metadata(strategies_json_path)  # رزرو برای اعتبارسنجی/توسعه آینده
+    _strategies_meta = load_strategies_metadata(strategies_json_path)
     version_id = load_version_schema(version_schema_path)
 
+    # ---- گام ۲: پیش‌فیلتر ----
     candidates = prefilter_candidates(signatures, golden)
     if candidates.empty:
-        log.warning("هیچ استراتژی واجد شرایط (Golden score >= %s) یافت نشد.", GOLDEN_SCORE_THRESHOLD)
+        log.warning(
+            "هیچ استراتژی واجد شرایط (Golden score >= %s) یافت نشد.",
+            GOLDEN_SCORE_THRESHOLD
+        )
 
+    # ---- گام ۳: استخراج لیست امضاهای منحصربه‌فرد ----
+    all_sig_keys: list[tuple[str, str]] = (
+        candidates
+        .groupby(["coin_composition", "signature"])
+        .size()
+        .reset_index()[["coin_composition", "signature"]]
+        .apply(tuple, axis=1)
+        .tolist()
+    )
+    log.info("تعداد کل گروه‌های (coin_composition, signature): %d", len(all_sig_keys))
+
+    # حذف امضاهای قبلاً پردازش‌شده در حالت resume
+    pending_keys = [k for k in all_sig_keys if k not in processed_set]
+    log.info("تعداد گروه‌های باقی‌مانده برای پردازش: %d", len(pending_keys))
+
+    # ---- گام ۴: تقسیم به chunk ----
+    chunks = [
+        pending_keys[i: i + chunk_size]
+        for i in range(0, len(pending_keys), chunk_size)
+    ]
+    total_chunks = len(chunks)
+
+    # start_chunk_index: اگر resume فعال باشد و قبلاً chunk‌هایی پردازش شده باشند
+    start_chunk_index = 0
+    if resume and status.get("last_chunk_index", -1) >= 0:
+        # چون pending_keys قبلاً پردازش‌شده‌ها را حذف کرده، از ۰ شروع می‌کنیم
+        start_chunk_index = 0
+
+    status["total_chunks"] = total_chunks + (status.get("last_chunk_index", -1) + 1 if resume else 0)
+    status["chunk_size"] = chunk_size
+    status["status"] = "running"
+    save_status(status_file, status)
+
+    # بارگذاری نتایج قبلی از فایل موقت اگر resume فعال است
+    temp_results_path = output_dir / "_portfolios_temp.parquet"
     all_portfolios: list[dict] = []
-    groups = candidates.groupby(["coin_composition", "signature"])
-    log.info("تعداد گروه‌های (coin_composition, signature): %d", groups.ngroups)
+    if resume and temp_results_path.exists():
+        try:
+            prev_df = _read_parquet_or_csv(temp_results_path)
+            all_portfolios = prev_df.to_dict("records")
+            log.info("نتایج قبلی بارگذاری شد: %d سبد", len(all_portfolios))
+        except Exception as exc:
+            log.warning("خطا در بارگذاری نتایج موقت قبلی: %s — از صفر شروع می‌شود.", exc)
 
-    for (coin_composition, signature), group in groups:
-        if group["strategy_id"].nunique() < 2:
-            continue
-        all_portfolios.extend(evaluate_group(coin_composition, signature, group, top_n))
+    interrupted = False
 
+    # ---- گام ۵: پردازش chunk به chunk ----
+    groups_df = candidates.groupby(["coin_composition", "signature"])
+
+    for chunk_idx, chunk in enumerate(chunks[start_chunk_index:], start=start_chunk_index):
+
+        # بررسی interrupt.flag قبل از هر chunk
+        if check_interrupt_flag(output_dir):
+            log.warning("interrupt.flag شناسایی شد — ذخیره وضعیت و توقف.")
+            status["status"] = "interrupted"
+            interrupted = True
+            # ذخیره نتایج موقت
+            if all_portfolios:
+                temp_df = pd.DataFrame(all_portfolios)
+                _save_dataframe(temp_df, temp_results_path.with_suffix(""))
+            save_status(status_file, status)
+            break
+
+        log.info("پردازش chunk %d/%d (%d امضا)", chunk_idx + 1, total_chunks, len(chunk))
+
+        chunk_results: list[dict] = []
+
+        for coin_composition, signature in chunk:
+            key = (coin_composition, signature)
+            try:
+                group = groups_df.get_group(key)
+            except KeyError:
+                log.warning("گروه %s یافت نشد — رد شدن.", key)
+                processed_set.add(key)
+                continue
+
+            if group["strategy_id"].nunique() < 2:
+                processed_set.add(key)
+                continue
+
+            result = evaluate_group(coin_composition, signature, group, top_n)
+            chunk_results.extend(result)
+            processed_set.add(key)
+
+        all_portfolios.extend(chunk_results)
+
+        # ---- به‌روزرسانی وضعیت پس از هر chunk ----
+        status["last_chunk_index"] = chunk_idx
+        status["processed_signatures"] = [list(k) for k in processed_set]
+        status["status"] = "running"
+
+        # ذخیره نتایج موقت
+        if all_portfolios:
+            temp_df = pd.DataFrame(all_portfolios)
+            _save_dataframe(temp_df, temp_results_path.with_suffix(""))
+
+        save_status(status_file, status)
+        log.info(
+            "chunk %d/%d کامل شد — %d سبد جدید / مجموع %d سبد / %d امضا پردازش‌شده",
+            chunk_idx + 1, total_chunks, len(chunk_results),
+            len(all_portfolios), len(processed_set),
+        )
+
+    if interrupted:
+        log.info("اجرا به‌صورت graceful متوقف شد. برای ادامه از --resume استفاده کنید.")
+        return output_dir / "portfolios.parquet"
+
+    # ---- گام ۶: پس از اتمام همه chunk‌ها ----
     columns = [
         "coin_composition", "signature", "members", "survival_rate",
         "compensation_ratio", "avg_return", "avg_correlation", "score",
         "version_id", "created_at",
     ]
+
+    total_before_filter = len(all_portfolios)
 
     if not all_portfolios:
         log.warning("هیچ سبدی شرایط لازم را احراز نکرد. فایل خروجی خالی ساخته می‌شود.")
@@ -458,15 +670,47 @@ def run(
     else:
         out_df = pd.DataFrame(all_portfolios)
         out_df["version_id"] = version_id
-        out_df["created_at"] = datetime.now(timezone.utc)
-        out_df = out_df[columns]
+        out_df["created_at"] = datetime.now(timezone.utc).isoformat()
+        out_df = out_df[[c for c in columns if c in out_df.columns]]
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "portfolios.parquet"
-    out_df.to_parquet(output_path, index=False)
-    log.info("ذخیره شد: %s (%d سبد)", output_path, len(out_df))
+    output_path = output_dir / "portfolios"
+    final_path = _save_dataframe(out_df, output_path)
+    log.info("ذخیره شد: %s (%d سبد)", final_path, len(out_df))
 
-    return output_path
+    # پاک‌کردن فایل موقت
+    for suffix in (".parquet", ".csv"):
+        candidate = temp_results_path.with_suffix(suffix)
+        if candidate.exists():
+            try:
+                candidate.unlink()
+            except OSError:
+                pass
+
+    # ---- وضعیت نهایی ----
+    status["status"] = "completed"
+    status["processed_signatures"] = [list(k) for k in processed_set]
+    save_status(status_file, status)
+
+    # ---- تولید فایل خلاصه ----
+    summary = {
+        "status": "completed",
+        "total_signatures": len(all_sig_keys),
+        "processed_signatures": len(processed_set),
+        "total_portfolios_before_filter": total_before_filter,
+        "total_portfolios_after_filter": len(out_df),
+        "output_files": [str(final_path.name)],
+        "version_id": version_id,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    summary_path = output_dir / "portfolios_summary.json"
+    try:
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        log.info("فایل خلاصه ذخیره شد: %s", summary_path)
+    except OSError as exc:
+        log.warning("خطا در ذخیره فایل خلاصه: %s", exc)
+
+    return final_path
 
 
 # -----------------------------------------------------------------------------
@@ -477,31 +721,68 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="ماژول سبدهای مکمل (Portfolios) — ساخت و امتیازدهی سبدهای ۲ و ۳ استراتژی",
     )
-    parser.add_argument("--signatures-dir", required=True, type=Path,
-                         help="مسیر پوشه‌ی فایل‌های .jsonl signatures")
-    parser.add_argument("--golden-scores", required=True, type=Path,
-                         help="مسیر فایل golden_scores.parquet")
-    parser.add_argument("--strategies-json", required=True, type=Path,
-                         help="مسیر فایل strategies_metadata.json")
-    parser.add_argument("--version-schema", required=False, type=Path, default=None,
-                         help="مسیر فایل version_schema.json (اختیاری)")
-    parser.add_argument("--output-dir", required=True, type=Path,
-                         help="مسیر پوشه‌ی خروجی برای ذخیره‌ی portfolios.parquet")
-    parser.add_argument("--top-n", required=False, type=int, default=15,
-                         help="تعداد سبدهای برتر برای هر امضا (پیش‌فرض ۱۵)")
+    parser.add_argument(
+        "--signatures-dir", required=True, type=Path,
+        help="مسیر پوشه‌ی فایل‌های .jsonl signatures",
+    )
+    parser.add_argument(
+        "--golden-scores", required=True, type=Path,
+        help="مسیر فایل golden_scores.parquet",
+    )
+    parser.add_argument(
+        "--strategies-json", required=True, type=Path,
+        help="مسیر فایل strategies_metadata.json",
+    )
+    parser.add_argument(
+        "--version-schema", required=False, type=Path, default=None,
+        help="مسیر فایل version_schema.json (اختیاری)",
+    )
+    parser.add_argument(
+        "--output-dir", required=True, type=Path,
+        help="مسیر پوشه‌ی خروجی برای ذخیره‌ی portfolios.parquet",
+    )
+    parser.add_argument(
+        "--top-n", required=False, type=int, default=15,
+        help="تعداد سبدهای برتر برای هر امضا (پیش‌فرض ۱۵)",
+    )
+    parser.add_argument(
+        "--status-file", required=False, type=Path, default=None,
+        help="مسیر فایل وضعیت برای مدیریت ادامه (پیش‌فرض: portfolios_status.json در output-dir)",
+    )
+    parser.add_argument(
+        "--resume", action="store_true", default=False,
+        help="ادامه از آخرین وضعیت ذخیره‌شده",
+    )
+    parser.add_argument(
+        "--chunk-size", required=False, type=int, default=DEFAULT_CHUNK_SIZE,
+        help=f"تعداد امضا در هر chunk (پیش‌فرض {DEFAULT_CHUNK_SIZE})",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+
+    output_dir: Path = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    status_file: Path = (
+        args.status_file
+        if args.status_file is not None
+        else output_dir / "portfolios_status.json"
+    )
+
     try:
         run(
             signatures_dir=args.signatures_dir,
             golden_scores_path=args.golden_scores,
             strategies_json_path=args.strategies_json,
             version_schema_path=args.version_schema,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
             top_n=args.top_n,
+            status_file=status_file,
+            resume=args.resume,
+            chunk_size=args.chunk_size,
         )
     except Exception:
         log.exception("اجرای ماژول Portfolios با خطا مواجه شد.")
