@@ -736,11 +736,26 @@ def _has_forward_keyword(text: str) -> bool:
     return any(k in text for k in FORWARD_KEYWORDS)
 
 
-def _clean_forward_text(text: str, main_channel_username: str) -> tuple[str, list[str]]:
+def _extract_links_from_post(post: dict) -> list[str]:
+    """استخراج لینک از متن خام و همچنین از entities (text_link)"""
+    text = post.get("text") or post.get("caption") or ""
+    # لینک‌های خام در متن
     links = URL_RE.findall(text)
+    # لینک‌های پنهان در entities (مثل hyperlink روی کلمه)
+    entities = post.get("entities") or post.get("caption_entities") or []
+    for ent in entities:
+        if ent.get("type") == "text_link":
+            url = ent.get("url", "")
+            if url and url not in links:
+                links.append(url)
+    return links
+
+
+def _clean_forward_text(text: str, main_channel_username: str) -> str:
+    """پاکسازی متن: حذف لینک‌های خام و جایگزینی منشن‌ها"""
     text_no_links = URL_RE.sub("", text).strip()
     text_no_at = MENTION_RE.sub(f"@{main_channel_username}", text_no_links)
-    return text_no_at.strip(), links
+    return text_no_at.strip()
 
 
 def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
@@ -756,7 +771,8 @@ def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
     if not text or not _has_forward_keyword(text):
         return
 
-    cleaned_text, links = _clean_forward_text(text, main_channel_username)
+    links = _extract_links_from_post(post)
+    cleaned_text = _clean_forward_text(text, main_channel_username)
     if not links:
         log.info("پیام فورواردی بدون لینک – نادیده گرفته شد")
         return
@@ -816,28 +832,14 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
                           reply_markup=keyboard)
 
 
-def _send_startup_test_message(bot_token: str, chat_id: str) -> None:
-    """ارسال یک پیام تستی در اولین اجرا، سپس پرچم می‌گذارد تا دیگر تکرار نشود"""
+def _send_startup_movie(bot_token: str, chat_id: str) -> None:
+    """اولین اجرا: یک پیام فیلم/سریال تصادفی ارسال می‌کند و پرچم می‌گذارد تا دفعات بعد skip شود"""
     if STARTUP_TEST_FLAG.exists():
-        return  # قبلاً ارسال شده – اسکیپ
-    msg = (
-        "✅ ربات با موفقیت راه‌اندازی شد!\n"
-        f"🕐 زمان: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
-        "📡 سیستم آماده دریافت پیام است."
-    )
-    try:
-        resp = requests.post(
-            f"{TELEGRAM_API}/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": msg},
-            timeout=15,
-        )
-        if resp.json().get("ok"):
-            STARTUP_TEST_FLAG.write_text(datetime.utcnow().isoformat())
-            log.info("✅ پیام تستی اولین اجرا ارسال شد")
-        else:
-            log.warning(f"ارسال پیام تستی ناموفق: {resp.json().get('description')}")
-    except Exception as e:
-        log.error(f"خطا در ارسال پیام تستی: {e}")
+        return
+    log.info("اولین اجرا – ارسال پیام فیلم/سریال تستی...")
+    send_movie_message(bot_token, chat_id)
+    STARTUP_TEST_FLAG.write_text(datetime.utcnow().isoformat())
+    log.info("✅ پیام فیلم/سریال تستی ارسال شد، پرچم گذاشته شد")
 
 
 def process_forward_updates() -> None:
@@ -857,11 +859,11 @@ def process_forward_updates() -> None:
         log.error(f"متغیرهای محیطی زیر تنظیم نشده‌اند: {', '.join(missing)}")
         return
 
-    # ── پیام تستی فقط یک‌بار در اولین راه‌اندازی ──
-    _send_startup_test_message(bot_token, main_chat_id)
-
     offset = _load_offset()
     pending = _load_pending()
+
+    # ── اولین اجرا: ارسال پیام فیلم/سریال و گذاشتن پرچم ──
+    _send_startup_movie(bot_token, main_chat_id)
 
     updates = _get_updates(bot_token, offset)
     if not updates:
