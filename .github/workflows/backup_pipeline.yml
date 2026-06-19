@@ -22,113 +22,93 @@ jobs:
     timeout-minutes: 330   # ۵ ساعت + کمی مانور
 
     steps:
-      # ─── دریافت کد ───────────────────────────────────────────────────────────
+      # ─── checkout مخزن اصلی ──────────────────────────────────────────────────
       - name: Checkout now-test-repo
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ─── clone کردن Test-repo برای فایل‌های یکبار مصرف ─────────────────────
+      # ─── clone کردن Test-repo برای data.enc و zips/ ──────────────────────────
       - name: Clone Test-repo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_ACTOR: ${{ github.actor }}
         run: |
-          ACTOR="${GITHUB_ACTOR}"
-          REPO_OWNER="${{ github.repository_owner }}"
+          OWNER="${{ github.repository_owner }}"
+          ACTOR="${{ github.actor }}"
           git clone --depth 1 \
-            "https://${ACTOR}:${GITHUB_TOKEN}@github.com/${REPO_OWNER}/Test-repo.git" \
-            Test-repo || echo "⚠️ کلون Test-repo ناموفق بود (ادامه می‌دهیم)"
+            "https://${ACTOR}:${GITHUB_TOKEN}@github.com/${OWNER}/Test-repo.git" \
+            Test-repo \
+            && echo "✅ Test-repo clone شد" \
+            || echo "⚠️ Test-repo کلون نشد (ادامه می‌دهیم)"
 
-      # ─── نصب Python ──────────────────────────────────────────────────────────
+      # ─── نصب Python + وابستگی‌ها ─────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ─── نصب وابستگی‌ها ──────────────────────────────────────────────────────
       - name: Install dependencies
         run: pip install --upgrade pip requests cryptography
 
-      # ─── حلقه ۵ ساعته: هر ۳۰ دقیقه بررسی زمان‌بندی و آپلود ────────────────
+      # ─── حلقه ۵ ساعته: هر ۳۰ دقیقه بررسی و آپلود ───────────────────────────
       - name: Run 5-hour backup loop
         env:
-          RESULTS_PASSWORD:   ${{ secrets.RESULTS_PASSWORD }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY:  ${{ github.repository }}
-          GITHUB_ACTOR:       ${{ github.actor }}
-          WEEKLY_REPOS:       "now-test-repo,Test-repo,test-repository"
-          FORCE_RUN:          ${{ github.event.inputs.force || 'false' }}
+          RESULTS_PASSWORD:      ${{ secrets.RESULTS_PASSWORD }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAIN_CHANNEL_USERNAME: ${{ secrets.MAIN_CHANNEL_USERNAME }}
+          INTERMEDIATE_CHAT_ID:  ${{ secrets.INTERMEDIATE_CHAT_ID }}
+          GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY:     ${{ github.repository }}
+          GITHUB_ACTOR:          ${{ github.actor }}
+          WEEKLY_REPOS:          "now-test-repo,Test-repo,test-repository"
+          FORCE_RUN:             ${{ github.event.inputs.force || 'false' }}
         run: |
-          END_TIME=$(( $(date +%s) + 5*3600 ))
-          echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
-
-          FORCE_FLAG=""
-          if [ "$FORCE_RUN" = "true" ]; then
-            FORCE_FLAG="--force"
-          fi
-
-          # اجرای اول بلافاصله
-          python backup_system.py run $FORCE_FLAG || true
-
-          # commit بعد از هر اجرا
           git config user.name  "GitHub Actions – Backup Bot"
           git config user.email "actions@github.com"
 
-          while [ $(date +%s) -lt $END_TIME ]; do
-            sleep 1800   # ۳۰ دقیقه صبر
+          FORCE_FLAG=""
+          [ "$FORCE_RUN" = "true" ] && FORCE_FLAG="--force"
 
-            # pull آخرین تغییرات (loop_backup ممکن است commit کرده باشد)
+          END_TIME=$(( $(date +%s) + 5*3600 ))
+          echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
+
+          do_run_and_commit() {
+            # pull آخرین تغییرات
             git pull --rebase origin main 2>/dev/null || true
 
-            # اجرای بک‌آپ
-            python backup_system.py run || true
+            # اجرای کامل پایپ‌لاین (بکاپ + پردازش فوروارد + ارسال فیلم بعد از موفقیت)
+            python backup_system.py run $FORCE_FLAG || true
+            # فقط یکبار force، بقیه دفعات نرمال
+            FORCE_FLAG=""
 
-            # commit تغییرات
-            META_FILES=(
-              "auto_mapping.json"
-              "backup_ledger.json"
-              "schedule_times.json"
-              "integrity_pass.flag"
-              "master_structure.json"
-              "update_offset.json"
-              "startup_test_sent.flag"
-            )
-            for f in "${META_FILES[@]}"; do
+            # commit تمام تغییرات
+            for f in auto_mapping.json backup_ledger.json schedule_times.json \
+                     integrity_pass.flag master_structure.json update_offset.json \
+                     startup_test_sent.flag pending_links.json; do
               [ -f "$f" ] && git add "$f"
             done
             git add -u analysis_results/ 2>/dev/null || true
             git add -u movie_messages/   2>/dev/null || true
 
             if ! git diff --cached --quiet; then
-              git commit -m "chore: backup metadata $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              git commit -m "chore: backup state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
               git push origin main || true
             fi
+          }
+
+          # اجرای اول بلافاصله
+          do_run_and_commit
+
+          # بقیه هر ۳۰ دقیقه
+          while [ $(date +%s) -lt $END_TIME ]; do
+            sleep 1800
+            [ $(date +%s) -lt $END_TIME ] && do_run_and_commit
           done
 
           echo "✅ حلقه ۵ ساعته تمام شد"
-
-      # ─── commit نهایی ─────────────────────────────────────────────────────────
-      - name: Final commit
-        run: |
-          git config user.name  "GitHub Actions – Backup Bot"
-          git config user.email "actions@github.com"
-
-          for f in auto_mapping.json backup_ledger.json schedule_times.json \
-                   integrity_pass.flag master_structure.json update_offset.json \
-                   startup_test_sent.flag; do
-            [ -f "$f" ] && git add "$f"
-          done
-          git add -u analysis_results/ 2>/dev/null || true
-          git add -u movie_messages/   2>/dev/null || true
-
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: final backup state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            git push origin main || true
-          fi
 
       # ─── گزارش خطا ───────────────────────────────────────────────────────────
       - name: Notify on failure
@@ -138,7 +118,7 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python backup_system.py notify-failure
 
-      # ─── انتهای ۵ ساعت: loop_backup رو صدا بزن تا چرخه ادامه پیدا کنه ──────
+      # ─── بعد از ۵ ساعت: loop_backup رو صدا بزن تا چرخه ادامه پیدا کنه ──────
       - name: Trigger loop_backup (chain continues)
         if: always()
         env:
