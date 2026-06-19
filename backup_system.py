@@ -8,6 +8,8 @@ import os
 import sys
 import json
 import csv
+import re
+import string
 import lzma
 import tarfile
 import hashlib
@@ -45,6 +47,14 @@ LEDGER_FILE = Path("backup_ledger.json")
 SCHEDULE_FILE = Path("schedule_times.json")
 INTEGRITY_FLAG = Path("integrity_pass.flag")
 IRAN_UTC_OFFSET = 3.5                  # ساعت (UTC+3:30)
+
+# ─── ثابت‌های بخش فیلم/سریال و پردازش فورواردی ─────────────────────────────────
+MOVIES_DIR = Path("movie_messages")
+OFFSET_FILE = Path("update_offset.json")
+PENDING_LINKS_FILE = Path("pending_links.json")
+FORWARD_KEYWORDS = ["فیلم", "انیمه", "انیمیشن", "سریال"]
+URL_RE = re.compile(r"https?://\S+")
+MENTION_RE = re.compile(r"@\w+")
 
 # نگاشت ثابت
 FIXED_COLUMN_MAP: dict[str, str] = {}
@@ -588,7 +598,265 @@ def weekly_full_backup(bot_token: str, chat_id: str, password: str,
                 log.info(f"✅ ارسال هفتگی: {repo}")
 
 
-# ─── فراخوانی چرخه ──────────────────────────────────────────────────────────────
+# ─── ارسال پیام فیلم/سریال بعد از بک‌آپ ────────────────────────────────────────
+
+def load_unused_movies() -> list[Path]:
+    """لیست فایل‌های movie_messages/*.json با used=false"""
+    if not MOVIES_DIR.exists():
+        return []
+    unused = []
+    for p in sorted(MOVIES_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not data.get("used", False):
+                unused.append(p)
+        except Exception as e:
+            log.warning(f"خطا در خواندن {p}: {e}")
+    return unused
+
+
+def send_movie_message(bot_token: str, chat_id: str) -> None:
+    """انتخاب و ارسال یک پیام فیلم/سریال استفاده‌نشده"""
+    unused = load_unused_movies()
+    if not unused:
+        log.info("هیچ پیام استفاده‌نشده‌ای در movie_messages/ وجود ندارد")
+        return
+
+    path = random.choice(unused)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    text = data.get("text", "")
+    image_url = data.get("image_url")
+
+    try:
+        if image_url:
+            url = f"{TELEGRAM_API}/bot{bot_token}/sendPhoto"
+            payload = {"chat_id": chat_id, "photo": image_url, "caption": text}
+        else:
+            url = f"{TELEGRAM_API}/bot{bot_token}/sendMessage"
+            payload = {"chat_id": chat_id, "text": text}
+        resp = requests.post(url, json=payload, timeout=30)
+        result = resp.json()
+        if not result.get("ok"):
+            log.error(f"ارسال پیام فیلم ناموفق: {result.get('description')}")
+            return
+    except Exception as e:
+        log.error(f"خطای ارسال پیام فیلم: {e}")
+        return
+
+    data["used"] = True
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info(f"✅ پیام فیلم/سریال ارسال شد: {path.name}")
+
+
+# ─── پردازش پیام‌های فورواردی + لینک اختصاصی + بررسی عضویت ────────────────────
+
+def _load_offset() -> int:
+    if OFFSET_FILE.exists():
+        try:
+            return json.loads(OFFSET_FILE.read_text(encoding="utf-8")).get("offset", 0)
+        except Exception:
+            return 0
+    return 0
+
+
+def _save_offset(offset: int) -> None:
+    OFFSET_FILE.write_text(json.dumps({"offset": offset}), encoding="utf-8")
+
+
+def _load_pending() -> dict:
+    if PENDING_LINKS_FILE.exists():
+        try:
+            return json.loads(PENDING_LINKS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_pending(data: dict) -> None:
+    PENDING_LINKS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _gen_unique_id(existing: set) -> str:
+    while True:
+        uid = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        if uid not in existing:
+            return uid
+
+
+def _get_updates(bot_token: str, offset: int) -> list:
+    url = f"{TELEGRAM_API}/bot{bot_token}/getUpdates"
+    params = {"offset": offset, "timeout": 10, "allowed_updates": json.dumps(["channel_post", "message"])}
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        data = resp.json()
+    except Exception as e:
+        log.error(f"خطا در getUpdates: {e}")
+        return []
+    if not data.get("ok"):
+        log.warning(f"getUpdates ناموفق: {data}")
+        return []
+    return data["result"]
+
+
+def _tg_send_message(bot_token: str, chat_id, text: str, reply_markup: Optional[dict] = None) -> None:
+    url = f"{TELEGRAM_API}/bot{bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    try:
+        requests.post(url, json=payload, timeout=30)
+    except Exception as e:
+        log.error(f"خطا در ارسال پیام: {e}")
+
+
+def _tg_send_photo(bot_token: str, chat_id, photo_file_id: str, caption: str) -> None:
+    url = f"{TELEGRAM_API}/bot{bot_token}/sendPhoto"
+    payload = {"chat_id": chat_id, "photo": photo_file_id, "caption": caption}
+    try:
+        requests.post(url, json=payload, timeout=30)
+    except Exception as e:
+        log.error(f"خطا در ارسال عکس: {e}")
+
+
+def _check_membership(bot_token: str, main_chat_id: str, user_id: int) -> bool:
+    url = f"{TELEGRAM_API}/bot{bot_token}/getChatMember"
+    try:
+        resp = requests.get(url, params={"chat_id": main_chat_id, "user_id": user_id}, timeout=15)
+        data = resp.json()
+    except Exception as e:
+        log.error(f"خطا در بررسی عضویت: {e}")
+        return False
+    if not data.get("ok"):
+        return False
+    return data["result"]["status"] in ("member", "administrator", "creator")
+
+
+def _has_forward_keyword(text: str) -> bool:
+    return any(k in text for k in FORWARD_KEYWORDS)
+
+
+def _clean_forward_text(text: str, main_channel_username: str) -> tuple[str, list[str]]:
+    links = URL_RE.findall(text)
+    text_no_links = URL_RE.sub("", text).strip()
+    text_no_at = MENTION_RE.sub(f"@{main_channel_username}", text_no_links)
+    return text_no_at.strip(), links
+
+
+def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
+                               main_chat_id: str, main_channel_username: str,
+                               intermediate_chat_id: str, pending: dict) -> None:
+    post = update.get("channel_post")
+    if not post:
+        return
+    if str(post.get("chat", {}).get("id")) != str(intermediate_chat_id):
+        return
+
+    text = post.get("text") or post.get("caption") or ""
+    if not text or not _has_forward_keyword(text):
+        return
+
+    cleaned_text, links = _clean_forward_text(text, main_channel_username)
+    if not links:
+        log.info("پیام فورواردی بدون لینک – نادیده گرفته شد")
+        return
+
+    uid = _gen_unique_id(set(pending.keys()))
+    pending[uid] = {"link": links[0], "created": datetime.utcnow().isoformat()}
+    _save_pending(pending)
+
+    deep_link = f"https://t.me/{bot_username}?start={uid}"
+    msg = (
+        f"{cleaned_text}\n\n"
+        f"📥 برای دانلود، روی لینک زیر کلیک کنید:\n"
+        f"🔗 {deep_link}\n\n"
+        f"🔹 ابتدا در کانال ما عضو شوید:\n"
+        f"👉 @{main_channel_username}"
+    )
+
+    photo_id = post["photo"][-1]["file_id"] if post.get("photo") else None
+    if photo_id:
+        _tg_send_photo(bot_token, main_chat_id, photo_id, msg)
+    else:
+        _tg_send_message(bot_token, main_chat_id, msg)
+    log.info(f"✅ پیام فورواردی پردازش و ارسال شد (uid={uid})")
+
+
+def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
+                            main_channel_username: str, pending: dict) -> None:
+    msg = update.get("message")
+    if not msg or "text" not in msg:
+        return
+    text = msg["text"]
+    if not text.startswith("/start"):
+        return
+
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
+    parts = text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        _tg_send_message(bot_token, chat_id, "سلام! لینک دانلود را از کانال دریافت کنید.")
+        return
+
+    uid = parts[1].strip()
+    entry = pending.get(uid)
+    if not entry:
+        _tg_send_message(bot_token, chat_id, "❌ این لینک منقضی شده یا نامعتبر است.")
+        return
+
+    if _check_membership(bot_token, main_chat_id, user_id):
+        _tg_send_message(bot_token, chat_id, f"✅ لینک دانلود شما:\n{entry['link']}")
+    else:
+        keyboard = {"inline_keyboard": [[
+            {"text": "📢 عضویت در کانال", "url": f"https://t.me/{main_channel_username}"}
+        ]]}
+        _tg_send_message(bot_token, chat_id,
+                          "⚠️ برای دریافت لینک، ابتدا باید عضو کانال ما شوید:",
+                          reply_markup=keyboard)
+
+
+def process_forward_updates() -> None:
+    """دریافت آپدیت‌های جدید تلگرام و پردازش پیام‌های فورواردی + دستورات /start"""
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    bot_username = os.environ.get("TELEGRAM_BOT_USERNAME")
+    main_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    main_channel_username = os.environ.get("MAIN_CHANNEL_USERNAME")
+    intermediate_chat_id = os.environ.get("INTERMEDIATE_CHAT_ID")
+
+    missing = [n for n, v in [
+        ("TELEGRAM_BOT_TOKEN", bot_token), ("TELEGRAM_BOT_USERNAME", bot_username),
+        ("TELEGRAM_CHAT_ID", main_chat_id), ("MAIN_CHANNEL_USERNAME", main_channel_username),
+        ("INTERMEDIATE_CHAT_ID", intermediate_chat_id),
+    ] if not v]
+    if missing:
+        log.error(f"متغیرهای محیطی زیر تنظیم نشده‌اند: {', '.join(missing)}")
+        return
+
+    offset = _load_offset()
+    pending = _load_pending()
+
+    updates = _get_updates(bot_token, offset)
+    if not updates:
+        log.info("هیچ آپدیت جدیدی نیست")
+        return
+
+    for update in updates:
+        offset = update["update_id"] + 1
+        try:
+            if "channel_post" in update:
+                _process_forwarded_update(update, bot_token, bot_username, main_chat_id,
+                                           main_channel_username, intermediate_chat_id, pending)
+            elif "message" in update:
+                _process_start_command(update, bot_token, main_chat_id,
+                                        main_channel_username, pending)
+        except Exception as e:
+            log.error(f"خطا در پردازش آپدیت {update.get('update_id')}: {e}")
+
+    _save_offset(offset)
+    log.info(f"✅ {len(updates)} آپدیت پردازش شد")
+
+
+
 
 def trigger_loop_workflow(gh_token: str, repo_full: str, workflow_file: str) -> None:
     """فراخوانی ورکفلو دیگر از طریق GitHub API"""
@@ -688,18 +956,23 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 except Exception as e:
                     log.warning(f"حذف ناموفق {csv_path}: {e}")
 
-    # ─── ۷. ارسال متادیتا ───
+    # ─── ۷. ارسال پیام فیلم/سریال (فقط در صورت بک‌آپ موفق) ───
+    if to_pack:
+        send_movie_message(bot_token, chat_id)
+
+    # ─── ۸. ارسال متادیتا ───
     send_metadata(bot_token, chat_id, password)
 
-    # ─── ۸. ارسال هفتگی ───
+    # ─── ۹. ارسال هفتگی ───
     weekly_repos = os.environ.get("WEEKLY_REPOS", "now-test-repo").split(",")
     weekly_full_backup(bot_token, chat_id, password, [r.strip() for r in weekly_repos])
 
-    # ─── ۹. فراخوانی چرخه ───
+    # ─── ۱۰. فراخوانی چرخه ───
     if gh_token and repo_full:
         trigger_loop_workflow(gh_token, repo_full, "loop_backup.yml")
 
     log.info("✅ پایپ‌لاین با موفقیت تمام شد")
+
 
 
 # ─── نقطه ورود ─────────────────────────────────────────────────────────────────
@@ -721,6 +994,12 @@ def main() -> None:
 
     # دستور اطلاع‌رسانی خطا
     subparsers.add_parser("notify-failure", help="ارسال پیام شکست به تلگرام")
+
+    # دستور پردازش پیام‌های فورواردی + لینک‌های اختصاصی
+    subparsers.add_parser("process-updates", help="پردازش پیام‌های فورواردی و دستورات /start")
+
+    # دستور ارسال مستقل پیام فیلم/سریال
+    subparsers.add_parser("send-movie", help="ارسال یک پیام فیلم/سریال تصادفی")
 
     args = parser.parse_args()
 
@@ -744,6 +1023,17 @@ def main() -> None:
                 timeout=15,
             )
             log.info("پیام شکست ارسال شد")
+
+    elif args.command == "process-updates":
+        process_forward_updates()
+
+    elif args.command == "send-movie":
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id   = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if bot_token and chat_id:
+            send_movie_message(bot_token, chat_id)
+        else:
+            log.error("TELEGRAM_BOT_TOKEN یا TELEGRAM_CHAT_ID تنظیم نشده‌اند")
 
     elif args.command == "run":
         run_pipeline(args)
