@@ -204,6 +204,19 @@ jobs:
               FILE_COUNT=$(echo "$FILES" | wc -l)
               echo "   📊 تعداد فایل‌های یافت‌شده: $FILE_COUNT"
               echo ""
+              echo "3.5- بررسی شرط تعداد فایل‌ها (باید دقیقاً ۱۱۰۶ باشد)..."
+              REQUIRED_FILE_COUNT=1106
+              if [ "$FILE_COUNT" -ne "$REQUIRED_FILE_COUNT" ]; then
+                echo "   ⚠️ تعداد فایل‌ها ($FILE_COUNT) برابر با $REQUIRED_FILE_COUNT نیست. یکپارچه‌سازی $STRAT انجام نمی‌شود."
+                mkdir -p "/tmp/third_repo/aggregated/${STRAT}"
+                echo "{\"status\": \"incomplete\", \"file_count\": $FILE_COUNT, \"required_count\": $REQUIRED_FILE_COUNT}" > "/tmp/third_repo/$STATUS_FILE"
+                echo "   📝 وضعیت incomplete با تعداد فایل‌ها در $STATUS_FILE ثبت شد."
+                rm -rf "/tmp/agg_${STRAT}"
+                echo ""
+                continue
+              fi
+              echo "   ✅ تعداد فایل‌ها دقیقاً $REQUIRED_FILE_COUNT است. یکپارچه‌سازی $STRAT انجام می‌شود."
+              echo ""
               NEW_TRADES_FILE="/tmp/agg_${STRAT}/new_trades.json"
               echo "[]" > "$NEW_TRADES_FILE"
               SUCCESS_COUNT=0
@@ -592,41 +605,62 @@ jobs:
 
   # ============================================================
   # Job 5: اجرای golden (پس از اتمام کارهای ثابت)
+  # وقفه‌پذیر و ادامه‌پذیر: وضعیت در golden_status.json (مخزن سوم) ذخیره می‌شود
   # ============================================================
   dispatch-golden:
     needs: dispatch-fixed
-    if: needs.prepare-dispatch.outputs.total_batches == '0'
+    if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           ref: main
-      - name: بررسی وقفه و استراتژی جدید
-        id: interrupt_check
+
+      - name: بررسی پرچم وقفه و وضعیت قبلی golden
+        id: status_check
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           mkdir -p logs
           {
+            echo "🔍 بررسی پرچم وقفه..."
             if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
-              echo "interrupted=true" >> $GITHUB_OUTPUT
+              echo "⚠️ پرچم وقفه فعال است. golden اجرا نخواهد شد."
+              echo "should_run=false" >> $GITHUB_OUTPUT
               exit 0
             fi
-            LAST_COUNT=$(cat /tmp/last_strategy_count 2>/dev/null || echo "0")
-            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' | wc -l)
-            if [ "$CURRENT_COUNT" -gt "$LAST_COUNT" ]; then
-              echo "$CURRENT_COUNT" > /tmp/last_strategy_count
-              echo "interrupt" | base64 -w0 > /tmp/flag.txt
-              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
-              echo "interrupted=true" >> $GITHUB_OUTPUT
+
+            echo "🔍 بررسی golden_status.json (برای ادامه از آخرین نقطه توقف)..."
+            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/golden_status.json" -i 2>/dev/null | head -n1 | cut -d' ' -f2)
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/golden_status.json" --jq '.content' | base64 -d)
+              echo "   📄 وضعیت فعلی golden: $STATUS_CONTENT"
+              # وضعیت با processed_signatures/processed_tasks توسط ماژول golden در analysis.yml خوانده
+              # و برای ادامه از آخرین نقطه توقف استفاده می‌شود.
             else
-              echo "interrupted=false" >> $GITHUB_OUTPUT
+              echo "   ℹ️ golden_status.json یافت نشد. اجرای golden از ابتدا آغاز می‌شود."
             fi
+            echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
+
+      - name: ثبت تعداد استراتژی‌های یکپارچه‌شده پیش از اجرا
+        if: steps.status_check.outputs.should_run == 'true'
+        id: strat_count
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
+            echo "count=$CURRENT_COUNT" >> $GITHUB_OUTPUT
+            echo "📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای golden: $CURRENT_COUNT"
+          } >> logs/run.log 2>&1
+
       - name: فراخوانی analysis.yml برای golden
-        if: steps.interrupt_check.outputs.interrupted == 'false'
+        if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -635,11 +669,7 @@ jobs:
             echo "🔄 فراخوانی analysis.yml برای golden..."
             for attempt in 1 2 3; do
               if gh workflow run analysis.yml --ref main \
-                -f analysis_module="golden" \
-                -f analysis_strategy="dummy" \
-                -f analysis_coin="dummy" \
-                -f analysis_interval="dummy" \
-                -f analysis_model="dummy" 2>&1; then
+                -f analysis_module="golden" 2>&1; then
                 echo "✅ فراخوانی golden موفق بود (تلاش $attempt)."
                 break
               else
@@ -648,6 +678,38 @@ jobs:
               fi
             done
           } >> logs/run.log 2>&1
+
+      - name: بررسی یکپارچه‌سازی جدید و فعال‌سازی وقفه در صورت نیاز
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            NEW_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
+            OLD_COUNT="${{ steps.strat_count.outputs.count }}"
+            echo "📊 تعداد استراتژی‌ها: قبل=$OLD_COUNT بعد=$NEW_COUNT"
+            if [ "$NEW_COUNT" -gt "$OLD_COUNT" ]; then
+              echo "⚠️ استراتژی جدیدی حین اجرای golden یکپارچه شد. فعال‌سازی پرچم وقفه..."
+              echo "interrupt" | base64 -w0 > /tmp/flag.txt
+              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt: new strategy aggregated during golden" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
+            else
+              echo "ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت."
+            fi
+          } >> logs/run.log 2>&1
+
+      - name: فراخوانی مجدد loop_analysis.yml پس از اتمام golden
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔁 فراخوانی مجدد loop_analysis.yml..."
+            gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
+          } >> logs/run.log 2>&1
+
       - name: Save logs after job
         if: always()
         run: |
@@ -659,42 +721,63 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 6: اجرای portfolios (افزایشی)
+  # Job 6: اجرای portfolios (پس از اتمام golden)
+  # وقفه‌پذیر و ادامه‌پذیر: وضعیت در portfolios_status.json (مخزن سوم) ذخیره می‌شود
   # ============================================================
   dispatch-portfolios:
     needs: dispatch-golden
-    if: needs.prepare-dispatch.outputs.total_batches == '0'
+    if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           ref: main
-      - name: بررسی وقفه و استراتژی جدید
-        id: interrupt_check
+
+      - name: بررسی پرچم وقفه و وضعیت قبلی portfolios
+        id: status_check
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           mkdir -p logs
           {
+            echo "🔍 بررسی پرچم وقفه..."
             if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
-              echo "interrupted=true" >> $GITHUB_OUTPUT
+              echo "⚠️ پرچم وقفه فعال است. portfolios اجرا نخواهد شد."
+              echo "should_run=false" >> $GITHUB_OUTPUT
               exit 0
             fi
-            LAST_COUNT=$(cat /tmp/last_strategy_count 2>/dev/null || echo "0")
-            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' | wc -l)
-            if [ "$CURRENT_COUNT" -gt "$LAST_COUNT" ]; then
-              echo "$CURRENT_COUNT" > /tmp/last_strategy_count
-              echo "interrupt" | base64 -w0 > /tmp/flag.txt
-              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
-              echo "interrupted=true" >> $GITHUB_OUTPUT
+
+            echo "🔍 بررسی portfolios_status.json (برای ادامه از آخرین نقطه توقف)..."
+            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/portfolios_status.json" -i 2>/dev/null | head -n1 | cut -d' ' -f2)
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/portfolios_status.json" --jq '.content' | base64 -d)
+              echo "   📄 وضعیت فعلی portfolios: $STATUS_CONTENT"
+              # وضعیت با processed_signatures/processed_tasks توسط ماژول portfolios در analysis.yml خوانده
+              # و برای ادامه از آخرین نقطه توقف استفاده می‌شود.
             else
-              echo "interrupted=false" >> $GITHUB_OUTPUT
+              echo "   ℹ️ portfolios_status.json یافت نشد. اجرای portfolios از ابتدا آغاز می‌شود."
             fi
+            echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
+
+      - name: ثبت تعداد استراتژی‌های یکپارچه‌شده پیش از اجرا
+        if: steps.status_check.outputs.should_run == 'true'
+        id: strat_count
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
+            echo "count=$CURRENT_COUNT" >> $GITHUB_OUTPUT
+            echo "📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای portfolios: $CURRENT_COUNT"
+          } >> logs/run.log 2>&1
+
       - name: فراخوانی analysis.yml برای portfolios
-        if: steps.interrupt_check.outputs.interrupted == 'false'
+        if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -703,11 +786,7 @@ jobs:
             echo "🔄 فراخوانی analysis.yml برای portfolios..."
             for attempt in 1 2 3; do
               if gh workflow run analysis.yml --ref main \
-                -f analysis_module="portfolios" \
-                -f analysis_strategy="dummy" \
-                -f analysis_coin="dummy" \
-                -f analysis_interval="dummy" \
-                -f analysis_model="dummy" 2>&1; then
+                -f analysis_module="portfolios" 2>&1; then
                 echo "✅ فراخوانی portfolios موفق بود (تلاش $attempt)."
                 break
               else
@@ -716,6 +795,38 @@ jobs:
               fi
             done
           } >> logs/run.log 2>&1
+
+      - name: بررسی یکپارچه‌سازی جدید و فعال‌سازی وقفه در صورت نیاز
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            NEW_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
+            OLD_COUNT="${{ steps.strat_count.outputs.count }}"
+            echo "📊 تعداد استراتژی‌ها: قبل=$OLD_COUNT بعد=$NEW_COUNT"
+            if [ "$NEW_COUNT" -gt "$OLD_COUNT" ]; then
+              echo "⚠️ استراتژی جدیدی حین اجرای portfolios یکپارچه شد. فعال‌سازی پرچم وقفه..."
+              echo "interrupt" | base64 -w0 > /tmp/flag.txt
+              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt: new strategy aggregated during portfolios" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
+            else
+              echo "ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت."
+            fi
+          } >> logs/run.log 2>&1
+
+      - name: فراخوانی مجدد loop_analysis.yml پس از اتمام portfolios
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔁 فراخوانی مجدد loop_analysis.yml..."
+            gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
+          } >> logs/run.log 2>&1
+
       - name: Save logs after job
         if: always()
         run: |
@@ -724,6 +835,123 @@ jobs:
           git config user.email "actions@github.com"
           git add -f logs/run.log
           git commit -m "update logs after dispatch-portfolios (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 6.5: اجرای correlation (اختیاری، پس از اتمام portfolios)
+  # وقفه‌پذیر و ادامه‌پذیر: وضعیت در correlation_status.json (مخزن سوم) ذخیره می‌شود
+  # ============================================================
+  dispatch-correlation:
+    needs: dispatch-portfolios
+    if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+
+      - name: بررسی پرچم وقفه و وضعیت قبلی correlation
+        id: status_check
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔍 بررسی پرچم وقفه..."
+            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
+              echo "⚠️ پرچم وقفه فعال است. correlation اجرا نخواهد شد."
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            echo "🔍 بررسی correlation_status.json (برای ادامه از آخرین نقطه توقف)..."
+            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/correlation_status.json" -i 2>/dev/null | head -n1 | cut -d' ' -f2)
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/correlation_status.json" --jq '.content' | base64 -d)
+              echo "   📄 وضعیت فعلی correlation: $STATUS_CONTENT"
+              # وضعیت با processed_signatures/processed_tasks توسط ماژول correlation در analysis.yml خوانده
+              # و برای ادامه از آخرین نقطه توقف استفاده می‌شود.
+            else
+              echo "   ℹ️ correlation_status.json یافت نشد. اجرای correlation از ابتدا آغاز می‌شود."
+            fi
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          } >> logs/run.log 2>&1
+
+      - name: ثبت تعداد استراتژی‌های یکپارچه‌شده پیش از اجرا
+        if: steps.status_check.outputs.should_run == 'true'
+        id: strat_count
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
+            echo "count=$CURRENT_COUNT" >> $GITHUB_OUTPUT
+            echo "📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای correlation: $CURRENT_COUNT"
+          } >> logs/run.log 2>&1
+
+      - name: فراخوانی analysis.yml برای correlation
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔄 فراخوانی analysis.yml برای correlation..."
+            for attempt in 1 2 3; do
+              if gh workflow run analysis.yml --ref main \
+                -f analysis_module="correlation" 2>&1; then
+                echo "✅ فراخوانی correlation موفق بود (تلاش $attempt)."
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+          } >> logs/run.log 2>&1
+
+      - name: بررسی یکپارچه‌سازی جدید و فعال‌سازی وقفه در صورت نیاز
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            NEW_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
+            OLD_COUNT="${{ steps.strat_count.outputs.count }}"
+            echo "📊 تعداد استراتژی‌ها: قبل=$OLD_COUNT بعد=$NEW_COUNT"
+            if [ "$NEW_COUNT" -gt "$OLD_COUNT" ]; then
+              echo "⚠️ استراتژی جدیدی حین اجرای correlation یکپارچه شد. فعال‌سازی پرچم وقفه..."
+              echo "interrupt" | base64 -w0 > /tmp/flag.txt
+              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt: new strategy aggregated during correlation" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
+            else
+              echo "ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت."
+            fi
+          } >> logs/run.log 2>&1
+
+      - name: فراخوانی مجدد loop_analysis.yml پس از اتمام correlation
+        if: steps.status_check.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔁 فراخوانی مجدد loop_analysis.yml..."
+            gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
+          } >> logs/run.log 2>&1
+
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after dispatch-correlation (run ${{ github.run_id }})" || echo "No changes"
           git push origin main || true
 
   # ============================================================
