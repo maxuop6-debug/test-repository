@@ -8,9 +8,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  loop:
+  trigger:
     runs-on: ubuntu-latest
-    timeout-minutes: 330   # کمی بیشتر از ۵ ساعت
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
@@ -26,46 +26,8 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip requests
 
-      # ─── حلقه ۵ ساعته: فقط پردازش آپدیت‌های تلگرام (فوروارد + /start) ───────
-      # هیچ آپلود، هیچ بک‌آپ، هیچ ارسال پیام فیلم اینجا نیست
-      # ارسال پیام فیلم فقط توسط backup_pipeline و بعد از بک‌آپ موفق انجام می‌شود
-      - name: Run 5-hour polling loop (forward-only)
-        env:
-          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_BOT_USERNAME: ${{ secrets.TELEGRAM_BOT_USERNAME }}
-          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
-          MAIN_CHANNEL_USERNAME: ${{ secrets.MAIN_CHANNEL_USERNAME }}
-          INTERMEDIATE_CHAT_ID:  ${{ secrets.INTERMEDIATE_CHAT_ID }}
-        run: |
-          END_TIME=$(( $(date +%s) + 5*3600 ))
-          echo "👂 حلقه شنیداری تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
-
-          while [ $(date +%s) -lt $END_TIME ]; do
-            python backup_system.py process-updates || true
-            sleep 30
-          done
-
-          echo "✅ حلقه ۵ ساعته loop تمام شد"
-
-      # ─── commit offset و pending_links ───────────────────────────────────────
-      - name: Commit forward-processor state
-        run: |
-          git config user.name  "GitHub Actions – Backup Bot"
-          git config user.email "actions@github.com"
-
-          [ -f "update_offset.json" ]     && git add "update_offset.json"
-          [ -f "pending_links.json" ]     && git add "pending_links.json"
-          git add movie_messages/ 2>/dev/null || true
-
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: forward-processor state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            git push
-          else
-            echo "تغییری برای commit وجود ندارد"
-          fi
-
-      # ─── بعد از ۵ ساعت، backup_pipeline را صدا بزن ──────────────────────────
-      - name: Trigger backup_pipeline (chain continues)
+      # فقط backup_pipeline رو صدا میزنه و تمام
+      - name: Trigger backup_pipeline
         env:
           GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
