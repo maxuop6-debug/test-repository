@@ -54,6 +54,10 @@ LOO_UPPER_BOUND = 50  # سطح ۲: 10 <= n < 50 => LOO ; n >= 50 => fold-based
 MIN_R_THRESHOLD = 0.3
 GOLDEN_SCORE_THRESHOLD = 70
 
+DEFAULT_CHUNK_SIZE = 20
+DEFAULT_INTERRUPT_FLAG_NAME = "interrupt.flag"
+PARTIAL_RESULTS_FILENAME = "correlation_partial_results.json"
+
 
 # ==========================================================================
 # گام ۱: بارگذاری داده‌ها
@@ -386,6 +390,225 @@ def _choose_method(sample_count: int) -> Optional[str]:
 
 
 # ==========================================================================
+# مدیریت وضعیت (Status) برای وقفه/ادامه (Resume)
+# ==========================================================================
+
+def default_status_path(output_dir: str) -> str:
+    return os.path.join(output_dir, "correlation_status.json")
+
+
+def load_status(status_file: str) -> Optional[Dict[str, Any]]:
+    """فایل وضعیت قبلی را بارگذاری کن (اگر وجود داشته و قابل ادامه باشد)."""
+    if not status_file or not os.path.exists(status_file):
+        return None
+    try:
+        with open(status_file, "r", encoding="utf-8") as f:
+            status = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("فایل وضعیت قابل خواندن نیست (%s)؛ از ابتدا شروع می‌شود.", e)
+        return None
+
+    if status.get("status") in ("interrupted", "running"):
+        logger.info(
+            "وضعیت قبلی پیدا شد: status=%s, last_chunk_index=%s, "
+            "processed_signatures=%d",
+            status.get("status"),
+            status.get("last_chunk_index"),
+            len(status.get("processed_signatures", [])),
+        )
+        return status
+
+    logger.info("وضعیت قبلی status=%s است؛ ادامه لازم نیست (از ابتدا شروع می‌شود).", status.get("status"))
+    return None
+
+
+def save_status(
+    status_file: str,
+    processed_signatures: List[List[str]],
+    last_chunk_index: int,
+    total_chunks: int,
+    status: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> None:
+    """وضعیت فعلی پایپ‌لاین را در فایل JSON ذخیره کن."""
+    os.makedirs(os.path.dirname(status_file) or ".", exist_ok=True)
+    payload = {
+        "processed_signatures": processed_signatures,
+        "last_chunk_index": last_chunk_index,
+        "total_chunks": total_chunks,
+        "chunk_size": chunk_size,
+        "status": status,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = status_file + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, status_file)
+    logger.info(
+        "وضعیت ذخیره شد: status=%s, chunk=%d/%d, processed=%d",
+        status, last_chunk_index, total_chunks, len(processed_signatures),
+    )
+
+
+def check_interrupt_flag(output_dir: str, interrupt_flag_path: Optional[str] = None) -> bool:
+    """بررسی وجود فایل interrupt.flag (در مسیر مشخص یا در output_dir)."""
+    candidates = []
+    if interrupt_flag_path:
+        candidates.append(interrupt_flag_path)
+    candidates.append(os.path.join(output_dir, DEFAULT_INTERRUPT_FLAG_NAME))
+
+    env_path = os.environ.get("THIRD_REPO_INTERRUPT_FLAG")
+    if env_path:
+        candidates.append(env_path)
+
+    for path in candidates:
+        if path and os.path.exists(path):
+            logger.warning("فایل interrupt.flag پیدا شد در %s؛ پردازش متوقف می‌شود.", path)
+            return True
+    return False
+
+
+def load_partial_results(output_dir: str) -> List[Dict[str, Any]]:
+    """نتایج موقتِ ذخیره‌شده از اجرای قبلی (در صورت resume) را بارگذاری کن."""
+    path = os.path.join(output_dir, PARTIAL_RESULTS_FILENAME)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("نتایج موقت قابل خواندن نیست (%s)؛ نادیده گرفته می‌شود.", e)
+        return []
+
+
+def save_partial_results(output_dir: str, results: List[Dict[str, Any]]) -> None:
+    """نتایج موقت تجمیع‌شده را ذخیره کن تا در صورت وقفه از دست نروند."""
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, PARTIAL_RESULTS_FILENAME)
+
+    def _default(o):
+        if isinstance(o, (np.integer,)):
+            return int(o)
+        if isinstance(o, (np.floating,)):
+            return float(o)
+        if isinstance(o, (datetime,)):
+            return o.isoformat()
+        return str(o)
+
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, default=_default)
+    os.replace(tmp_path, path)
+
+
+def get_unique_signatures(df: pd.DataFrame) -> List[Tuple[str, str]]:
+    """لیست منحصربه‌فرد (coin_composition, signature) را استخراج کن."""
+    required = {"coin_composition", "signature"}
+    if not required.issubset(df.columns):
+        return []
+    pairs = (
+        df[["coin_composition", "signature"]]
+        .dropna()
+        .drop_duplicates()
+        .apply(tuple, axis=1)
+        .tolist()
+    )
+    return sorted(set(pairs))
+
+
+def chunk_list(items: List[Any], chunk_size: int) -> List[List[Any]]:
+    """یک لیست را به قطعات با اندازه ثابت تقسیم کن."""
+    if chunk_size <= 0:
+        chunk_size = DEFAULT_CHUNK_SIZE
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
+def compute_conditional_correlations_for_signatures(
+    df: pd.DataFrame,
+    signatures: List[Tuple[str, str]],
+    min_sample_count: int,
+) -> List[Dict[str, Any]]:
+    """نسخه‌ی محدودشده‌ی سطح ۲ که فقط روی یک زیرمجموعه از امضاها اجرا می‌شود (برای chunking)."""
+    results: List[Dict[str, Any]] = []
+    required_cols = {"coin_composition", "signature"}
+    if not required_cols.issubset(df.columns):
+        return results
+
+    sig_set = set(signatures)
+    subset = df[
+        df.apply(lambda r: (r["coin_composition"], r["signature"]) in sig_set, axis=1)
+    ]
+    if subset.empty:
+        return results
+
+    for (coin, sig), group in subset.groupby(["coin_composition", "signature"]):
+        sample_count = len(group)
+        if sample_count < LOO_LOWER_BOUND:
+            continue
+
+        method = _choose_method(sample_count)
+        if method is None:
+            continue
+
+        effective_full_threshold = max(min_sample_count, LOO_UPPER_BOUND)
+        if method == "fold" and sample_count < effective_full_threshold:
+            method = "loo" if sample_count >= LOO_LOWER_BOUND else None
+        if method is None:
+            continue
+
+        for feature in ALL_FEATURES:
+            r, p, n = _compute_feature_correlation(group, feature, method=method)
+            if np.isnan(r) or n < LOO_LOWER_BOUND:
+                continue
+            if abs(r) < MIN_R_THRESHOLD:
+                continue
+            results.append(
+                {
+                    "level": "conditional",
+                    "strategy_id": None,
+                    "coin_composition": coin,
+                    "signature": sig,
+                    "feature": feature,
+                    "lag": None,
+                    "correlation": r,
+                    "p_value": p,
+                    "sample_count": n,
+                }
+            )
+
+    return results
+
+
+def save_summary(
+    output_dir: str,
+    status: str,
+    total_signatures: int,
+    processed_signatures: int,
+    output_df: pd.DataFrame,
+    output_files: List[str],
+    version_schema: Dict[str, Any],
+) -> str:
+    """فایل خلاصه correlation_summary.json را تولید و ذخیره کن."""
+    summary = {
+        "status": status,
+        "total_signatures": total_signatures,
+        "processed_signatures": processed_signatures,
+        "global_correlations": int((output_df["level"] == "global").sum()) if not output_df.empty else 0,
+        "conditional_correlations": int((output_df["level"] == "conditional").sum()) if not output_df.empty else 0,
+        "lag_correlations": int((output_df["level"] == "lag").sum()) if not output_df.empty else 0,
+        "output_files": output_files,
+        "version_id": version_schema.get("version_id") or version_schema.get("version"),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    os.makedirs(output_dir, exist_ok=True)
+    summary_path = os.path.join(output_dir, "correlation_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    logger.info("فایل خلاصه در %s ذخیره شد.", summary_path)
+    return summary_path
+
+
+# ==========================================================================
 # گام ۳: سطح ۱ - همبستگی کلی (Global)
 # ==========================================================================
 
@@ -606,9 +829,19 @@ def build_output_dataframe(
 def save_output(df: pd.DataFrame, output_dir: str) -> str:
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "correlations.parquet")
-    df.to_parquet(output_path, index=False)
-    logger.info("خروجی در %s ذخیره شد (%d رکورد).", output_path, len(df))
-    return output_path
+    try:
+        df.to_parquet(output_path, index=False)
+        logger.info("خروجی در %s ذخیره شد (%d رکورد).", output_path, len(df))
+        return output_path
+    except (ImportError, ValueError) as e:
+        logger.warning(
+            "ذخیره Parquet ناموفق بود (%s)؛ به‌جای آن CSV ذخیره می‌شود. "
+            "برای رفع این مشکل pyarrow یا fastparquet را نصب کنید.", e
+        )
+        csv_path = os.path.join(output_dir, "correlations.csv")
+        df.to_csv(csv_path, index=False)
+        logger.info("خروجی (هشدار: CSV) در %s ذخیره شد (%d رکورد).", csv_path, len(df))
+        return csv_path
 
 
 # ==========================================================================
@@ -648,7 +881,14 @@ def run_correlation_pipeline(
     version_schema_path: Optional[str],
     output_dir: str,
     min_sample_count: int = MIN_SAMPLE_GLOBAL_CONDITIONAL_DEFAULT,
+    status_file: Optional[str] = None,
+    resume: bool = False,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    interrupt_flag_path: Optional[str] = None,
 ) -> str:
+
+    status_file = status_file or default_status_path(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     # گام ۱: بارگذاری
     df = load_signatures(signatures_dir)
@@ -667,15 +907,100 @@ def run_correlation_pipeline(
     # گام ۲: استخراج/تکمیل ویژگی‌های خبری
     df = enrich_with_news_features(df, news_df)
 
-    # گام ۳ تا ۵: محاسبه همبستگی‌ها
-    all_results: List[Dict[str, Any]] = []
-    all_results.extend(compute_global_correlations(df, min_sample_count))
-    all_results.extend(compute_conditional_correlations(df, min_sample_count))
-    all_results.extend(compute_lag_correlations(df))
+    # --- گام ۰: بارگذاری وضعیت قبلی (در صورت --resume) ---
+    prev_status = load_status(status_file) if resume else None
+    processed_signatures: List[List[str]] = (
+        prev_status.get("processed_signatures", []) if prev_status else []
+    )
+    processed_set = {tuple(p) for p in processed_signatures}
+    start_chunk_index = (prev_status.get("last_chunk_index", -1) + 1) if prev_status else 0
 
-    # گام ۶: ذخیره‌سازی
+    all_results: List[Dict[str, Any]] = load_partial_results(output_dir) if prev_status else []
+
+    # --- گام ۳: لیست امضاهای منحصربه‌فرد ---
+    all_signatures = get_unique_signatures(df)
+    total_signatures = len(all_signatures)
+    remaining_signatures = [s for s in all_signatures if s not in processed_set]
+
+    # --- گام ۴: تقسیم به قطعات ---
+    chunks = chunk_list(remaining_signatures, chunk_size)
+    total_chunks = (len(processed_signatures) // chunk_size if chunk_size else 0) + len(chunks)
+    # total_chunks اینجا برآوردی است؛ مقدار دقیق پس از محاسبه با چانک‌های قبلی به‌روزرسانی می‌شود.
+    total_chunks = start_chunk_index + len(chunks)
+
+    logger.info(
+        "تعداد کل امضاها: %d | از قبل پردازش‌شده: %d | باقی‌مانده: %d | تعداد قطعات جدید: %d",
+        total_signatures, len(processed_set), len(remaining_signatures), len(chunks),
+    )
+
+    # --- سطح ۱ (Global): فقط یک بار در کل اجرا، اگر هنوز محاسبه نشده ---
+    already_has_global = any(r.get("level") == "global" for r in all_results)
+    if not already_has_global:
+        if check_interrupt_flag(output_dir, interrupt_flag_path):
+            save_status(status_file, processed_signatures, start_chunk_index - 1, total_chunks, "interrupted", chunk_size)
+            save_partial_results(output_dir, all_results)
+            logger.warning("interrupt.flag قبل از شروع پیدا شد؛ خروج graceful.")
+            return ""
+        global_results = compute_global_correlations(df, min_sample_count)
+        all_results.extend(global_results)
+        save_partial_results(output_dir, all_results)
+
+    # --- سطح ۴ (Lag): فقط یک بار در کل اجرا، اگر هنوز محاسبه نشده ---
+    already_has_lag = any(r.get("level") == "lag" for r in all_results)
+    if not already_has_lag:
+        if check_interrupt_flag(output_dir, interrupt_flag_path):
+            save_status(status_file, processed_signatures, start_chunk_index - 1, total_chunks, "interrupted", chunk_size)
+            save_partial_results(output_dir, all_results)
+            logger.warning("interrupt.flag قبل از تحلیل lag پیدا شد؛ خروج graceful.")
+            return ""
+        lag_results = compute_lag_correlations(df)
+        all_results.extend(lag_results)
+        save_partial_results(output_dir, all_results)
+
+    # --- گام ۵: پردازش هر قطعه (سطح ۲ - conditional) ---
+    interrupted = False
+    current_chunk_index = start_chunk_index - 1
+    for offset, chunk in enumerate(chunks):
+        current_chunk_index = start_chunk_index + offset
+
+        if check_interrupt_flag(output_dir, interrupt_flag_path):
+            interrupted = True
+            current_chunk_index -= 1  # این قطعه پردازش نشد
+            break
+
+        chunk_results = compute_conditional_correlations_for_signatures(df, chunk, min_sample_count)
+        all_results.extend(chunk_results)
+
+        processed_signatures.extend([list(s) for s in chunk])
+        save_partial_results(output_dir, all_results)
+        save_status(
+            status_file, processed_signatures, current_chunk_index, total_chunks, "running", chunk_size
+        )
+        logger.info(
+            "قطعه %d/%d پردازش شد (%d امضا، %d همبستگی جدید).",
+            current_chunk_index + 1, total_chunks, len(chunk), len(chunk_results),
+        )
+
+    if interrupted:
+        save_status(status_file, processed_signatures, current_chunk_index, total_chunks, "interrupted", chunk_size)
+        logger.warning("اجرا به دلیل وجود interrupt.flag متوقف شد (graceful). برای ادامه از --resume استفاده کنید.")
+        # نتایج موقت قبلاً ذخیره شده‌اند؛ خروج با کد ۰ در main انجام می‌شود.
+        return ""
+
+    # --- گام ۶: پس از اتمام همه قطعات ---
     output_df = build_output_dataframe(all_results, version_schema)
     output_path = save_output(output_df, output_dir)
+
+    save_status(status_file, processed_signatures, current_chunk_index, total_chunks, "completed", chunk_size)
+    save_summary(
+        output_dir=output_dir,
+        status="completed",
+        total_signatures=total_signatures,
+        processed_signatures=len(processed_signatures),
+        output_df=output_df,
+        output_files=[os.path.basename(output_path)],
+        version_schema=version_schema,
+    )
 
     print_summary_report(output_df)
     return output_path
@@ -702,6 +1027,27 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=MIN_SAMPLE_GLOBAL_CONDITIONAL_DEFAULT,
         help="آستانه نمونه برای سطح ۱ و ۲ (پیش‌فرض ۵۰)",
     )
+    parser.add_argument(
+        "--status-file",
+        default=None,
+        help="مسیر فایل وضعیت برای مدیریت وقفه/ادامه (پیش‌فرض: correlation_status.json در output-dir)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="در صورت فعال بودن، از آخرین وضعیت ذخیره‌شده ادامه می‌دهد",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=DEFAULT_CHUNK_SIZE,
+        help="تعداد امضاها در هر قطعه پردازشی (پیش‌فرض ۲۰)",
+    )
+    parser.add_argument(
+        "--interrupt-flag",
+        default=None,
+        help="مسیر فایل interrupt.flag برای توقف graceful (اختیاری)",
+    )
     return parser.parse_args(argv)
 
 
@@ -716,6 +1062,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             version_schema_path=args.version_schema,
             output_dir=args.output_dir,
             min_sample_count=args.min_sample_count,
+            status_file=args.status_file,
+            resume=args.resume,
+            chunk_size=args.chunk_size,
+            interrupt_flag_path=args.interrupt_flag,
         )
         return 0
     except Exception as e:
