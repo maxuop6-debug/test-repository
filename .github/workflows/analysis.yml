@@ -560,6 +560,17 @@ jobs:
           path: /tmp/chunk_cache
           key: chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
 
+      # [فیکس]: actions/cache فقط یک کش را در job دیگر restore می‌کند، نه همه‌ی چانک‌ها.
+      # برای جمع‌آوری done_items از همه‌ی چانک‌ها در job cleanup، باید artifact مجزا و با نام یکتا آپلود شود.
+      - name: 6.5. آپلود done_items این چانک به‌عنوان artifact مجزا
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: done-items-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: /tmp/chunk_cache/done_items.json
+          retention-days: 1
+          if-no-files-found: warn
+
   # ================================================================
   # cleanup: حذف دقیق ترکیبات موفق از all_combinations.json
   # ================================================================
@@ -579,19 +590,21 @@ jobs:
             mkdir -p "$CACHE_DIR"
           done
 
-      - name: بازیابی Cache chunk‌ها
-        uses: actions/cache/restore@v4
+      # [فیکس]: actions/cache/restore فقط یک کش منطبق را برمی‌گرداند، نه همه‌ی چانک‌ها.
+      # به همین دلیل از بین ۱۲ چانک موفق فقط یکی (معادل ۱۰۰۰ ترکیب) واقعاً restore می‌شد.
+      # راه‌حل: دانلود همه‌ی artifact های done-items هر چانک با pattern.
+      - name: دانلود artifact های done_items همه‌ی چانک‌ها
+        uses: actions/download-artifact@v4
         with:
-          path: /tmp/chunk_cache
-          key: chunk-result-
-          restore-keys: |
-            chunk-result-
+          pattern: done-items-*-${{ github.run_id }}
+          path: /tmp/done_artifacts_raw
+          merge-multiple: false
 
-      - name: ادغام لیست‌های done از Cache
+      - name: ادغام لیست‌های done از artifact ها
         run: |
           mkdir -p /tmp/done_artifacts
-          find /tmp -name 'done_items.json' -path '*/chunk_cache*' -print0 2>/dev/null \
-            | xargs -0 -I{} cp {} /tmp/done_artifacts/ 2>/dev/null || true
+          find /tmp/done_artifacts_raw -name 'done_items.json' -print0 2>/dev/null \
+            | xargs -0 -I{} cp {} /tmp/done_artifacts/$(basename $(dirname {})).json 2>/dev/null || true
 
       - name: ادغام لیست‌های done و حذف دقیق از all_combinations.json
         env:
@@ -612,8 +625,8 @@ jobs:
             exit 0
           fi
 
-          # [تغییر ۴]: دانلود یکباره، ویرایش، آپلود یکباره با حفظ ۱۵ بار تلاش برای تداخل SHA
-          RETRY=0; MAX=15
+          # [تغییر ۴]: دانلود یکباره، ویرایش، آپلود یکباره با ۱۰۰۰۰ بار تلاش برای تداخل SHA
+          RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
             # یکبار دانلود کامل فایل
             $CURL -s -o /tmp/current.json \
