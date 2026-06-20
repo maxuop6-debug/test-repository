@@ -22,14 +22,12 @@ jobs:
     timeout-minutes: 330
 
     steps:
-      # ─── ۱. checkout مخزن اصلی ───────────────────────────────────────────────
       - name: Checkout now-test-repo
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ─── ۲. clone مخازن یکبار مصرف فقط اگر پرچم نداشته باشند ───────────────
       - name: Clone one-time repos if not backed up
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,7 +62,6 @@ jobs:
               cp -r test-repository-clone/encrypted_data . || true
           fi
 
-      # ─── ۳. نصب Python + وابستگی‌ها ─────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -73,7 +70,6 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip requests cryptography
 
-      # ─── ۴. حلقه ۵ ساعته ────────────────────────────────────────────────────
       - name: Run 5-hour backup loop
         env:
           RESULTS_PASSWORD:      ${{ secrets.RESULTS_PASSWORD }}
@@ -125,12 +121,19 @@ jobs:
           process_updates_loop() {
             while [ $(date +%s) -lt $END_TIME ]; do
               python backup_system.py process-updates || true
+
+              # commit pending_links.json و update_offset.json بلافاصله
+              if ! git diff --quiet pending_links.json update_offset.json; then
+                git add pending_links.json update_offset.json
+                git commit -m "chore: update pending links and offset" || true
+                git push origin main || true
+              fi
+
               sleep 30
             done
           }
 
           # ─── اجرای همزمان ────────────────────────────────────────────
-          # حلقه بک‌آپ در پس‌زمینه
           (
             while [ $(date +%s) -lt $END_TIME ]; do
               do_run_and_commit
@@ -138,13 +141,11 @@ jobs:
             done
           ) &
 
-          # حلقه پردازش آپدیت در foreground (همین مرحله)
           process_updates_loop
 
           wait
           echo "✅ حلقه ۵ ساعته تمام شد"
 
-      # ─── ۵. گزارش خطا ────────────────────────────────────────────────────────
       - name: Notify on failure
         if: failure()
         env:
@@ -152,7 +153,6 @@ jobs:
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python backup_system.py notify-failure
 
-      # ─── ۶. بعد از ۵ ساعت: loop_backup رو صدا بزن ───────────────────────────
       - name: Trigger loop_backup
         if: always()
         env:
