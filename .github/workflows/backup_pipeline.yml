@@ -113,7 +113,7 @@ jobs:
               [ -f "$f" ] && git add "$f"
             done
             git add -u analysis_results/ 2>/dev/null || true
-            git add -u movie_messages/   2>/dev/null || true
+            git add movie_messages/      2>/dev/null || true
             git add -u aggregated/       2>/dev/null || true
             # پرچم‌های یکبار مصرف داخل مخزن اصلی
             git add .onetime_flags/      2>/dev/null || true
