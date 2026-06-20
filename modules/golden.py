@@ -71,7 +71,7 @@ DEFAULT_CHUNK_SIZE = 50  # تعداد امضا در هر قطعه (chunk)
 def load_signatures(signatures_dir: str) -> pd.DataFrame:
     """بارگذاری تمام فایل‌های .jsonl از دایرکتوری مشخص."""
     path = Path(signatures_dir)
-    files = list(path.glob("*.jsonl"))
+    files = list(path.rglob("*.jsonl"))
     if not files:
         raise FileNotFoundError(f"هیچ فایل .jsonl در {signatures_dir} یافت نشد.")
 
@@ -101,15 +101,6 @@ def load_version_schema(version_schema: str | None) -> str:
     return schema.get("version_id", DEFAULT_VERSION_ID)
 
 
-def load_correlations(output_dir: str) -> pd.DataFrame | None:
-    """بارگذاری correlations.parquet در صورت وجود (گام ۷)."""
-    corr_path = Path(output_dir) / "correlations.parquet"
-    try:
-        df = _load(corr_path)
-        log.info("correlations یافت شد – بازخورد Correlation اعمال می‌شود.")
-        return df
-    except FileNotFoundError:
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -176,15 +167,29 @@ def compute_raw_metrics(group: pd.DataFrame) -> dict:
         "max_loss_ratio": max_loss_ratio,
         "avg_daily_return": avg_daily_return,
         "sample_count": n,
+        "total_return_sum": sum(returns),
     }
 
 
 def resolve_all_win_pf(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """جایگزینی profit_factor=None (all-win) با max_valid_PF * 1.5."""
+    """جایگزینی profit_factor=None (all-win) بر اساس total_return گروه.
+
+    - اگر total_return > 1: گروه معتبر است → ضریب 1.5 * max_valid_pf
+    - اگر total_return <= 1: سود ناچیز است → ضریب پایین (1.0 * max_valid_pf یا کمتر)
+    """
     valid_pf = raw_df.loc[raw_df["profit_factor"].notna(), "profit_factor"]
     max_valid_pf = valid_pf.max() if not valid_pf.empty else 1.0
-    replacement = max_valid_pf * 1.5
-    raw_df["profit_factor"] = raw_df["profit_factor"].fillna(replacement)
+
+    all_win_mask = raw_df["profit_factor"].isna()
+
+    def replacement_for(total_return: float) -> float:
+        if total_return is not None and total_return > 1:
+            return max_valid_pf * 1.5
+        return max_valid_pf * 1.0
+
+    raw_df.loc[all_win_mask, "profit_factor"] = raw_df.loc[all_win_mask, "total_return_sum"].apply(
+        replacement_for
+    )
     return raw_df
 
 
@@ -292,38 +297,6 @@ def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(result_rows)
 
 
-# ---------------------------------------------------------------------------
-# گام ۷: بازخورد از Correlation (اختیاری) – باگ‌ها رفع شدند
-# ---------------------------------------------------------------------------
-
-def apply_correlation_feedback(
-    scores_df: pd.DataFrame,
-    correlations_df: pd.DataFrame,
-    alpha: float,
-) -> pd.DataFrame:
-    """
-    به‌روزرسانی امتیاز با استفاده از میانگین همبستگی.
-    فقط از رکوردهای سطح 'lag' استفاده می‌شود و ستون 'correlation' به‌کار می‌رود.
-    """
-    # ========== رفع باگ ۱: استفاده از ستون "correlation" به جای "r" ==========
-    # ========== رفع باگ ۲: فقط سطح lag در نظر گرفته شود ==========
-    lag_corr = correlations_df[correlations_df["level"] == "lag"].copy()
-    if lag_corr.empty:
-        log.warning("هیچ رکوردی با level='lag' در correlations.parquet یافت نشد. بازخورد اعمال نمی‌شود.")
-        return scores_df
-
-    corr_avg = (
-        lag_corr.groupby(["strategy_id", "coin_composition"])["correlation"]
-        .apply(lambda x: x.abs().mean())
-        .reset_index()
-        .rename(columns={"correlation": "avg_corr"})
-    )
-
-    scores_df = scores_df.merge(corr_avg, on=["strategy_id", "coin_composition"], how="left")
-    scores_df["avg_corr"] = scores_df["avg_corr"].fillna(0.0)
-    scores_df["score"] = (scores_df["score"] + alpha * scores_df["avg_corr"]).clip(0, 100).round(4)
-    scores_df.drop(columns=["avg_corr"], inplace=True)
-    return scores_df
 
 
 # ---------------------------------------------------------------------------
@@ -545,10 +518,10 @@ def run(
     raw_out = _save(raw_df, output_path / "golden_raw.parquet")
     log.info(f"golden_raw ذخیره شد: {raw_out}")
 
-    # ── فیلتر کم‌تکرار ────────────────────────────────────────────────────
-    log.info("فیلتر گروه‌های کم‌تکرار...")
-    filtered_df, removed_count = filter_low_sample(raw_df)
-    log.info(f"گروه‌های حذف‌شده (کم‌تکرار): {removed_count:,} از {len(raw_df):,}")
+    # ── حذف فیلتر کم‌تکرار: استفاده مستقیم از داده‌های خام ─────────────────
+    log.info("فیلتر کم‌تکرار غیرفعال است – استفاده مستقیم از raw_df.")
+    filtered_df = raw_df
+    removed_count = 0
     log.info(f"گروه‌های باقیمانده: {len(filtered_df):,}")
 
     if filtered_df.empty:
@@ -571,12 +544,6 @@ def run(
     # ── وزن‌دهی چند-کوینه ─────────────────────────────────────────────────
     log.info("وزن‌دهی استراتژی‌های چند-کوینه...")
     scores_df = weighted_multi_coin_score(norm_df)
-
-    # ── بازخورد Correlation (اختیاری) ────────────────────────────────────
-    corr_df = load_correlations(output_dir)
-    if corr_df is not None:
-        log.info("اعمال بازخورد Correlation...")
-        scores_df = apply_correlation_feedback(scores_df, corr_df, alpha)
 
     # ── آماده‌سازی golden_scores.parquet ──────────────────────────────────
     scores_out_df = scores_df[
