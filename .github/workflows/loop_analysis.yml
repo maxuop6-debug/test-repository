@@ -507,7 +507,7 @@ jobs:
               --progress /tmp/dummy \
               --strategies /tmp/strategies.txt \
               --output-dir /tmp/dummy \
-              --batch-size 100 2>&1
+              --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
               echo "❌ اسکریپت با خطا مواجه شد (کد $EXIT_CODE)"
@@ -523,7 +523,7 @@ jobs:
               -H "Accept: application/vnd.github.v3.raw" 2>/dev/null)
             if [ -n "$ALL_COMBOS_CONTENT" ] && [ "$ALL_COMBOS_CONTENT" != "null" ]; then
               TOTAL_COMBOS=$(echo "$ALL_COMBOS_CONTENT" | jq 'length')
-              TOTAL_BATCHES=$(( (TOTAL_COMBOS + 99) / 100 ))
+              TOTAL_BATCHES=$(( (TOTAL_COMBOS + 499) / 500 ))
               echo "total_batches=$TOTAL_BATCHES" >> $GITHUB_OUTPUT
               echo "✅ تعداد بسته‌ها: $TOTAL_BATCHES" | tee -a logs/run.log
               break
