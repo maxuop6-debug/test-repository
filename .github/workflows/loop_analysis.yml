@@ -591,8 +591,12 @@ jobs:
   # Job 5: اجرای golden (پس از اتمام کارهای ثابت)
   # ============================================================
   dispatch-golden:
-    needs: dispatch-fixed
-    if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
+    needs: [prepare-dispatch, dispatch-fixed]
+    if: |
+      always() &&
+      needs.prepare-dispatch.result == 'success' &&
+      needs.prepare-dispatch.outputs.total_batches == '0' &&
+      (needs.dispatch-fixed.result == 'success' || needs.dispatch-fixed.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -705,8 +709,12 @@ jobs:
   # Job 6: اجرای portfolios (پس از اتمام golden)
   # ============================================================
   dispatch-portfolios:
-    needs: dispatch-golden
-    if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
+    needs: [prepare-dispatch, dispatch-golden]
+    if: |
+      always() &&
+      needs.prepare-dispatch.result == 'success' &&
+      needs.prepare-dispatch.outputs.total_batches == '0' &&
+      needs.dispatch-golden.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -819,8 +827,12 @@ jobs:
   # Job 6.5: اجرای correlation (اختیاری، پس از اتمام portfolios)
   # ============================================================
   dispatch-correlation:
-    needs: [dispatch-portfolios, prepare-dispatch]   # ✅ اصلاح شد
-    if: always() && needs.prepare-dispatch.outputs.total_batches == '0'
+    needs: [prepare-dispatch, dispatch-portfolios]
+    if: |
+      always() &&
+      needs.prepare-dispatch.result == 'success' &&
+      needs.prepare-dispatch.outputs.total_batches == '0' &&
+      needs.dispatch-portfolios.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
