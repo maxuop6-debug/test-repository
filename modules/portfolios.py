@@ -49,13 +49,13 @@ log = logging.getLogger("portfolios")
 # -----------------------------------------------------------------------------
 # ثابت‌ها
 # -----------------------------------------------------------------------------
-GOLDEN_SCORE_THRESHOLD = 70.0
+GOLDEN_SCORE_THRESHOLD = 45.0
 MIN_PAIR_OVERLAP = 10
 MIN_PORTFOLIO_SAMPLES = 10
 CORR_PERCENTILE_THRESHOLD = 25
 PORTFOLIO_SIZES = (2, 3)
 ABS_MIN_SURVIVAL_RATE = 50.0
-ABS_MIN_COMPENSATION_RATIO = 1.0
+ABS_MIN_COMPENSATION_RATIO = 0.6
 ABS_MIN_AVG_RETURN = 0.0
 SCORE_WEIGHTS = {
     "survival": 0.35,
@@ -170,9 +170,13 @@ def check_interrupt_flag(output_dir: Path) -> bool:
 # گام ۱: بارگذاری داده‌ها
 # -----------------------------------------------------------------------------
 
-def load_signatures(signatures_dir: Path) -> pd.DataFrame:
-    """تمام فایل‌های .jsonl را از دایرکتوری signatures بارگذاری و یکی می‌کند."""
-    files = sorted(signatures_dir.glob("*.jsonl"))
+def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = None) -> pd.DataFrame:
+    """تمام فایل‌های .jsonl را از دایرکتوری signatures بارگذاری و یکی می‌کند.
+
+    در صورتی که signatures_filter داده شده باشد، فقط رکوردهایی که فیلد
+    signature آنها در لیست موجود در فایل JSON فیلتر قرار دارد نگه داشته می‌شوند.
+    """
+    files = sorted(signatures_dir.rglob("*.jsonl"))
     if not files:
         raise FileNotFoundError(f"هیچ فایل .jsonl در {signatures_dir} پیدا نشد.")
 
@@ -207,6 +211,18 @@ def load_signatures(signatures_dir: Path) -> pd.DataFrame:
     data["period_end"] = pd.to_datetime(data["period_end"])
     data["total_return"] = pd.to_numeric(data["total_return"], errors="coerce")
     data = data.dropna(subset=["total_return"])
+
+    if signatures_filter is not None and Path(signatures_filter).exists():
+        with open(signatures_filter, "r", encoding="utf-8") as f:
+            allowed_signatures = set(json.load(f))
+        before = len(data)
+        data = data[data["signature"].isin(allowed_signatures)].copy()
+        log.info(
+            "اعمال signatures-filter: %d -> %d رکورد (%d امضای مجاز).",
+            before, len(data), len(allowed_signatures),
+        )
+    elif signatures_filter is not None:
+        log.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
 
     log.info("مجموع رکوردهای signatures بارگذاری‌شده: %d", len(data))
     return data
@@ -491,8 +507,8 @@ def evaluate_group(
         + SCORE_WEIGHTS["return"] * pf_df["return_norm"]
     )
 
-    pf_df = pf_df.sort_values("score", ascending=False).head(top_n)
-    # ========== باگ ۲ رفع شد: sample_count را حذف نکن ==========
+    # حذف محدودیت Top-N: همه‌ی سبدهای امتیازدهی‌شده بدون محدودیت برگردانده می‌شوند.
+    pf_df = pf_df.sort_values("score", ascending=False)
     pf_df = pf_df.drop(columns=["comp_norm", "corr_norm", "return_norm"])
 
     return pf_df.to_dict("records")
@@ -512,6 +528,7 @@ def run(
     status_file: Path,
     resume: bool,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    signatures_filter: Optional[Path] = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -526,7 +543,7 @@ def run(
         log.info("ادامه از آخرین وقفه — %d امضا قبلاً پردازش شده‌اند.", len(processed_set))
 
     # ---- گام ۱: بارگذاری داده‌ها ----
-    signatures = load_signatures(signatures_dir)
+    signatures = load_signatures(signatures_dir, signatures_filter)
     golden = load_golden_scores(golden_scores_path)
     _strategies_meta = load_strategies_metadata(strategies_json_path)
     version_id = load_version_schema(version_schema_path)
@@ -749,6 +766,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--chunk-size", required=False, type=int, default=DEFAULT_CHUNK_SIZE,
         help=f"تعداد امضا در هر chunk (پیش‌فرض {DEFAULT_CHUNK_SIZE})",
     )
+    parser.add_argument(
+        "--signatures-filter", required=False, type=str, default=None,
+        help="مسیر فایل JSON شامل آرایه‌ای از امضاها برای پردازش زیرمجموعه‌ای (اختیاری)",
+    )
     return parser.parse_args(argv)
 
 
@@ -775,6 +796,7 @@ def main(argv=None) -> int:
             status_file=status_file,
             resume=args.resume,
             chunk_size=args.chunk_size,
+            signatures_filter=args.signatures_filter,
         )
     except Exception:
         log.exception("اجرای ماژول Portfolios با خطا مواجه شد.")
