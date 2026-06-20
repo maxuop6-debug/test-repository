@@ -620,9 +620,21 @@ jobs:
             if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
               echo "ERROR: دریافت فایل فعلی ناموفق."; exit 1
             fi
-            SHA=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json" | jq -r '.sha')
-            [ -z "$SHA" ] || [ "$SHA" = "null" ] && { echo "ERROR: SHA نامعتبر."; exit 1; }
+            SHA=""
+            for sha_try in 1 2 3 4 5; do
+              SHA_RESP=$($CURL -s -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$(date +%s)")
+              SHA=$(echo "$SHA_RESP" | jq -r '.sha // empty' 2>/dev/null)
+              [ -n "$SHA" ] && break
+              echo "⚠️ تلاش $sha_try برای گرفتن SHA ناموفق بود — پاسخ: $(echo "$SHA_RESP" | head -c 200)"
+              sleep $(( (RANDOM % 4) + 2 ))
+            done
+            if [ -z "$SHA" ]; then
+              echo "ERROR: SHA نامعتبر پس از چند تلاش."
+              RETRY=$((RETRY+1))
+              if [ $RETRY -ge $MAX ]; then exit 1; fi
+              continue
+            fi
 
             jq -s '.[0] as $c | .[1] as $d
               | $c - ($c | map(select(. as $i | $d | any(. == $i))))
