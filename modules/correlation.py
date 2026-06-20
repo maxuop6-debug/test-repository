@@ -52,7 +52,7 @@ MIN_SAMPLE_LAG = 30
 LOO_LOWER_BOUND = 10
 LOO_UPPER_BOUND = 50
 MIN_R_THRESHOLD = 0.3
-GOLDEN_SCORE_THRESHOLD = 70
+GOLDEN_SCORE_THRESHOLD = 50
 
 DEFAULT_CHUNK_SIZE = 20
 DEFAULT_INTERRUPT_FLAG_NAME = "interrupt.flag"
@@ -63,14 +63,18 @@ PARTIAL_RESULTS_FILENAME = "correlation_partial_results.json"
 # گام ۱: بارگذاری داده‌ها
 # ==========================================================================
 
-def load_signatures(signatures_dir: str) -> pd.DataFrame:
-    """تمام فایل‌های .jsonl را از دایرکتوری signatures بخوان و یکپارچه کن."""
+def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None) -> pd.DataFrame:
+    """تمام فایل‌های .jsonl را از دایرکتوری signatures بخوان و یکپارچه کن.
+
+    در صورتی که signatures_filter داده شده باشد، فقط رکوردهایی که فیلد
+    signature آنها در لیست موجود در فایل JSON فیلتر قرار دارد نگه داشته می‌شوند.
+    """
     signatures_path = Path(signatures_dir)
     if not signatures_path.exists():
         raise FileNotFoundError(f"مسیر signatures پیدا نشد: {signatures_dir}")
 
     records: List[Dict[str, Any]] = []
-    jsonl_files = sorted(signatures_path.glob("*.jsonl"))
+    jsonl_files = sorted(signatures_path.rglob("*.jsonl"))
     if not jsonl_files:
         logger.warning("هیچ فایل .jsonl در %s پیدا نشد.", signatures_dir)
 
@@ -94,6 +98,22 @@ def load_signatures(signatures_dir: str) -> pd.DataFrame:
 
     df = pd.DataFrame(records)
     logger.info("تعداد %d رکورد از %d فایل signatures بارگذاری شد.", len(df), len(jsonl_files))
+
+    if signatures_filter and os.path.exists(signatures_filter):
+        with open(signatures_filter, "r", encoding="utf-8") as f:
+            allowed_signatures = set(json.load(f))
+        if "signature" in df.columns:
+            before = len(df)
+            df = df[df["signature"].isin(allowed_signatures)].copy()
+            logger.info(
+                "اعمال signatures-filter: %d -> %d رکورد (%d امضای مجاز).",
+                before, len(df), len(allowed_signatures),
+            )
+        else:
+            logger.warning("ستون signature در داده‌ها وجود ندارد؛ signatures-filter نادیده گرفته شد.")
+    elif signatures_filter:
+        logger.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
+
     return df
 
 
@@ -619,8 +639,7 @@ def compute_global_correlations(
 
     for coin, group in df.groupby("coin_composition"):
         sample_count = len(group)
-        if sample_count < min_sample_count:
-            continue
+        # فیلتر حداقل تعداد دوره حذف شد: همه کوین‌ها (حتی با نمونه کم) محاسبه می‌شوند.
 
         for feature in ALL_FEATURES:
             r, p, n = _compute_feature_correlation(group, feature, method="full")
@@ -873,13 +892,14 @@ def run_correlation_pipeline(
     resume: bool = False,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     interrupt_flag_path: Optional[str] = None,
+    signatures_filter: Optional[str] = None,
 ) -> str:
 
     status_file = status_file or default_status_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     # ---- گام ۱: بارگذاری داده‌ها ----
-    df = load_signatures(signatures_dir)
+    df = load_signatures(signatures_dir, signatures_filter)
     if df.empty:
         raise ValueError("هیچ داده‌ای از signatures بارگذاری نشد؛ پایپ‌لاین متوقف شد.")
 
@@ -1032,6 +1052,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="مسیر فایل interrupt.flag برای توقف graceful (اختیاری)",
     )
+    parser.add_argument(
+        "--signatures-filter",
+        type=str,
+        default=None,
+        help="مسیر فایل JSON شامل آرایه‌ای از امضاها برای پردازش زیرمجموعه‌ای (اختیاری)",
+    )
     return parser.parse_args(argv)
 
 
@@ -1050,6 +1076,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             resume=args.resume,
             chunk_size=args.chunk_size,
             interrupt_flag_path=args.interrupt_flag,
+            signatures_filter=args.signatures_filter,
         )
         return 0
     except Exception as e:
