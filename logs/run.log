@@ -11,3 +11,4 @@ Mem:            15Gi       879Mi        13Gi        41Mi       1.5Gi        14Gi
 1- دریافت لیست استراتژی‌ها از مخزن سوم (با اسکن محلی)...
 find: ‘backtest_results’: No such file or directory
 ⚠️ هیچ استراتژی در backtest_results یافت نشد.
+هیچ تغییری در لاگ وجود ندارد.
