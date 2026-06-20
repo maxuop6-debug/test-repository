@@ -30,7 +30,6 @@ jobs:
           fetch-depth: 0
 
       # ─── ۲. clone مخازن یکبار مصرف فقط اگر پرچم نداشته باشند ───────────────
-      # پرچم‌ها داخل مخزن اصلی در .onetime_flags/ نگهداری می‌شوند
       - name: Clone one-time repos if not backed up
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -38,7 +37,6 @@ jobs:
           OWNER="${{ github.repository_owner }}"
           ACTOR="${{ github.actor }}"
 
-          # Test-repo: شامل data.enc و zips/
           if [ -f ".onetime_flags/test_repo_data_enc.backup_done" ] && \
              [ -f ".onetime_flags/test_repo_zips.backup_done" ]; then
             echo "✅ Test-repo قبلاً بکاپ شده – clone نمی‌کنیم"
@@ -50,7 +48,6 @@ jobs:
               || echo "⚠️ Test-repo کلون نشد"
           fi
 
-          # test-repository: شامل data/news/ و encrypted_data/
           if [ -f ".onetime_flags/data_news.backup_done" ] && \
              [ -f ".onetime_flags/encrypted_data.backup_done" ] && \
              [ -f ".onetime_flags/encrypted_data_src.backup_done" ]; then
@@ -61,7 +58,6 @@ jobs:
               test-repository-clone \
               && echo "✅ test-repository clone شد" \
               || echo "⚠️ test-repository کلون نشد"
-            # مسیرهای مورد نیاز را در جای درست قرار بده
             [ -d "test-repository-clone/data/news" ] && \
               mkdir -p data && cp -r test-repository-clone/data/news data/news || true
             [ -d "test-repository-clone/encrypted_data" ] && \
@@ -77,7 +73,7 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip requests cryptography
 
-      # ─── ۴. حلقه ۵ ساعته: همه کارها اینجاست ────────────────────────────────
+      # ─── ۴. حلقه ۵ ساعته ────────────────────────────────────────────────────
       - name: Run 5-hour backup loop
         env:
           RESULTS_PASSWORD:      ${{ secrets.RESULTS_PASSWORD }}
@@ -101,6 +97,7 @@ jobs:
           END_TIME=$(( $(date +%s) + 5*3600 ))
           echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
 
+          # ─── تابع بک‌آپ (هر ۳۰ دقیقه) ──────────────────────────────
           do_run_and_commit() {
             git pull --rebase origin main 2>/dev/null || true
 
@@ -115,9 +112,7 @@ jobs:
             git add -u analysis_results/ 2>/dev/null || true
             git add movie_messages/      2>/dev/null || true
             git add -u aggregated/       2>/dev/null || true
-            # پرچم‌های یکبار مصرف داخل مخزن اصلی
             git add .onetime_flags/      2>/dev/null || true
-            # پرچم‌های aggregated/.backup_done
             find aggregated/ -name ".backup_done" -exec git add {} \; 2>/dev/null || true
 
             if ! git diff --cached --quiet; then
@@ -126,15 +121,27 @@ jobs:
             fi
           }
 
-          # اجرای اول بلافاصله
-          do_run_and_commit
+          # ─── تابع پردازش آپدیت‌ها (هر ۳۰ ثانیه) ────────────────────
+          process_updates_loop() {
+            while [ $(date +%s) -lt $END_TIME ]; do
+              python backup_system.py process-updates || true
+              sleep 30
+            done
+          }
 
-          # هر ۳۰ دقیقه تا پایان ۵ ساعت
-          while [ $(date +%s) -lt $END_TIME ]; do
-            sleep 1800
-            [ $(date +%s) -lt $END_TIME ] && do_run_and_commit
-          done
+          # ─── اجرای همزمان ────────────────────────────────────────────
+          # حلقه بک‌آپ در پس‌زمینه
+          (
+            while [ $(date +%s) -lt $END_TIME ]; do
+              do_run_and_commit
+              sleep 1800
+            done
+          ) &
 
+          # حلقه پردازش آپدیت در foreground (همین مرحله)
+          process_updates_loop
+
+          wait
           echo "✅ حلقه ۵ ساعته تمام شد"
 
       # ─── ۵. گزارش خطا ────────────────────────────────────────────────────────
