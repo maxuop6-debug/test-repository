@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 backup_system.py - سیستم بک‌آپ هوشمند یکپارچه
-تمام منطق پردازش در یک فایل واحد
 """
 
 import os
@@ -14,7 +13,6 @@ import lzma
 import tarfile
 import hashlib
 import random
-import struct
 import shutil
 import logging
 import argparse
@@ -38,7 +36,7 @@ log = logging.getLogger("backup")
 
 # ─── ثابت‌ها ────────────────────────────────────────────────────────────────────
 EPOCH = date(2000, 1, 1)
-PACK_SIZE = 10 * 1024 * 1024          # 10 MB
+PACK_SIZE = 10 * 1024 * 1024
 TELEGRAM_API = "https://api.telegram.org"
 ANALYSIS_DIR = Path("analysis_results")
 AGGREGATED_DIR = Path("aggregated")
@@ -47,8 +45,6 @@ LEDGER_FILE = Path("backup_ledger.json")
 SCHEDULE_FILE = Path("schedule_times.json")
 INTEGRITY_FLAG = Path("integrity_pass.flag")
 STARTUP_TEST_FLAG = Path("startup_test_sent.flag")
-IRAN_UTC_OFFSET = 3.5
-
 ALL_COMBINATIONS_FILE = Path("all_combinations.json")
 MASTER_STRUCTURE_FILE = Path("master_structure.json")
 BACKUP_DONE_FLAG = ".backup_done"
@@ -79,8 +75,8 @@ FIXED_VALUE_MAP: dict[str, str] = {
     "FOMC": "F", "CPI y/y": "Y",
 }
 
-# ─── اضافه‌شده: آمار و گزارش به ادمین ────────────────────────────────────────
-ADMIN_CHAT_ID = "6026780830"   # آیدی عددی شما
+# ─── آمار و گزارش به ادمین ────────────────────────────────────────────────────
+ADMIN_CHAT_ID = "6026780830"
 STATS_FILE = Path("bot_stats.json")
 
 def load_stats() -> dict:
@@ -95,18 +91,15 @@ def save_stats(stats: dict) -> None:
     STATS_FILE.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def admin_log(bot_token: str, text: str) -> None:
-    """ارسال هر پیام لاگ به ادمین (فقط شما)"""
     if not bot_token:
         return
     try:
         url = f"{TELEGRAM_API}/bot{bot_token}/sendMessage"
-        payload = {"chat_id": ADMIN_CHAT_ID, "text": text}
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json={"chat_id": ADMIN_CHAT_ID, "text": text}, timeout=10)
     except Exception as e:
         log.error(f"خطا در ارسال لاگ به ادمین: {e}")
 
 # ─── رمزنگاری ──────────────────────────────────────────────────────────────────
-
 def _derive_key(password: str, salt: bytes) -> bytes:
     import hashlib
     return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100_000, dklen=32)
@@ -147,8 +140,6 @@ def decrypt_data(data: bytes, password: str) -> bytes:
     unpadder = sym_padding.PKCS7(128).unpadder()
     return unpadder.update(padded) + unpadder.finalize()
 
-# ─── فشرده‌سازی ──────────────────────────────────────────────────────────────
-
 def compress_data(data: bytes) -> bytes:
     return lzma.compress(data, preset=9)
 
@@ -156,7 +147,6 @@ def decompress_data(data: bytes) -> bytes:
     return lzma.decompress(data)
 
 # ─── نگاشت ──────────────────────────────────────────────────────────────────
-
 def load_mapping() -> dict:
     if MAPPING_FILE.exists():
         m = json.loads(MAPPING_FILE.read_text(encoding="utf-8"))
@@ -195,7 +185,6 @@ def auto_detect_mapping(csv_paths: list[Path]) -> dict:
     mapping = load_mapping()
     existing_values = set(mapping["values"].keys())
     used_codes = set(mapping["values"].values()) | set(mapping["columns"].values())
-
     freq: dict[str, int] = {}
     for p in csv_paths:
         try:
@@ -208,27 +197,16 @@ def auto_detect_mapping(csv_paths: list[Path]) -> dict:
                             freq[cell] = freq.get(cell, 0) + 1
         except Exception as e:
             log.warning(f"خطا در خواندن {p}: {e}")
-
     candidates = sorted(
         [(v, c) for v, c in freq.items() if c > 5 and v not in existing_values],
         key=lambda x: -x[1]
     )
-
-    if not candidates:
-        if not freq:
-            log.warning("auto_detect_mapping: هیچ کلمه‌ای از فایل‌های CSV استخراج نشد")
-        else:
-            log.warning(f"auto_detect_mapping: {len(freq)} کلمه پیدا شد اما هیچ‌کدام بیش از ۵ بار تکرار نشده‌اند")
-    else:
-        log.info(f"auto_detect_mapping: {len(candidates)} کلمه کاندیدا پیدا شد")
-
     for value, cnt in candidates:
         code = _next_code(used_codes)
         mapping["values"][value] = code
         mapping["reverse_values"][code] = value
         used_codes.add(code)
         log.info(f"نگاشت جدید: '{value}' (تکرار={cnt}) → '{code}'")
-
     save_mapping(mapping)
     return mapping
 
@@ -306,7 +284,6 @@ def reverse_mapping(csv_bytes: bytes, mapping: dict) -> bytes:
     return out_buf.getvalue().encode("utf-8")
 
 # ─── تست یکپارچگی ────────────────────────────────────────────────────────────
-
 def integrity_test(password: str, bot_token: str, chat_id: str) -> bool:
     if INTEGRITY_FLAG.exists():
         log.info("تست یکپارچگی قبلاً انجام شده – اسکیپ")
@@ -348,7 +325,6 @@ def integrity_test(password: str, bot_token: str, chat_id: str) -> bool:
         tmp_path.unlink(missing_ok=True)
 
 # ─── تلگرام ──────────────────────────────────────────────────────────────────
-
 def telegram_send_document(bot_token: str, chat_id: str, data: bytes,
                             filename: str, caption: str = "") -> Optional[str]:
     url = f"{TELEGRAM_API}/bot{bot_token}/sendDocument"
@@ -380,7 +356,6 @@ def telegram_download_file(bot_token: str, file_id: str) -> bytes:
     return resp2.content
 
 # ─── دفترچه ──────────────────────────────────────────────────────────────────
-
 def load_ledger() -> dict:
     if LEDGER_FILE.exists():
         return json.loads(LEDGER_FILE.read_text(encoding="utf-8"))
@@ -402,7 +377,6 @@ def record_upload(ledger: dict, rel_path: str, file_id: str, size: int) -> None:
     save_ledger(ledger)
 
 # ─── کار ۱: فیلتر ────────────────────────────────────────────────────────────
-
 def load_completed_strategies() -> set[str]:
     if not ALL_COMBINATIONS_FILE.exists():
         return set()
@@ -445,7 +419,6 @@ def filter_completed_strategies(csv_files: list[Path]) -> list[Path]:
     return kept
 
 # ─── کار ۲: aggregated ──────────────────────────────────────────────────────
-
 def collect_aggregated_files() -> list[Path]:
     if not AGGREGATED_DIR.exists():
         return []
@@ -467,7 +440,6 @@ def collect_aggregated_files() -> list[Path]:
     return result
 
 # ─── کار ۳: پرچم ────────────────────────────────────────────────────────────
-
 def _touch_backup_done(folder: Path) -> None:
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -495,7 +467,6 @@ def mark_uploaded_folders_done(uploaded_rel_paths: list[str]) -> set[Path]:
     return touched
 
 # ─── کار ۴: یکبار مصرف ─────────────────────────────────────────────────────
-
 def _onetime_flag_path(flag_name: str) -> Path:
     return ONETIME_FLAGS_DIR / f"{flag_name}{BACKUP_DONE_FLAG}"
 
@@ -530,7 +501,6 @@ def process_onetime_file(path: Path, password: str) -> bytes:
     return encrypt_data(compressed, password)
 
 # ─── کار ۸: structure ─────────────────────────────────────────────────────
-
 def _sha256_of(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -611,7 +581,6 @@ def update_master_structure(folder_struct: dict, package_name: str) -> None:
     )
 
 # ─── پردازش فایل‌ها ────────────────────────────────────────────────────────
-
 def process_analysis_file(path: Path, mapping: dict, password: str) -> bytes:
     mapped = apply_mapping(path, mapping)
     compressed = compress_data(mapped)
@@ -623,7 +592,6 @@ def process_aggregated_file(path: Path, password: str) -> bytes:
     return encrypt_data(compressed, password)
 
 # ─── بسته‌بندی ─────────────────────────────────────────────────────────────
-
 def build_packages(files: list[tuple[Path, bytes]], base_dirs: list[Path]) -> list[dict]:
     packages = []
     current_files = []
@@ -681,7 +649,6 @@ def _create_tar(files: list[tuple[Path, bytes]]) -> tuple[bytes, list[str]]:
     return buf.getvalue(), file_list
 
 # ─── زمان‌بندی ─────────────────────────────────────────────────────────────
-
 def generate_schedule() -> dict:
     today = date.today().isoformat()
     if SCHEDULE_FILE.exists():
@@ -708,7 +675,6 @@ def should_run_now(sched: dict, window_minutes: int = 5) -> bool:
     return False
 
 # ─── ارسال متادیتا ─────────────────────────────────────────────────────────
-
 def send_metadata(bot_token: str, chat_id: str, password: str) -> None:
     meta_files = [LEDGER_FILE, MAPPING_FILE, INTEGRITY_FLAG, SCHEDULE_FILE, MASTER_STRUCTURE_FILE]
     existing = [(p, p.read_bytes()) for p in meta_files if p.exists()]
@@ -727,7 +693,6 @@ def send_metadata(bot_token: str, chat_id: str, password: str) -> None:
                            caption=f"📋 متادیتا – {date.today().isoformat()}")
 
 # ─── ارسال هفتگی ──────────────────────────────────────────────────────────
-
 def weekly_full_backup(bot_token: str, chat_id: str, password: str,
                         repo_names: list[str]) -> None:
     today = date.today()
@@ -774,7 +739,6 @@ def weekly_full_backup(bot_token: str, chat_id: str, password: str,
                 admin_log(bot_token, f"❌ ارسال هفتگی {repo} ناموفق بود")
 
 # ─── ارسال پیام فیلم/سریال ────────────────────────────────────────────────
-
 def load_unused_movies() -> list[Path]:
     if not MOVIES_DIR.exists():
         return []
@@ -841,7 +805,6 @@ def send_movie_messages_after_backup(bot_token: str, chat_id: str) -> None:
     log.info(f"✅ {sent} پیام فیلم/سریال بعد از بک‌آپ موفق ارسال شد")
 
 # ─── پردازش پیام‌های فورواردی + لینک اختصاصی ────────────────────────────
-
 def _load_offset() -> int:
     if OFFSET_FILE.exists():
         try:
@@ -980,7 +943,7 @@ def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
     movie_file.write_text(json.dumps(movie_entry, ensure_ascii=False, indent=2), encoding="utf-8")
     log.info(f"💾 پیام در movie_messages ذخیره شد: {movie_file.name}")
 
-    # ─── بروزرسانی آمار و ارسال پیام به ادمین ───
+    # ─── بروزرسانی آمار و ارسال به ادمین ───
     stats = load_stats()
     stats["total_movies"] += 1
     save_stats(stats)
@@ -992,6 +955,10 @@ def _process_forwarded_update(update: dict, bot_token: str, bot_username: str,
         f"👥 تعداد کاربران استفاده‌کننده: {len(stats['users'])}"
     )
     admin_log(bot_token, admin_msg)
+
+    # ─── (اختیاری) ارسال فیلم به ادمین بعد از فوروارد ───
+    # اگر می‌خواهید بعد از هر فوروارد یک فیلم به ادمین برود، این خط رو فعال کنید
+    # send_movie_message(bot_token, ADMIN_CHAT_ID)
 
 def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
                             main_channel_username: str, pending: dict) -> None:
@@ -1029,7 +996,6 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
         return
 
     if is_member:
-        # ─── شمارش کاربر جدید ───
         stats = load_stats()
         if user_id not in stats["users"]:
             stats["users"].append(user_id)
@@ -1058,7 +1024,6 @@ def _send_startup_movie(bot_token: str, chat_id: str) -> None:
     log.info("✅ پیام فیلم/سریال تستی ارسال شد، پرچم گذاشته شد")
 
 def process_forward_updates() -> None:
-    """دریافت آپدیت‌های جدید تلگرام و پردازش پیام‌های فورواردی + دستورات /start"""
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     bot_username = os.environ.get("TELEGRAM_BOT_USERNAME")
     main_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -1092,7 +1057,6 @@ def process_forward_updates() -> None:
     for update in updates:
         uid_update = update.get("update_id")
         new_offset = uid_update + 1
-        log.debug(f"پردازش آپدیت update_id={uid_update}, کلیدها={list(update.keys())}")
         try:
             if "channel_post" in update:
                 text = update["channel_post"].get("text") or update["channel_post"].get("caption") or "[بدون متن]"
@@ -1101,12 +1065,21 @@ def process_forward_updates() -> None:
                 _process_forwarded_update(update, bot_token, bot_username, main_chat_id,
                                            main_channel_username, intermediate_chat_id, pending)
             elif "message" in update:
-                msg_text = update["message"].get("text", "")
-                user = update["message"]["from"].get("username") or update["message"]["from"]["id"]
-                admin_log(bot_token, f"💬 پیام از @{user}: {msg_text[:100]}")
-                log.info(f"آپدیت message دریافت شد: update_id={uid_update}, text='{msg_text[:30]}'")
-                _process_start_command(update, bot_token, main_chat_id,
-                                        main_channel_username, pending)
+                msg = update["message"]
+                chat_id = str(msg.get("chat", {}).get("id"))
+                msg_text = msg.get("text", "")
+                user = msg["from"].get("username") or msg["from"]["id"]
+                is_bot = msg.get("from", {}).get("is_bot", False)
+
+                # ─── پردازش پیام‌های کانال اصلی (برای ارسال فیلم) ───
+                if chat_id == str(main_chat_id) and not is_bot:
+                    admin_log(bot_token, f"📨 پیام جدید در کانال اصلی از @{user}: {msg_text[:100]}")
+                    # ارسال یک فیلم به کانال اصلی
+                    send_movie_message(bot_token, main_chat_id)
+                else:
+                    admin_log(bot_token, f"💬 پیام از @{user}: {msg_text[:100]}")
+                    _process_start_command(update, bot_token, main_chat_id,
+                                            main_channel_username, pending)
             else:
                 log.debug(f"آپدیت نوع ناشناخته: {list(update.keys())}")
         except Exception as e:
@@ -1116,12 +1089,10 @@ def process_forward_updates() -> None:
             if new_offset > offset:
                 offset = new_offset
                 _save_offset(offset)
-                log.debug(f"offset به‌روز شد: {offset}")
 
     log.info(f"✅ {len(updates)} آپدیت پردازش شد، offset={offset}")
 
 # ─── فراخوانی ورکفلو ──────────────────────────────────────────────────────
-
 def trigger_loop_workflow(gh_token: str, repo_full: str, workflow_file: str) -> None:
     url = f"https://api.github.com/repos/{repo_full}/actions/workflows/{workflow_file}/dispatches"
     headers = {
@@ -1139,23 +1110,25 @@ def trigger_loop_workflow(gh_token: str, repo_full: str, workflow_file: str) -> 
         log.error(f"خطا در فراخوانی ورکفلو: {e}")
 
 # ─── پایپ‌لاین اصلی ─────────────────────────────────────────────────────────
-
 def run_pipeline(args: argparse.Namespace) -> None:
     password = os.environ["RESULTS_PASSWORD"]
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    gh_token = os.environ.get("GITHUB_TOKEN", "")
-    repo_full = os.environ.get("GITHUB_REPOSITORY", "")
+
+    # ✅ پردازش آپدیت‌ها در ابتدای هر بار اجرا
+    try:
+        process_forward_updates()
+    except Exception as e:
+        log.error(f"خطا در پردازش آپدیت‌ها: {e}")
+        admin_log(bot_token, f"⚠️ خطا در پردازش آپدیت‌ها: {e}")
 
     admin_log(bot_token, "🚀 شروع بک‌آپ")
 
     try:
-        # ─── ۰. تست یکپارچگی ───
         if not integrity_test(password, bot_token, chat_id):
             admin_log(bot_token, "❌ تست یکپارچگی ناموفق – خروج")
             sys.exit(1)
 
-        # ─── ۱. فایل‌های یکبار مصرف ───
         ledger = load_ledger()
         onetime_files = collect_onetime_files()
         onetime_flag_names_to_mark: set[str] = set()
@@ -1190,20 +1163,18 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     onetime_succeeded = True
             if onetime_succeeded:
                 mark_onetime_done(onetime_flag_names_to_mark)
-                send_movie_messages_after_backup(bot_token, chat_id)
+                send_movie_messages_after_backup(bot_token, ADMIN_CHAT_ID)   # ← به ادمین
                 movie_sent = True
 
-        # ─── ۲. زمان‌بندی ───
         sched = generate_schedule()
         if not args.force and not should_run_now(sched):
             log.info("⏰ زمان بک‌آپ نرسیده – خروج")
             admin_log(bot_token, "⏰ زمان بک‌آپ نرسیده – خروج")
-            return
+            sys.exit(0)   # خروج با کد موفقیت
 
         log.info("🚀 شروع بک‌آپ اصلی...")
         admin_log(bot_token, "🚀 شروع بک‌آپ اصلی")
 
-        # ─── ۳. جمع‌آوری CSVها ───
         csv_files_all = list(ANALYSIS_DIR.rglob("*.csv")) if ANALYSIS_DIR.exists() else []
         csv_files = filter_completed_strategies(csv_files_all)
         if len(csv_files) != len(csv_files_all):
@@ -1215,13 +1186,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
             log.info(f"auto_detect_mapping: {len(csv_files)} فایل CSV برای بررسی نگاشت")
             mapping = auto_detect_mapping(csv_files)
 
-        # ─── ۴. پردازش فایل‌ها ───
         to_pack: list[tuple[Path, bytes]] = []
 
         for csv_path in csv_files:
             rel = str(csv_path)
             if is_uploaded(ledger, rel):
-                log.debug(f"قبلاً آپلود شده: {rel}")
                 continue
             try:
                 processed = process_analysis_file(csv_path, mapping, password)
@@ -1249,7 +1218,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
             log.info("هیچ فایل جدیدی برای بک‌آپ وجود ندارد")
             admin_log(bot_token, "ℹ️ هیچ فایل جدیدی برای بک‌آپ وجود ندارد")
         else:
-            # ─── کار ۸: structure.json ───
             touched_folders: set[Path] = set()
             for path, _data in to_pack:
                 if ANALYSIS_DIR.name in path.parts:
@@ -1275,10 +1243,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     except Exception as e:
                         log.warning(f"خطا در کپی master_structure.json به {folder}: {e}")
 
-            # ─── بسته‌بندی ───
             packages = build_packages(to_pack, [ANALYSIS_DIR, AGGREGATED_DIR])
 
-            # ─── آپلود ───
             for pkg in packages:
                 fid = telegram_send_document(bot_token, chat_id,
                                               pkg["data"], pkg["name"],
@@ -1297,11 +1263,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
                             struct["telegram_file_id"] = fid
                             update_master_structure(struct, pkg["name"])
 
-            # ─── پرچم ───
             for folder in touched_folders:
                 _touch_backup_done(folder)
 
-            # ─── پاکسازی ───
             for csv_path in csv_files:
                 if is_uploaded(ledger, str(csv_path)):
                     try:
@@ -1310,11 +1274,9 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     except Exception as e:
                         log.warning(f"حذف ناموفق {csv_path}: {e}")
 
-        # ─── ۷. ارسال فیلم/سریال ───
         if backup_succeeded and not movie_sent:
-            send_movie_messages_after_backup(bot_token, chat_id)
+            send_movie_messages_after_backup(bot_token, ADMIN_CHAT_ID)   # ← به ادمین
 
-        # ─── ۸. ارسال هفتگی ───
         weekly_repos = os.environ.get("WEEKLY_REPOS", "now-test-repo").split(",")
         weekly_full_backup(bot_token, chat_id, password, [r.strip() for r in weekly_repos])
 
@@ -1327,7 +1289,6 @@ def run_pipeline(args: argparse.Namespace) -> None:
         raise
 
 # ─── نقطه ورود ────────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="سیستم بک‌آپ هوشمند")
     subparsers = parser.add_subparsers(dest="command")
