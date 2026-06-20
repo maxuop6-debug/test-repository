@@ -69,7 +69,7 @@ jobs:
           echo "[DEBUG] تعداد کل ترکیب‌ها: $TOTAL_COMBOS"
           echo "total_combos=$TOTAL_COMBOS" >> $GITHUB_OUTPUT
 
-          CHUNK_SIZE=80
+          CHUNK_SIZE=500
           CHUNK_COUNT=$(( (TOTAL_COMBOS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           if [ "$CHUNK_COUNT" -gt 256 ]; then
             CHUNK_SIZE=$(( (TOTAL_COMBOS + 255) / 256 ))
@@ -139,7 +139,30 @@ jobs:
           echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
           echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
 
+      - name: 0. بررسی artifact اجرای قبلی برای این chunk
+        id: check_previous
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: chunk-done-${{ matrix.chunk_index }}
+          path: /tmp/prev_artifact
+
+      - name: 0.5. بارگذاری نتایج قبلی در صورت وجود
+        id: prev_check
+        run: |
+          mkdir -p /tmp/results /tmp/errors /tmp/signatures
+          if [ -f /tmp/prev_artifact/done_items.json ] && [ -f /tmp/prev_artifact/chunk_completed.flag ]; then
+            echo "⏭️ chunk ${{ matrix.chunk_index }} قبلاً کامل شده. بارگذاری نتایج..."
+            cp /tmp/prev_artifact/done_items.json /tmp/done_items.json
+            cp /tmp/prev_artifact/failed_items.json /tmp/failed_items.json 2>/dev/null || echo "[]" > /tmp/failed_items.json
+            [ -d /tmp/prev_artifact/results ] && cp -r /tmp/prev_artifact/results/. /tmp/results/
+            echo "already_done=true" >> $GITHUB_OUTPUT
+          else
+            echo "already_done=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: 1. بررسی interrupt.flag
+        if: steps.prev_check.outputs.already_done != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -156,13 +179,17 @@ jobs:
           echo "✅ interrupt.flag یافت نشد — ادامه پردازش."
 
       - name: 2. دانلود فایل یکپارچه معاملات
+        if: steps.prev_check.outputs.already_done != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          CHUNK_JSON=$(cat /tmp/chunk.json)
-          STRAT=$(echo "$CHUNK_JSON" | jq -r '.[0].strat' 2>/dev/null || echo "")
+          if [ ! -f /tmp/chunk.json ]; then
+            echo "❌ /tmp/chunk.json یافت نشد."
+            exit 1
+          fi
+          STRAT=$(jq -r '.[0].strat' /tmp/chunk.json 2>/dev/null || echo "")
           if [ -z "$STRAT" ]; then
             echo "❌ استراتژی در قطعه یافت نشد. خروج."
             exit 1
@@ -293,12 +320,15 @@ jobs:
           echo "✅ فایل یکپارچه آماده شد."
 
       - name: 3. راه‌اندازی پایتون و نصب کتابخانه‌ها
+        if: steps.prev_check.outputs.already_done != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - run: pip install pandas requests
+        if: steps.prev_check.outputs.already_done != 'true'
 
       - name: 3b. دانلود داده‌های قیمت OHLC از مخزن دوم (اختیاری)
+        if: steps.prev_check.outputs.already_done != 'true'
         id: ohlc_fetch
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -352,18 +382,18 @@ jobs:
           echo "OHLC_DIR=/tmp/ohlc" >> $GITHUB_ENV
 
       - name: 4. اجرای ماژول تحلیلی و استخراج امضا
+        if: steps.prev_check.outputs.already_done != 'true'
         id: execute_batch
         run: |
           mkdir -p /tmp/results /tmp/errors /tmp/signatures
           echo "[]" > /tmp/done_items.json
           echo "[]" > /tmp/failed_items.json
 
-          CHUNK_JSON=$(cat /tmp/chunk.json)
-          LENGTH=$(echo "$CHUNK_JSON" | jq length)
+          LENGTH=$(jq length /tmp/chunk.json)
           echo "🚀 شروع پردازش $LENGTH ترکیب در chunk ${{ matrix.chunk_index }}"
 
           for i in $(seq 0 $((LENGTH-1))); do
-            ITEM=$(echo "$CHUNK_JSON" | jq -c ".[$i]")
+            ITEM=$(jq -c ".[$i]" /tmp/chunk.json)
             MODULE=$(echo "$ITEM"   | jq -r '.module')
             STRAT=$(echo "$ITEM"    | jq -r '.strat')
             COIN=$(echo "$ITEM"     | jq -r '.coin')
@@ -456,6 +486,32 @@ jobs:
           echo "done_count=$DONE_COUNT" >> $GITHUB_OUTPUT
           echo "failed_count=$FAILED_COUNT" >> $GITHUB_OUTPUT
 
+      - name: 4.5. ذخیره نتایج این chunk به‌عنوان artifact مستقل
+        if: always()
+        run: |
+          mkdir -p /tmp/chunk_artifact/results
+          [ -f /tmp/done_items.json ] && cp /tmp/done_items.json /tmp/chunk_artifact/done_items.json || echo "[]" > /tmp/chunk_artifact/done_items.json
+          [ -f /tmp/failed_items.json ] && cp /tmp/failed_items.json /tmp/chunk_artifact/failed_items.json || echo "[]" > /tmp/chunk_artifact/failed_items.json
+          [ -d /tmp/results ] && cp -r /tmp/results/. /tmp/chunk_artifact/results/ || true
+          DONE_COUNT=$(jq length /tmp/chunk_artifact/done_items.json 2>/dev/null || echo 0)
+          FAILED_COUNT=$(jq length /tmp/chunk_artifact/failed_items.json 2>/dev/null || echo 0)
+          TOTAL=$(jq length /tmp/chunk.json 2>/dev/null || echo 0)
+          if [ "$DONE_COUNT" -gt 0 ] && [ "$((DONE_COUNT + FAILED_COUNT))" -ge "$TOTAL" ]; then
+            touch /tmp/chunk_artifact/chunk_completed.flag
+            echo "✅ chunk ${{ matrix.chunk_index }} کامل شد ($DONE_COUNT موفق، $FAILED_COUNT ناموفق) — پرچم ثبت شد."
+          else
+            echo "ℹ️ chunk ${{ matrix.chunk_index }} ناقص ($DONE_COUNT/$TOTAL) — پرچم ثبت نشد."
+          fi
+
+      - name: 4.6. آپلود artifact مستقل این chunk (نتایج + پرچم)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-done-${{ matrix.chunk_index }}
+          path: /tmp/chunk_artifact/
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: 5. آپلود نتایج (CSV + signatures) به‌عنوان artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -479,7 +535,7 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     needs: [generate-matrix, batch]
-    if: ${{ always() && needs.batch.result == 'success' && inputs.analysis_module == 'fixed_batch' && needs.generate-matrix.outputs.empty == 'false' }}
+    if: ${{ always() && needs.batch.result != 'skipped' && inputs.analysis_module == 'fixed_batch' && needs.generate-matrix.outputs.empty == 'false' }}
     steps:
       - name: دانلود همه‌ی artifact های done-items این run
         uses: actions/download-artifact@v4
