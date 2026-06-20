@@ -139,23 +139,25 @@ jobs:
           echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
           echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
 
-      - name: 0. بررسی artifact اجرای قبلی برای این chunk
-        id: check_previous
-        continue-on-error: true
-        uses: actions/download-artifact@v4
+      # [تغییر ۹ و ۱۰]: حذف بررسی Artifact قبلی و جایگزینی با Cache
+      - name: 0. بررسی Cache برای این chunk
+        id: cache_check
+        uses: actions/cache@v4
         with:
-          name: chunk-done-${{ matrix.chunk_index }}
-          path: /tmp/prev_artifact
+          path: /tmp/chunk_cache
+          key: chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
 
-      - name: 0.5. بارگذاری نتایج قبلی در صورت وجود
+      - name: 0.5. بارگذاری نتایج از Cache در صورت وجود
         id: prev_check
         run: |
           mkdir -p /tmp/results /tmp/errors /tmp/signatures
-          if [ -f /tmp/prev_artifact/done_items.json ] && [ -f /tmp/prev_artifact/chunk_completed.flag ]; then
-            echo "⏭️ chunk ${{ matrix.chunk_index }} قبلاً کامل شده. بارگذاری نتایج..."
-            cp /tmp/prev_artifact/done_items.json /tmp/done_items.json
-            cp /tmp/prev_artifact/failed_items.json /tmp/failed_items.json 2>/dev/null || echo "[]" > /tmp/failed_items.json
-            [ -d /tmp/prev_artifact/results ] && cp -r /tmp/prev_artifact/results/. /tmp/results/
+          if [ "${{ steps.cache_check.outputs.cache-hit }}" = "true" ] && \
+             [ -f /tmp/chunk_cache/done_items.json ] && \
+             [ -f /tmp/chunk_cache/chunk_completed.flag ]; then
+            echo "⏭️ chunk ${{ matrix.chunk_index }} قبلاً کامل شده. بارگذاری نتایج از Cache..."
+            cp /tmp/chunk_cache/done_items.json /tmp/done_items.json
+            cp /tmp/chunk_cache/failed_items.json /tmp/failed_items.json 2>/dev/null || echo "[]" > /tmp/failed_items.json
+            [ -d /tmp/chunk_cache/results ] && cp -r /tmp/chunk_cache/results/. /tmp/results/ || true
             echo "already_done=true" >> $GITHUB_OUTPUT
           else
             echo "already_done=false" >> $GITHUB_OUTPUT
@@ -195,7 +197,7 @@ jobs:
             exit 1
           fi
           AGG_FILE="aggregated/${STRAT}/${STRAT}_trades.enc"
-          META_FLAG_PATH="aggregated/${STRAT}/metadata_injected.flag"
+          # [تغییر ۱]: پرچم metadata_injected حذف شد — متادیتا همیشه هنگام خواندن تزریق می‌شود
           ERROR_FILE="analysis_errors/${STRAT}_download_error.txt"
           mkdir -p /tmp/prep
 
@@ -247,12 +249,7 @@ jobs:
             exit 1
           fi
 
-          FLAG_HTTP=$(gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" -i 2>/dev/null | head -n1 | cut -d' ' -f2 || echo "")
-          if [ "$FLAG_HTTP" = "200" ]; then
-            echo "✅ metadata قبلاً inject شده — رد می‌شود."
-            exit 0
-          fi
-
+          # [تغییر ۱]: متادیتا همیشه هنگام خواندن تزریق می‌شود (بدون وابستگی به پرچم راه‌دور)
           HAS_METADATA=$(node -e "
             const fs=require('fs');
             const data=JSON.parse(fs.readFileSync('/tmp/prep/all_trades.json','utf8'));
@@ -262,10 +259,7 @@ jobs:
           " 2>/dev/null || echo "false")
 
           if [ "$HAS_METADATA" = "true" ]; then
-            FLAG_CONTENT=$(echo "injected" | base64 -w0)
-            gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" \
-              -X PUT -F message="mark metadata as injected for $STRAT" \
-              -F content="$FLAG_CONTENT" -F branch="main" 2>/dev/null || true
+            echo "✅ metadata از قبل در فایل موجود است."
             exit 0
           fi
 
@@ -313,10 +307,6 @@ jobs:
           if [ $? -ne 0 ]; then
             echo "❌ خطا در inject metadata: $(cat /tmp/prep/inject_error.log)"; exit 1
           fi
-          FLAG_CONTENT=$(echo "injected" | base64 -w0)
-          gh api "repos/$THIRD_REPO/contents/$META_FLAG_PATH" \
-            -X PUT -F message="mark metadata as injected for $STRAT" \
-            -F content="$FLAG_CONTENT" -F branch="main" 2>/dev/null || true
           echo "✅ فایل یکپارچه آماده شد."
 
       - name: 3. راه‌اندازی پایتون و نصب کتابخانه‌ها
@@ -486,31 +476,23 @@ jobs:
           echo "done_count=$DONE_COUNT" >> $GITHUB_OUTPUT
           echo "failed_count=$FAILED_COUNT" >> $GITHUB_OUTPUT
 
-      - name: 4.5. ذخیره نتایج این chunk به‌عنوان artifact مستقل
+      # [تغییر ۱۰]: ذخیره نتایج در Cache به جای Artifact
+      - name: 4.5. ذخیره نتایج این chunk در Cache
         if: always()
         run: |
-          mkdir -p /tmp/chunk_artifact/results
-          [ -f /tmp/done_items.json ] && cp /tmp/done_items.json /tmp/chunk_artifact/done_items.json || echo "[]" > /tmp/chunk_artifact/done_items.json
-          [ -f /tmp/failed_items.json ] && cp /tmp/failed_items.json /tmp/chunk_artifact/failed_items.json || echo "[]" > /tmp/chunk_artifact/failed_items.json
-          [ -d /tmp/results ] && cp -r /tmp/results/. /tmp/chunk_artifact/results/ || true
-          DONE_COUNT=$(jq length /tmp/chunk_artifact/done_items.json 2>/dev/null || echo 0)
-          FAILED_COUNT=$(jq length /tmp/chunk_artifact/failed_items.json 2>/dev/null || echo 0)
+          mkdir -p /tmp/chunk_cache/results
+          [ -f /tmp/done_items.json ] && cp /tmp/done_items.json /tmp/chunk_cache/done_items.json || echo "[]" > /tmp/chunk_cache/done_items.json
+          [ -f /tmp/failed_items.json ] && cp /tmp/failed_items.json /tmp/chunk_cache/failed_items.json || echo "[]" > /tmp/chunk_cache/failed_items.json
+          [ -d /tmp/results ] && cp -r /tmp/results/. /tmp/chunk_cache/results/ || true
+          DONE_COUNT=$(jq length /tmp/chunk_cache/done_items.json 2>/dev/null || echo 0)
+          FAILED_COUNT=$(jq length /tmp/chunk_cache/failed_items.json 2>/dev/null || echo 0)
           TOTAL=$(jq length /tmp/chunk.json 2>/dev/null || echo 0)
           if [ "$DONE_COUNT" -gt 0 ] && [ "$((DONE_COUNT + FAILED_COUNT))" -ge "$TOTAL" ]; then
-            touch /tmp/chunk_artifact/chunk_completed.flag
+            touch /tmp/chunk_cache/chunk_completed.flag
             echo "✅ chunk ${{ matrix.chunk_index }} کامل شد ($DONE_COUNT موفق، $FAILED_COUNT ناموفق) — پرچم ثبت شد."
           else
             echo "ℹ️ chunk ${{ matrix.chunk_index }} ناقص ($DONE_COUNT/$TOTAL) — پرچم ثبت نشد."
           fi
-
-      - name: 4.6. آپلود artifact مستقل این chunk (نتایج + پرچم)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: chunk-done-${{ matrix.chunk_index }}
-          path: /tmp/chunk_artifact/
-          retention-days: 7
-          if-no-files-found: warn
 
       - name: 5. آپلود نتایج (CSV + signatures) به‌عنوان artifact
         if: always()
@@ -571,13 +553,12 @@ jobs:
           done
           echo "✅ signatures آپلود‌شده: $UPLOADED  ناموفق: $FAILED"
 
-      - name: 6. آپلود لیست ترکیبات موفق این قطعه
+      - name: 6. ذخیره لیست ترکیبات موفق این قطعه در Cache
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/cache@v4
         with:
-          name: done-items-${{ matrix.chunk_index }}-${{ github.run_id }}
-          path: /tmp/done_items.json
-          retention-days: 1
+          path: /tmp/chunk_cache
+          key: chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
 
   # ================================================================
   # cleanup: حذف دقیق ترکیبات موفق از all_combinations.json
@@ -587,12 +568,30 @@ jobs:
     needs: [generate-matrix, batch]
     if: ${{ always() && needs.batch.result != 'skipped' && inputs.analysis_module == 'fixed_batch' && needs.generate-matrix.outputs.empty == 'false' }}
     steps:
-      - name: دانلود همه‌ی artifact های done-items این run
-        uses: actions/download-artifact@v4
+      # [تغییر ۱۰]: بازیابی Cacheها به جای دانلود Artifactها
+      - name: بازیابی Cache همه‌ی chunk‌ها و ادغام done_items
+        env:
+          MATRIX_ITEMS: ${{ needs.generate-matrix.outputs.matrix_items }}
+        run: |
+          mkdir -p /tmp/done_artifacts
+          echo "$MATRIX_ITEMS" | jq -r '.[]' | while read -r IDX; do
+            CACHE_DIR="/tmp/chunk_cache_${IDX}"
+            mkdir -p "$CACHE_DIR"
+          done
+
+      - name: بازیابی Cache chunk‌ها
+        uses: actions/cache/restore@v4
         with:
-          pattern: done-items-*-${{ github.run_id }}
-          path: /tmp/done_artifacts
-          merge-multiple: false
+          path: /tmp/chunk_cache
+          key: chunk-result-
+          restore-keys: |
+            chunk-result-
+
+      - name: ادغام لیست‌های done از Cache
+        run: |
+          mkdir -p /tmp/done_artifacts
+          find /tmp -name 'done_items.json' -path '*/chunk_cache*' -print0 2>/dev/null \
+            | xargs -0 -I{} cp {} /tmp/done_artifacts/ 2>/dev/null || true
 
       - name: ادغام لیست‌های done و حذف دقیق از all_combinations.json
         env:
@@ -600,8 +599,10 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           CURL="/usr/bin/curl"
+          # [تغییر ۳]: fallback برای done_items.json های خالی یا نامعتبر
           find /tmp/done_artifacts -name 'done_items.json' -print0 \
-            | xargs -0 jq -s 'add' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
+            | xargs -0 -I{} sh -c 'jq empty "{}" 2>/dev/null && cat "{}" || echo "[]"' \
+            | jq -s 'add // []' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
           [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
 
           MERGED_COUNT=$(jq length /tmp/merged_done.json)
@@ -611,8 +612,10 @@ jobs:
             exit 0
           fi
 
+          # [تغییر ۴]: دانلود یکباره، ویرایش، آپلود یکباره با حفظ ۱۵ بار تلاش برای تداخل SHA
           RETRY=0; MAX=15
           while [ $RETRY -lt $MAX ]; do
+            # یکبار دانلود کامل فایل
             $CURL -s -o /tmp/current.json \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
@@ -620,6 +623,7 @@ jobs:
             if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
               echo "ERROR: دریافت فایل فعلی ناموفق."; exit 1
             fi
+
             SHA=""
             for sha_try in 1 2 3 4 5; do
               SHA_RESP=$($CURL -s -H "Authorization: token $GH_TOKEN" \
@@ -636,6 +640,7 @@ jobs:
               continue
             fi
 
+            # با jq ترکیب‌های پردازش‌شده را حذف کن (یکجا)
             jq -s '.[0] as $c | .[1] as $d
               | $c - ($c | map(select(. as $i | $d | any(. == $i))))
             ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
@@ -653,6 +658,7 @@ jobs:
             "branch": "main"
           }
           EOF
+            # یکبار آپلود کامل فایل ویرایش‌شده
             HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
@@ -680,18 +686,103 @@ jobs:
             -X POST -f ref="main"
 
   # ================================================================
-  # golden: امتیازدهی استراتژی‌ها بر اساس signatures
+  # golden-generate-matrix: تولید صف کار برای ماژول golden
   # ================================================================
-  golden:
+  golden-generate-matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
     if: ${{ inputs.analysis_module == 'golden' }}
+    outputs:
+      matrix_items: ${{ steps.gen.outputs.matrix_items }}
+      empty: ${{ steps.gen.outputs.empty }}
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
+        id: gen
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p /tmp/golden_chunks
+          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
+
+          SIG_FILES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path] | unique')
+          TOTAL=$(echo "$SIG_FILES" | jq 'length')
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHUNK_SIZE=50
+          CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          if [ "$CHUNK_COUNT" -gt 256 ]; then
+            CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
+            CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          fi
+
+          # ذخیره تمام لیست امضاها در یک فایل queue
+          echo "$SIG_FILES" > /tmp/golden_chunks/all_signatures.json
+
+          INDICES="["
+          for ((i=0; i<CHUNK_COUNT; i++)); do
+            START=$((i * CHUNK_SIZE))
+            END=$((START + CHUNK_SIZE))
+            echo "$SIG_FILES" | jq ".[$START:$END]" > /tmp/golden_chunks/chunk_${i}.json
+            if [ $i -gt 0 ]; then INDICES+=", "; fi
+            INDICES+="$i"
+          done
+          INDICES+="]"
+          echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
+          echo "empty=false" >> $GITHUB_OUTPUT
+          echo "✅ $TOTAL امضا در $CHUNK_COUNT چانک تقسیم شدند."
+
+      - name: آپلود چانک‌های golden
+        if: steps.gen.outputs.empty == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-chunks-${{ github.run_id }}
+          path: /tmp/golden_chunks/
+          retention-days: 1
+
+  # ================================================================
+  # golden-batch: پردازش موازی چانک‌های golden
+  # ================================================================
+  golden-batch:
+    needs: [golden-generate-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    if: ${{ inputs.analysis_module == 'golden' && needs.golden-generate-matrix.outputs.empty == 'false' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        chunk_index: ${{ fromJson(needs.golden-generate-matrix.outputs.matrix_items || '[0]') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: دانلود چانک‌های golden
+        uses: actions/download-artifact@v4
+        with:
+          name: golden-chunks-${{ github.run_id }}
+          path: /tmp/golden_chunks
+
+      # [تغییر ۱۰]: استفاده از Cache به جای Artifact
+      - name: بررسی Cache این chunk
+        id: cache_check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/golden_chunk_cache
+          key: golden-chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
+
       - name: 1. بررسی interrupt.flag
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -701,43 +792,32 @@ jobs:
             "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
           if [ "$HTTP_CODE" = "200" ]; then
             echo "🛑 interrupt.flag یافت شد — job با وضعیت interrupted خاتمه می‌یابد."
-            echo '{"status":"interrupted","module":"golden","run_id":"${{ github.run_id }}"}' \
-              > /tmp/golden_status.json
-            gh api "repos/$THIRD_REPO/contents/analysis_results/golden_status.json" \
-              -X PUT -F message="golden interrupted" \
-              -F content="$(base64 -w0 < /tmp/golden_status.json)" \
-              -F branch="main" 2>/dev/null || true
             exit 0
           fi
           echo "✅ interrupt.flag یافت نشد — ادامه پردازش."
 
       - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
+        if: steps.cache_check.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - run: pip install pandas numpy scipy pyarrow
+        if: steps.cache_check.outputs.cache-hit != 'true'
 
-      - name: 3. دانلود signatures از مخزن سوم
+      - name: 3. دانلود کل پوشه signatures از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/signatures
-          echo "🔍 دریافت لیست فایل‌های signatures از مخزن سوم..."
+          CHUNK_INDEX=${{ matrix.chunk_index }}
+          SIG_PATHS=$(jq -r '.[]' /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json)
 
-          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
-
-          SIG_FILES=$(echo "$TREE" | jq -r '.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path')
-
-          if [ -z "$SIG_FILES" ]; then
-            echo "❌ هیچ فایل signature رمزنگاری‌شده در مخزن سوم یافت نشد."
-            exit 1
-          fi
-
-          SIG_COUNT=$(echo "$SIG_FILES" | wc -l)
-          echo "📦 تعداد فایل‌های signature یافت شده: $SIG_COUNT"
+          # ساخت فایل filter برای این چانک
+          jq -r '[.[] | {path: ., coin: (split("/")[-2]), sig: (split("/")[-1] | split(".")[0])}]' \
+            /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json > /tmp/filter.json
 
           FAILED=0
           while IFS= read -r SIG_PATH; do
@@ -775,16 +855,13 @@ jobs:
               echo "⚠️ رمزگشایی ناموفق: $SIG_PATH"
               FAILED=$((FAILED+1))
             }
-          done <<< "$SIG_FILES"
+          done <<< "$SIG_PATHS"
 
           JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد فایل‌های JSONL رمزگشایی‌شده: $JSONL_COUNT  (ناموفق: $FAILED)"
-          if [ "$JSONL_COUNT" -eq 0 ]; then
-            echo "❌ هیچ signature‌ای با موفقیت دریافت نشد."
-            exit 1
-          fi
+          echo "✅ تعداد فایل‌های JSONL: $JSONL_COUNT  (ناموفق: $FAILED)"
 
       - name: 4. دریافت strategies_metadata.json از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -797,29 +874,80 @@ jobs:
             echo "❌ strategies_metadata.json یافت نشد (HTTP $HTTP_CODE)."
             exit 1
           fi
-          echo "✅ strategies_metadata.json دریافت شد."
 
-      - name: 5. اجرای golden.py
+      # [تغییر ۲]: اضافه کردن --interrupt-flag و --signatures-filter
+      - name: 5. اجرای golden.py برای این چانک
+        if: steps.cache_check.outputs.cache-hit != 'true'
         run: |
+          mkdir -p /tmp/golden_chunk_cache
           python modules/golden.py \
             --signatures-dir /tmp/signatures \
+            --signatures-filter /tmp/filter.json \
             --strategies-json /tmp/strategies_metadata.json \
-            --output-dir /tmp/golden_output \
+            --output-dir /tmp/golden_chunk_cache \
+            --interrupt-flag ${{ runner.temp }}/interrupt.flag \
             --alpha 0.1
-          if [ ! -f /tmp/golden_output/golden_scores.parquet ]; then
-            echo "❌ golden_scores.parquet تولید نشد."
-            exit 1
-          fi
-          echo "✅ golden_scores.parquet با موفقیت تولید شد."
+          echo "✅ golden chunk ${{ matrix.chunk_index }} پردازش شد."
+          touch /tmp/golden_chunk_cache/chunk_completed.flag
 
-      - name: 6. آپلود golden_scores.parquet به‌عنوان artifact
+      - name: 6. ذخیره نتایج در Cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: /tmp/golden_chunk_cache
+          key: golden-chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
+
+  # ================================================================
+  # golden-cleanup: ادغام نتایج golden و آپلود به مخزن سوم
+  # ================================================================
+  golden-cleanup:
+    needs: [golden-generate-matrix, golden-batch]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.golden-batch.result != 'skipped' && inputs.analysis_module == 'golden' }}
+    steps:
+      - name: بازیابی Cache‌های golden
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/golden_chunk_cache
+          key: golden-chunk-result-
+          restore-keys: |
+            golden-chunk-result-
+
+      - name: نصب پایتون و کتابخانه‌ها
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install pandas numpy scipy pyarrow
+
+      - name: ادغام نتایج و تولید golden_scores.parquet
+        run: |
+          mkdir -p /tmp/golden_output
+          python - <<'PYEOF'
+          import pandas as pd
+          import glob, os
+
+          parquet_files = glob.glob('/tmp/golden_chunk_cache/**/*.parquet', recursive=True)
+          if not parquet_files:
+              print("❌ هیچ فایل parquet برای ادغام یافت نشد.")
+              exit(1)
+
+          dfs = [pd.read_parquet(f) for f in parquet_files]
+          merged = pd.concat(dfs, ignore_index=True)
+          merged.to_parquet('/tmp/golden_output/golden_scores.parquet', index=False)
+          print(f"✅ {len(merged)} رکورد در golden_scores.parquet ادغام شدند.")
+          PYEOF
+          if [ ! -f /tmp/golden_output/golden_scores.parquet ]; then
+            echo "❌ golden_scores.parquet تولید نشد."; exit 1
+          fi
+
+      - name: آپلود golden_scores.parquet به‌عنوان artifact
         uses: actions/upload-artifact@v4
         with:
           name: golden-scores-${{ github.run_id }}
           path: /tmp/golden_output/golden_scores.parquet
           retention-days: 3
 
-      - name: 7. رمزنگاری و آپلود golden_scores.parquet به مخزن سوم
+      - name: رمزنگاری و آپلود golden_scores.parquet به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -853,7 +981,7 @@ jobs:
           fi
           echo "✅ golden_scores.parquet.enc آپلود شد."
 
-      - name: 8. فراخوانی مجدد loop_analysis.yml
+      - name: فراخوانی مجدد loop_analysis.yml
         if: always()
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -862,18 +990,101 @@ jobs:
             -X POST -f ref="main"
 
   # ================================================================
-  # portfolios: ساخت پرتفولیوهای بهینه بر اساس golden scores
+  # correlation-generate-matrix: تولید صف کار برای ماژول correlation
+  # [تغییر ۸]: correlation قبل از portfolios اجرا می‌شود
   # ================================================================
-  portfolios:
+  correlation-generate-matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
-    if: ${{ inputs.analysis_module == 'portfolios' }}
+    if: ${{ inputs.analysis_module == 'correlation' }}
+    outputs:
+      matrix_items: ${{ steps.gen.outputs.matrix_items }}
+      empty: ${{ steps.gen.outputs.empty }}
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
+        id: gen
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p /tmp/correlation_chunks
+          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
+
+          SIG_FILES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path] | unique')
+          TOTAL=$(echo "$SIG_FILES" | jq 'length')
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHUNK_SIZE=50
+          CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          if [ "$CHUNK_COUNT" -gt 256 ]; then
+            CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
+            CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          fi
+
+          echo "$SIG_FILES" > /tmp/correlation_chunks/all_signatures.json
+
+          INDICES="["
+          for ((i=0; i<CHUNK_COUNT; i++)); do
+            START=$((i * CHUNK_SIZE))
+            END=$((START + CHUNK_SIZE))
+            echo "$SIG_FILES" | jq ".[$START:$END]" > /tmp/correlation_chunks/chunk_${i}.json
+            if [ $i -gt 0 ]; then INDICES+=", "; fi
+            INDICES+="$i"
+          done
+          INDICES+="]"
+          echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
+          echo "empty=false" >> $GITHUB_OUTPUT
+
+      - name: آپلود چانک‌های correlation
+        if: steps.gen.outputs.empty == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: correlation-chunks-${{ github.run_id }}
+          path: /tmp/correlation_chunks/
+          retention-days: 1
+
+  # ================================================================
+  # correlation-batch: پردازش موازی چانک‌های correlation
+  # ================================================================
+  correlation-batch:
+    needs: [correlation-generate-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    if: ${{ inputs.analysis_module == 'correlation' && needs.correlation-generate-matrix.outputs.empty == 'false' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        chunk_index: ${{ fromJson(needs.correlation-generate-matrix.outputs.matrix_items || '[0]') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: دانلود چانک‌های correlation
+        uses: actions/download-artifact@v4
+        with:
+          name: correlation-chunks-${{ github.run_id }}
+          path: /tmp/correlation_chunks
+
+      - name: بررسی Cache این chunk
+        id: cache_check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/correlation_chunk_cache
+          key: correlation-chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
+
       - name: 1. بررسی interrupt.flag
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -882,44 +1093,31 @@ jobs:
             -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "🛑 interrupt.flag یافت شد — job با وضعیت interrupted خاتمه می‌یابد."
-            echo '{"status":"interrupted","module":"portfolios","run_id":"${{ github.run_id }}"}' \
-              > /tmp/portfolios_status.json
-            gh api "repos/$THIRD_REPO/contents/analysis_results/portfolios_status.json" \
-              -X PUT -F message="portfolios interrupted" \
-              -F content="$(base64 -w0 < /tmp/portfolios_status.json)" \
-              -F branch="main" 2>/dev/null || true
+            echo "🛑 interrupt.flag یافت شد — job خاتمه می‌یابد."
             exit 0
           fi
-          echo "✅ interrupt.flag یافت نشد — ادامه پردازش."
 
       - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
+        if: steps.cache_check.outputs.cache-hit != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - run: pip install pandas numpy scipy pyarrow
+        if: steps.cache_check.outputs.cache-hit != 'true'
 
-      - name: 3. دانلود signatures از مخزن سوم
+      - name: 3. دانلود امضاهای این چانک از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/signatures
-          echo "🔍 دریافت لیست فایل‌های signatures از مخزن سوم..."
+          CHUNK_INDEX=${{ matrix.chunk_index }}
+          SIG_PATHS=$(jq -r '.[]' /tmp/correlation_chunks/chunk_${CHUNK_INDEX}.json)
 
-          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
-
-          SIG_FILES=$(echo "$TREE" | jq -r '.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path')
-
-          if [ -z "$SIG_FILES" ]; then
-            echo "❌ هیچ فایل signature رمزنگاری‌شده در مخزن سوم یافت نشد."
-            exit 1
-          fi
-
-          SIG_COUNT=$(echo "$SIG_FILES" | wc -l)
-          echo "📦 تعداد فایل‌های signature یافت شده: $SIG_COUNT"
+          jq -r '[.[] | {path: ., coin: (split("/")[-2]), sig: (split("/")[-1] | split(".")[0])}]' \
+            /tmp/correlation_chunks/chunk_${CHUNK_INDEX}.json > /tmp/filter.json
 
           FAILED=0
           while IFS= read -r SIG_PATH; do
@@ -932,16 +1130,12 @@ jobs:
               "https://api.github.com/repos/$THIRD_REPO/contents/$SIG_PATH" | jq -r '.download_url')
 
             if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
-              echo "⚠️ دریافت URL ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-              continue
+              FAILED=$((FAILED+1)); continue
             fi
 
             curl -s -L -H "Authorization: token $GH_TOKEN" -o "${LOCAL_FILE}.enc" "$DL_URL"
             if [ ! -s "${LOCAL_FILE}.enc" ]; then
-              echo "⚠️ دانلود ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-              continue
+              FAILED=$((FAILED+1)); continue
             fi
 
             node -e "
@@ -953,20 +1147,314 @@ jobs:
               const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
               const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
               fs.writeFileSync('${LOCAL_FILE}',dec);
-            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || {
-              echo "⚠️ رمزگشایی ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-            }
-          done <<< "$SIG_FILES"
+            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || FAILED=$((FAILED+1))
+          done <<< "$SIG_PATHS"
 
-          JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد فایل‌های JSONL رمزگشایی‌شده: $JSONL_COUNT  (ناموفق: $FAILED)"
-          if [ "$JSONL_COUNT" -eq 0 ]; then
-            echo "❌ هیچ signature‌ای با موفقیت دریافت نشد."
-            exit 1
+      - name: 4. دریافت news.pickle از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/news.pickle.enc -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/data/news.pickle.enc")
+          if [ "$HTTP_CODE" = "200" ] && [ -s /tmp/news.pickle.enc ]; then
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('/tmp/news.pickle.enc');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('/tmp/news.pickle',dec);
+            "
+            echo "✅ news.pickle رمزگشایی شد."
+          else
+            echo "⚠️ news.pickle.enc یافت نشد — ادامه بدون آن."
           fi
 
+      # [تغییر ۲]: اضافه کردن --interrupt-flag و --signatures-filter
+      - name: 5. اجرای correlation.py برای این چانک
+        if: steps.cache_check.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/correlation_chunk_cache
+          EXTRA_ARGS=""
+          [ -f /tmp/news.pickle ] && EXTRA_ARGS="--news-pickle /tmp/news.pickle"
+          python modules/correlation.py \
+            --signatures-dir /tmp/signatures \
+            --signatures-filter /tmp/filter.json \
+            --output-dir /tmp/correlation_chunk_cache \
+            --interrupt-flag ${{ runner.temp }}/interrupt.flag \
+            $EXTRA_ARGS
+          echo "✅ correlation chunk ${{ matrix.chunk_index }} پردازش شد."
+          touch /tmp/correlation_chunk_cache/chunk_completed.flag
+
+      - name: 6. ذخیره نتایج در Cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: /tmp/correlation_chunk_cache
+          key: correlation-chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
+
+  # ================================================================
+  # correlation-cleanup: ادغام نتایج correlation و آپلود به مخزن سوم
+  # ================================================================
+  correlation-cleanup:
+    needs: [correlation-generate-matrix, correlation-batch]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.correlation-batch.result != 'skipped' && inputs.analysis_module == 'correlation' }}
+    steps:
+      - name: بازیابی Cache‌های correlation
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/correlation_chunk_cache
+          key: correlation-chunk-result-
+          restore-keys: |
+            correlation-chunk-result-
+
+      - name: نصب پایتون و کتابخانه‌ها
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install pandas numpy scipy pyarrow
+
+      - name: ادغام نتایج و تولید correlations.parquet
+        run: |
+          mkdir -p /tmp/correlation_output
+          python - <<'PYEOF'
+          import pandas as pd
+          import glob
+
+          parquet_files = glob.glob('/tmp/correlation_chunk_cache/**/*.parquet', recursive=True)
+          if not parquet_files:
+              print("❌ هیچ فایل parquet برای ادغام یافت نشد.")
+              exit(1)
+
+          dfs = [pd.read_parquet(f) for f in parquet_files]
+          merged = pd.concat(dfs, ignore_index=True)
+          merged.to_parquet('/tmp/correlation_output/correlations.parquet', index=False)
+          print(f"✅ {len(merged)} رکورد در correlations.parquet ادغام شدند.")
+          PYEOF
+          if [ ! -f /tmp/correlation_output/correlations.parquet ]; then
+            echo "❌ correlations.parquet تولید نشد."; exit 1
+          fi
+
+      - name: آپلود correlations.parquet به‌عنوان artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: correlations-${{ github.run_id }}
+          path: /tmp/correlation_output/correlations.parquet
+          retention-days: 3
+
+      - name: رمزنگاری و آپلود correlations.parquet به مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          node -e "
+            const crypto=require('crypto'),fs=require('fs');
+            const pass=process.env.RESULTS_PASSWORD;
+            const data=fs.readFileSync('/tmp/correlation_output/correlations.parquet');
+            const key=crypto.scryptSync(pass,'salt',32);
+            const iv=crypto.randomBytes(16);
+            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+            const enc=Buffer.concat([cipher.update(data),cipher.final()]);
+            fs.writeFileSync('/tmp/correlations.parquet.enc',Buffer.concat([iv,enc]));
+          "
+          DEST="analysis_results/correlations.parquet.enc"
+          EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
+          if [ -n "$EXISTING_SHA" ]; then
+            gh api "repos/$THIRD_REPO/contents/$DEST" \
+              -X PUT \
+              -F message="update correlations (run ${{ github.run_id }})" \
+              -F content="$(base64 -w0 < /tmp/correlations.parquet.enc)" \
+              -F sha="$EXISTING_SHA" \
+              -F branch="main"
+          else
+            gh api "repos/$THIRD_REPO/contents/$DEST" \
+              -X PUT \
+              -F message="upload correlations (run ${{ github.run_id }})" \
+              -F content="$(base64 -w0 < /tmp/correlations.parquet.enc)" \
+              -F branch="main"
+          fi
+          echo "✅ correlations.parquet.enc آپلود شد."
+
+      - name: فراخوانی مجدد loop_analysis.yml
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
+            -X POST -f ref="main"
+
+  # ================================================================
+  # portfolios-generate-matrix: تولید صف کار برای ماژول portfolios
+  # [تغییر ۸]: portfolios بعد از correlation اجرا می‌شود
+  # ================================================================
+  portfolios-generate-matrix:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.analysis_module == 'portfolios' }}
+    outputs:
+      matrix_items: ${{ steps.gen.outputs.matrix_items }}
+      empty: ${{ steps.gen.outputs.empty }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
+        id: gen
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p /tmp/portfolios_chunks
+          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
+
+          SIG_FILES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path] | unique')
+          TOTAL=$(echo "$SIG_FILES" | jq 'length')
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHUNK_SIZE=50
+          CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          if [ "$CHUNK_COUNT" -gt 256 ]; then
+            CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
+            CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          fi
+
+          echo "$SIG_FILES" > /tmp/portfolios_chunks/all_signatures.json
+
+          INDICES="["
+          for ((i=0; i<CHUNK_COUNT; i++)); do
+            START=$((i * CHUNK_SIZE))
+            END=$((START + CHUNK_SIZE))
+            echo "$SIG_FILES" | jq ".[$START:$END]" > /tmp/portfolios_chunks/chunk_${i}.json
+            if [ $i -gt 0 ]; then INDICES+=", "; fi
+            INDICES+="$i"
+          done
+          INDICES+="]"
+          echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
+          echo "empty=false" >> $GITHUB_OUTPUT
+
+      - name: آپلود چانک‌های portfolios
+        if: steps.gen.outputs.empty == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolios-chunks-${{ github.run_id }}
+          path: /tmp/portfolios_chunks/
+          retention-days: 1
+
+  # ================================================================
+  # portfolios-batch: پردازش موازی چانک‌های portfolios
+  # ================================================================
+  portfolios-batch:
+    needs: [portfolios-generate-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    if: ${{ inputs.analysis_module == 'portfolios' && needs.portfolios-generate-matrix.outputs.empty == 'false' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        chunk_index: ${{ fromJson(needs.portfolios-generate-matrix.outputs.matrix_items || '[0]') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: دانلود چانک‌های portfolios
+        uses: actions/download-artifact@v4
+        with:
+          name: portfolios-chunks-${{ github.run_id }}
+          path: /tmp/portfolios_chunks
+
+      - name: بررسی Cache این chunk
+        id: cache_check
+        uses: actions/cache@v4
+        with:
+          path: /tmp/portfolios_chunk_cache
+          key: portfolios-chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
+
+      - name: 1. بررسی interrupt.flag
+        if: steps.cache_check.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "🛑 interrupt.flag یافت شد — job با وضعیت interrupted خاتمه می‌یابد."
+            exit 0
+          fi
+
+      - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
+        if: steps.cache_check.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install pandas numpy scipy pyarrow
+        if: steps.cache_check.outputs.cache-hit != 'true'
+
+      - name: 3. دانلود امضاهای این چانک از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          mkdir -p /tmp/signatures
+          CHUNK_INDEX=${{ matrix.chunk_index }}
+          SIG_PATHS=$(jq -r '.[]' /tmp/portfolios_chunks/chunk_${CHUNK_INDEX}.json)
+
+          jq -r '[.[] | {path: ., coin: (split("/")[-2]), sig: (split("/")[-1] | split(".")[0])}]' \
+            /tmp/portfolios_chunks/chunk_${CHUNK_INDEX}.json > /tmp/filter.json
+
+          FAILED=0
+          while IFS= read -r SIG_PATH; do
+            REL_PATH="${SIG_PATH#analysis_results/signatures/}"
+            LOCAL_DIR="/tmp/signatures/$(dirname "$REL_PATH")"
+            LOCAL_FILE="$LOCAL_DIR/$(basename "$REL_PATH" .enc)"
+            mkdir -p "$LOCAL_DIR"
+
+            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$SIG_PATH" | jq -r '.download_url')
+
+            if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
+              FAILED=$((FAILED+1)); continue
+            fi
+
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "${LOCAL_FILE}.enc" "$DL_URL"
+            if [ ! -s "${LOCAL_FILE}.enc" ]; then
+              FAILED=$((FAILED+1)); continue
+            fi
+
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('${LOCAL_FILE}.enc');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('${LOCAL_FILE}',dec);
+            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || FAILED=$((FAILED+1))
+          done <<< "$SIG_PATHS"
+
       - name: 4. دانلود golden_scores.parquet از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -992,12 +1480,12 @@ jobs:
             fs.writeFileSync('/tmp/golden_scores/golden_scores.parquet',dec);
           "
           if [ ! -f /tmp/golden_scores/golden_scores.parquet ]; then
-            echo "❌ رمزگشایی golden_scores.parquet ناموفق بود."
-            exit 1
+            echo "❌ رمزگشایی golden_scores.parquet ناموفق بود."; exit 1
           fi
-          echo "✅ golden_scores.parquet از مخزن سوم دریافت و رمزگشایی شد."
+          echo "✅ golden_scores.parquet دریافت و رمزگشایی شد."
 
       - name: 5. دریافت strategies_metadata.json از مخزن سوم
+        if: steps.cache_check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -1007,33 +1495,83 @@ jobs:
             -H "Accept: application/vnd.github.v3.raw" \
             "https://api.github.com/repos/$THIRD_REPO/contents/strategies_metadata.json")
           if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/strategies_metadata.json ]; then
-            echo "❌ strategies_metadata.json یافت نشد (HTTP $HTTP_CODE)."
-            exit 1
+            echo "❌ strategies_metadata.json یافت نشد (HTTP $HTTP_CODE)."; exit 1
           fi
-          echo "✅ strategies_metadata.json دریافت شد."
 
-      - name: 6. اجرای portfolios.py
+      # [تغییر ۲]: اضافه کردن --interrupt-flag و --signatures-filter
+      - name: 6. اجرای portfolios.py برای این چانک
+        if: steps.cache_check.outputs.cache-hit != 'true'
         run: |
+          mkdir -p /tmp/portfolios_chunk_cache
           python modules/portfolios.py \
             --signatures-dir /tmp/signatures \
+            --signatures-filter /tmp/filter.json \
             --golden-scores /tmp/golden_scores/golden_scores.parquet \
             --strategies-json /tmp/strategies_metadata.json \
-            --output-dir /tmp/portfolios_output \
+            --output-dir /tmp/portfolios_chunk_cache \
+            --interrupt-flag ${{ runner.temp }}/interrupt.flag \
             --top-n 15
-          if [ ! -f /tmp/portfolios_output/portfolios.parquet ]; then
-            echo "❌ portfolios.parquet تولید نشد."
-            exit 1
-          fi
-          echo "✅ portfolios.parquet با موفقیت تولید شد."
+          echo "✅ portfolios chunk ${{ matrix.chunk_index }} پردازش شد."
+          touch /tmp/portfolios_chunk_cache/chunk_completed.flag
 
-      - name: 7. آپلود portfolios.parquet به‌عنوان artifact
+      - name: 7. ذخیره نتایج در Cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: /tmp/portfolios_chunk_cache
+          key: portfolios-chunk-result-${{ matrix.chunk_index }}-${{ github.run_id }}
+
+  # ================================================================
+  # portfolios-cleanup: ادغام نتایج portfolios و آپلود به مخزن سوم
+  # ================================================================
+  portfolios-cleanup:
+    needs: [portfolios-generate-matrix, portfolios-batch]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.portfolios-batch.result != 'skipped' && inputs.analysis_module == 'portfolios' }}
+    steps:
+      - name: بازیابی Cache‌های portfolios
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/portfolios_chunk_cache
+          key: portfolios-chunk-result-
+          restore-keys: |
+            portfolios-chunk-result-
+
+      - name: نصب پایتون و کتابخانه‌ها
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install pandas numpy scipy pyarrow
+
+      - name: ادغام نتایج و تولید portfolios.parquet
+        run: |
+          mkdir -p /tmp/portfolios_output
+          python - <<'PYEOF'
+          import pandas as pd
+          import glob
+
+          parquet_files = glob.glob('/tmp/portfolios_chunk_cache/**/*.parquet', recursive=True)
+          if not parquet_files:
+              print("❌ هیچ فایل parquet برای ادغام یافت نشد.")
+              exit(1)
+
+          dfs = [pd.read_parquet(f) for f in parquet_files]
+          merged = pd.concat(dfs, ignore_index=True)
+          merged.to_parquet('/tmp/portfolios_output/portfolios.parquet', index=False)
+          print(f"✅ {len(merged)} رکورد در portfolios.parquet ادغام شدند.")
+          PYEOF
+          if [ ! -f /tmp/portfolios_output/portfolios.parquet ]; then
+            echo "❌ portfolios.parquet تولید نشد."; exit 1
+          fi
+
+      - name: آپلود portfolios.parquet به‌عنوان artifact
         uses: actions/upload-artifact@v4
         with:
           name: portfolios-${{ github.run_id }}
           path: /tmp/portfolios_output/portfolios.parquet
           retention-days: 3
 
-      - name: 8. رمزنگاری و آپلود portfolios.parquet به مخزن سوم
+      - name: رمزنگاری و آپلود portfolios.parquet به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -1067,195 +1605,10 @@ jobs:
           fi
           echo "✅ portfolios.parquet.enc آپلود شد."
 
-      - name: 9. فراخوانی مجدد loop_analysis.yml
+      - name: فراخوانی مجدد loop_analysis.yml
         if: always()
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
         run: |
           gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
             -X POST -f ref="main"
-
-  # ================================================================
-  # correlation: (اختیاری) محاسبه همبستگی‌ها
-  # ================================================================
-  correlation:
-    runs-on: ubuntu-latest
-    timeout-minutes: 340
-    if: ${{ inputs.analysis_module == 'correlation' }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 1. بررسی interrupt.flag
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "🛑 interrupt.flag یافت شد — job خاتمه می‌یابد."
-            echo '{"status":"interrupted","module":"correlation","run_id":"${{ github.run_id }}"}' \
-              > /tmp/correlation_status.json
-            gh api "repos/$THIRD_REPO/contents/analysis_results/correlation_status.json" \
-              -X PUT -F message="correlation interrupted" \
-              -F content="$(base64 -w0 < /tmp/correlation_status.json)" \
-              -F branch="main" 2>/dev/null || true
-            exit 0
-          fi
-
-      - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - run: pip install pandas numpy scipy pyarrow
-
-      - name: 3. دانلود signatures از مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          mkdir -p /tmp/signatures
-          echo "🔍 دریافت لیست فایل‌های signatures از مخزن سوم..."
-
-          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
-
-          SIG_FILES=$(echo "$TREE" | jq -r '.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path')
-
-          if [ -z "$SIG_FILES" ]; then
-            echo "❌ هیچ فایل signature رمزنگاری‌شده در مخزن سوم یافت نشد."
-            exit 1
-          fi
-
-          SIG_COUNT=$(echo "$SIG_FILES" | wc -l)
-          echo "📦 تعداد فایل‌های signature یافت شده: $SIG_COUNT"
-
-          FAILED=0
-          while IFS= read -r SIG_PATH; do
-            REL_PATH="${SIG_PATH#analysis_results/signatures/}"
-            LOCAL_DIR="/tmp/signatures/$(dirname "$REL_PATH")"
-            LOCAL_FILE="$LOCAL_DIR/$(basename "$REL_PATH" .enc)"
-            mkdir -p "$LOCAL_DIR"
-
-            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$SIG_PATH" | jq -r '.download_url')
-
-            if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
-              echo "⚠️ دریافت URL ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-              continue
-            fi
-
-            curl -s -L -H "Authorization: token $GH_TOKEN" -o "${LOCAL_FILE}.enc" "$DL_URL"
-            if [ ! -s "${LOCAL_FILE}.enc" ]; then
-              echo "⚠️ دانلود ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-              continue
-            fi
-
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('${LOCAL_FILE}.enc');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('${LOCAL_FILE}',dec);
-            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || {
-              echo "⚠️ رمزگشایی ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-            }
-          done <<< "$SIG_FILES"
-
-          JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد فایل‌های JSONL رمزگشایی‌شده: $JSONL_COUNT  (ناموفق: $FAILED)"
-          if [ "$JSONL_COUNT" -eq 0 ]; then
-            echo "❌ هیچ signature‌ای با موفقیت دریافت نشد."
-            exit 1
-          fi
-
-      - name: 4. دریافت news.pickle از مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          HTTP_CODE=$(curl -s -o /tmp/news.pickle.enc -w "%{http_code}" \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/data/news.pickle.enc")
-          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/news.pickle.enc ]; then
-            echo "⚠️ news.pickle.enc یافت نشد (HTTP $HTTP_CODE) — ادامه بدون آن."
-          else
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('/tmp/news.pickle.enc');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('/tmp/news.pickle',dec);
-            "
-            echo "✅ news.pickle رمزگشایی شد."
-          fi
-
-      - name: 5. اجرای correlation.py
-        run: |
-          EXTRA_ARGS=""
-          [ -f /tmp/news.pickle ] && EXTRA_ARGS="--news-pickle /tmp/news.pickle"
-          python modules/correlation.py \
-            --signatures-dir /tmp/signatures \
-            --output-dir /tmp/correlation_output \
-            $EXTRA_ARGS
-          if [ ! -f /tmp/correlation_output/correlations.parquet ]; then
-            echo "❌ correlations.parquet تولید نشد."
-            exit 1
-          fi
-          echo "✅ correlations.parquet با موفقیت تولید شد."
-
-      - name: 6. آپلود correlations.parquet به‌عنوان artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: correlations-${{ github.run_id }}
-          path: /tmp/correlation_output/correlations.parquet
-          retention-days: 3
-
-      - name: 7. رمزنگاری و آپلود correlations.parquet به مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          node -e "
-            const crypto=require('crypto'),fs=require('fs');
-            const pass=process.env.RESULTS_PASSWORD;
-            const data=fs.readFileSync('/tmp/correlation_output/correlations.parquet');
-            const key=crypto.scryptSync(pass,'salt',32);
-            const iv=crypto.randomBytes(16);
-            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
-            const enc=Buffer.concat([cipher.update(data),cipher.final()]);
-            fs.writeFileSync('/tmp/correlations.parquet.enc',Buffer.concat([iv,enc]));
-          "
-          DEST="analysis_results/correlations.parquet.enc"
-          EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
-          if [ -n "$EXISTING_SHA" ]; then
-            gh api "repos/$THIRD_REPO/contents/$DEST" \
-              -X PUT \
-              -F message="update correlations (run ${{ github.run_id }})" \
-              -F content="$(base64 -w0 < /tmp/correlations.parquet.enc)" \
-              -F sha="$EXISTING_SHA" \
-              -F branch="main"
-          else
-            gh api "repos/$THIRD_REPO/contents/$DEST" \
-              -X PUT \
-              -F message="upload correlations (run ${{ github.run_id }})" \
-              -F content="$(base64 -w0 < /tmp/correlations.parquet.enc)" \
-              -F branch="main"
-          fi
-          echo "✅ correlations.parquet.enc آپلود شد."
