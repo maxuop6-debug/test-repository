@@ -214,14 +214,23 @@ def auto_detect_mapping(csv_paths: list[Path]) -> dict:
         key=lambda x: -x[1]
     )
 
-    for value, _ in candidates:
+    if not candidates:
+        if not freq:
+            log.warning("auto_detect_mapping: هیچ کلمه‌ای از فایل‌های CSV استخراج نشد – احتمالاً فایل‌ها خالی هستند یا همه مقادیر عددی/تاریخی هستند")
+        else:
+            log.warning(f"auto_detect_mapping: {len(freq)} کلمه پیدا شد اما هیچ‌کدام بیش از ۵ بار تکرار نشده‌اند یا همه در نگاشت موجودند")
+    else:
+        log.info(f"auto_detect_mapping: {len(candidates)} کلمه کاندیدا برای نگاشت پیدا شد")
+
+    for value, cnt in candidates:
         code = _next_code(used_codes)
         mapping["values"][value] = code
         mapping["reverse_values"][code] = value
         used_codes.add(code)
-        log.info(f"نگاشت جدید: '{value}' → '{code}'")
+        log.info(f"نگاشت جدید: '{value}' (تکرار={cnt}) → '{code}'")
 
     save_mapping(mapping)
+    log.info(f"auto_detect_mapping: {len(candidates)} کلمه جدید به نگاشت اضافه شد و ذخیره گردید")
     return mapping
 
 
@@ -1123,7 +1132,10 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
     parts = text.split(maxsplit=1)
 
     if len(parts) < 2:
-        _tg_send_message(bot_token, chat_id, "سلام! لینک دانلود را از کانال دریافت کنید.")
+        _tg_send_message(
+            bot_token, chat_id,
+            "⏳ حدوداً ۳۰ ثانیه صبر کنید تا ربات جواب بدهد. صبر کنید سرور ها شلوغه"
+        )
         return
 
     uid = parts[1].strip()
@@ -1132,7 +1144,14 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
         _tg_send_message(bot_token, chat_id, "❌ این لینک منقضی شده یا نامعتبر است.")
         return
 
-    if _check_membership(bot_token, main_chat_id, user_id):
+    try:
+        is_member = _check_membership(bot_token, main_chat_id, user_id)
+    except Exception as e:
+        log.error(f"خطا در بررسی عضویت برای user_id={user_id}: {e}")
+        _tg_send_message(bot_token, chat_id, "⚠️ امکان بررسی عضویت وجود ندارد، لطفاً بعداً تلاش کنید.")
+        return
+
+    if is_member:
         _tg_send_message(bot_token, chat_id, f"✅ لینک دانلود شما:\n{entry['link']}")
     else:
         keyboard = {"inline_keyboard": [[
@@ -1142,7 +1161,7 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
             bot_token, chat_id,
             "⚠️ برای دریافت لینک، ابتدا باید عضو کانال ما شوید:\n\n"
             "بعد از عضویت دوباره لینک را بزنید و استارت کنید.\n"
-            "⏳ حدوداً ۳۰ ثانیه صبر کنید تا ربات جواب بدهد.",
+            "⏳ حدوداً ۳۰ ثانیه صبر کنید تا ربات جواب بدهد. صبر کنید سرور ها شلوغه",
             reply_markup=keyboard,
         )
 
@@ -1181,26 +1200,35 @@ def process_forward_updates() -> None:
     _send_startup_movie(bot_token, main_chat_id)
 
     updates = _get_updates(bot_token, offset)
+    log.info(f"getUpdates: offset={offset}, تعداد آپدیت دریافتی={len(updates)}")
     if not updates:
         log.info("هیچ آپدیت جدیدی نیست")
         return
 
     for update in updates:
-        new_offset = update["update_id"] + 1
+        uid_update = update.get("update_id")
+        new_offset = uid_update + 1
+        log.debug(f"پردازش آپدیت update_id={uid_update}, کلیدها={list(update.keys())}")
         try:
             if "channel_post" in update:
+                log.info(f"آپدیت channel_post دریافت شد: update_id={uid_update}")
                 _process_forwarded_update(update, bot_token, bot_username, main_chat_id,
                                            main_channel_username, intermediate_chat_id, pending)
             elif "message" in update:
+                msg_text = update["message"].get("text", "")
+                log.info(f"آپدیت message دریافت شد: update_id={uid_update}, text='{msg_text[:30]}'")
                 _process_start_command(update, bot_token, main_chat_id,
                                         main_channel_username, pending)
+            else:
+                log.debug(f"آپدیت نوع ناشناخته: {list(update.keys())}")
         except Exception as e:
-            log.error(f"خطا در پردازش آپدیت {update.get('update_id')}: {e}")
+            log.error(f"خطا در پردازش آپدیت {uid_update}: {e}")
         finally:
             # offset رو همیشه ذخیره کن، حتی اگر خطا بخوره
             if new_offset > offset:
                 offset = new_offset
                 _save_offset(offset)
+                log.debug(f"offset به‌روز شد: {offset}")
 
     log.info(f"✅ {len(updates)} آپدیت پردازش شد، offset={offset}")
 
@@ -1256,6 +1284,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         except Exception as e:
             log.error(f"خطا در پردازش فایل یکبار مصرف {rel}: {e}")
 
+    movie_sent = False
     if onetime_to_pack:
         log.info(f"🚀 آپلود {len(onetime_to_pack)} فایل یکبار مصرف...")
         packages = build_packages(onetime_to_pack, [])
@@ -1263,7 +1292,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         for pkg in packages:
             fid = telegram_send_document(bot_token, chat_id,
                                           pkg["data"], pkg["name"],
-                                          caption=f"📦 یکبار مصرف: {pkg['name']}\n{len(pkg['files'])} فایل")
+                                          caption="")
             if fid:
                 for rel_path in pkg["files"]:
                     record_upload(ledger, rel_path, fid, len(pkg["data"]))
@@ -1271,6 +1300,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
                 onetime_succeeded = True
         if onetime_succeeded:
             mark_onetime_done(onetime_flag_names_to_mark)
+            send_movie_messages_after_backup(bot_token, chat_id)
+            movie_sent = True
 
     # ─── ۲. زمان‌بندی – بقیه کارها فقط در زمان مقرر ───
     sched = generate_schedule()
@@ -1285,7 +1316,13 @@ def run_pipeline(args: argparse.Namespace) -> None:
     csv_files = filter_completed_strategies(csv_files_all)
     if len(csv_files) != len(csv_files_all):
         log.info(f"🧹 {len(csv_files_all) - len(csv_files)} فایل به دلیل استراتژی تکمیل‌شده فیلتر شد")
-    mapping = auto_detect_mapping(csv_files)
+    # بررسی خالی نبودن csv_files قبل از auto_detect_mapping
+    if not csv_files:
+        log.warning("auto_detect_mapping: لیست فایل‌های CSV خالی است – نگاشت خودکار انجام نمی‌شود")
+        mapping = load_mapping()
+    else:
+        log.info(f"auto_detect_mapping: {len(csv_files)} فایل CSV برای بررسی نگاشت")
+        mapping = auto_detect_mapping(csv_files)
 
     # ─── ۳. پردازش فایل‌ها ───
     to_pack: list[tuple[Path, bytes]] = []
@@ -1337,6 +1374,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
             struct = write_structure_json(folder)
             folder_structs[folder] = struct
             to_pack.append((folder / "structure.json", (folder / "structure.json").read_bytes()))
+            # کپی master_structure.json داخل پوشه قبل از بسته‌بندی
+            if MASTER_STRUCTURE_FILE.exists():
+                try:
+                    shutil.copy(MASTER_STRUCTURE_FILE, folder / MASTER_STRUCTURE_FILE.name)
+                    to_pack.append((folder / MASTER_STRUCTURE_FILE.name, (folder / MASTER_STRUCTURE_FILE.name).read_bytes()))
+                    log.info(f"✅ master_structure.json در {folder} کپی شد")
+                except Exception as e:
+                    log.warning(f"خطا در کپی master_structure.json به {folder}: {e}")
 
         # ─── ۴. بسته‌بندی ───
         packages = build_packages(to_pack, [ANALYSIS_DIR, AGGREGATED_DIR])
@@ -1345,7 +1390,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
         for pkg in packages:
             fid = telegram_send_document(bot_token, chat_id,
                                           pkg["data"], pkg["name"],
-                                          caption=f"📦 {pkg['name']}\n{len(pkg['files'])} فایل")
+                                          caption="")
             if fid:
                 for rel_path in pkg["files"]:
                     record_upload(ledger, rel_path, fid, len(pkg["data"]))
@@ -1375,11 +1420,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     log.warning(f"حذف ناموفق {csv_path}: {e}")
 
     # ─── ۷. ارسال ۱ یا ۲ پیام فیلم/سریال رندوم (فقط در صورت بک‌آپ موفق) ───
-    if backup_succeeded:
+    if backup_succeeded and not movie_sent:
         send_movie_messages_after_backup(bot_token, chat_id)
 
-    # ─── ۸. ارسال متادیتا (شامل master_structure.json) ───
-    send_metadata(bot_token, chat_id, password)
+    # ─── ۸. ارسال متادیتا (شامل master_structure.json) – غیرفعال ───
+    # send_metadata(bot_token, chat_id, password)
 
     # ─── ۹. ارسال هفتگی ───
     weekly_repos = os.environ.get("WEEKLY_REPOS", "now-test-repo").split(",")
