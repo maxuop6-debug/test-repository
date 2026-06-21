@@ -8887,3 +8887,4 @@ __NO_STOP_LOSS_INITIAL__
    ❌ stopLossInitial در فایل /tmp/third_repo/strategies/Ttt3.js یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود.
    ❌ pipeline باید fail شود: stop_loss_initial اجباری است.
 هیچ تغییری در لاگ وجود ندارد.
+🔍 بررسی پرچم‌های وقفه...
