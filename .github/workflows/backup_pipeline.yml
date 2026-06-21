@@ -70,6 +70,16 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip requests cryptography
 
+      - name: Create required files if missing
+        run: |
+          # ساخت فایل‌های مورد نیاز اگر وجود نداشتند
+          for f in bot_stats.json pending_links.json update_offset.json; do
+            if [ ! -f "$f" ]; then
+              echo "{}" > "$f"
+              echo "✅ فایل $f ساخته شد"
+            fi
+          done
+
       - name: Run 5-hour backup loop
         env:
           RESULTS_PASSWORD:      ${{ secrets.RESULTS_PASSWORD }}
@@ -93,6 +103,7 @@ jobs:
           END_TIME=$(( $(date +%s) + 5*3600 ))
           echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
 
+          # ─── تابع بک‌آپ (هر ۳۰ دقیقه) ──────────────────────────────
           do_run_and_commit() {
             git pull --rebase origin main 2>/dev/null || true
 
@@ -102,7 +113,9 @@ jobs:
             for f in auto_mapping.json backup_ledger.json schedule_times.json \
                      integrity_pass.flag master_structure.json update_offset.json \
                      startup_test_sent.flag pending_links.json bot_stats.json; do
-              [ -f "$f" ] && git add "$f"
+              if [ -f "$f" ]; then
+                git add "$f"
+              fi
             done
             git add -u analysis_results/ 2>/dev/null || true
             git add movie_messages/      2>/dev/null || true
@@ -111,17 +124,24 @@ jobs:
             find aggregated/ -name ".backup_done" -exec git add {} \; 2>/dev/null || true
 
             if ! git diff --cached --quiet; then
-              git commit -m "chore: backup state $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              git commit -m "chore: backup state $(date -u '+%Y-%m-%d %H:%M:%S UTC')" || true
               git push origin main || true
             fi
           }
 
+          # ─── تابع پردازش آپدیت‌ها (هر ۳۰ ثانیه) ────────────────────
           process_updates_loop() {
             while [ $(date +%s) -lt $END_TIME ]; do
               python backup_system.py process-updates || true
 
-              if ! git diff --quiet pending_links.json update_offset.json bot_stats.json; then
-                git add pending_links.json update_offset.json bot_stats.json
+              # فقط فایل‌هایی که وجود دارند رو چک کن
+              for f in pending_links.json update_offset.json bot_stats.json; do
+                if [ -f "$f" ] && ! git diff --quiet "$f"; then
+                  git add "$f"
+                fi
+              done
+
+              if ! git diff --cached --quiet; then
                 git commit -m "chore: update pending links, offset and stats" || true
                 git push origin main || true
               fi
@@ -130,6 +150,7 @@ jobs:
             done
           }
 
+          # ─── اجرای همزمان ────────────────────────────────────────────
           (
             while [ $(date +%s) -lt $END_TIME ]; do
               do_run_and_commit
@@ -143,7 +164,7 @@ jobs:
           echo "✅ حلقه ۵ ساعته تمام شد"
 
       - name: Notify on failure
-        if: failure()
+        if: failure() && !cancelled()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
