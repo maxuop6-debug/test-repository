@@ -183,8 +183,10 @@ def load_news_from_directory(news_dir):
 def load_ohlc_data(ohlc_dir):
     """
     [اولویت ۱] بارگذاری داده‌های OHLC از پوشه.
-    اگر ohlc_dir خالی یا ناموجود باشد: DataFrame خالی برمی‌گرداند.
-    اگر CSV معتبری یافت نشود: DataFrame خالی برمی‌گرداند.
+    - ستون‌های date یا timestamp را می‌پذیرد.
+    - تایم‌فریم را بر اساس میانگین فاصله‌ی زمانی بین رکوردها تشخیص می‌دهد.
+    - اگر تایم‌فریم زیر-روزانه بود، با pd.Grouper(freq='D') به روزانه resample می‌کند.
+    - اگر بعد از resample تعداد روزها < 200 بود، هشدار چاپ می‌کند.
     """
     columns = ["date", "coin", "open", "high", "low", "close"]
     if not ohlc_dir or not os.path.isdir(ohlc_dir):
@@ -203,13 +205,63 @@ def load_ohlc_data(ohlc_dir):
             continue
 
         df.columns = [str(col).strip().lower() for col in df.columns]
+
+        # ۱. پشتیبانی از ستون timestamp به‌عنوان date
+        if "date" not in df.columns and "timestamp" in df.columns:
+            df = df.rename(columns={"timestamp": "date"})
+            print(f"   ℹ️ [{coin}] ستون 'timestamp' به 'date' تغییر نام داد.")
+
         required = {"date", "open", "high", "low", "close"}
         if not required.issubset(set(df.columns)):
+            print(f"   ⚠️ [{coin}] ستون‌های لازم یافت نشد → نادیده گرفته شد.")
             continue
 
         df = df[["date", "open", "high", "low", "close"]].copy()
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df = df.dropna(subset=["date"])
+        if df.empty:
+            continue
+
+        df = df.sort_values("date").reset_index(drop=True)
+
+        # ۲. تشخیص تایم‌فریم (میانگین فاصله‌ی زمانی بین رکوردها)
+        if len(df) >= 2:
+            time_diffs = df["date"].diff().dropna()
+            avg_diff_minutes = time_diffs.dt.total_seconds().mean() / 60.0
+        else:
+            avg_diff_minutes = 1440.0  # فرض روزانه
+
+        is_intraday = avg_diff_minutes < 60 * 23  # کمتر از ۲۳ ساعت → زیر-روزانه
+
+        if is_intraday:
+            timeframe_str = (
+                f"{int(avg_diff_minutes)}دقیقه‌ای" if avg_diff_minutes < 60
+                else f"{avg_diff_minutes/60:.1f}ساعته"
+            )
+            print(f"   ⏱️ [{coin}] تایم‌فریم تشخیص داده شد: ~{timeframe_str} "
+                  f"(میانگین فاصله {avg_diff_minutes:.1f} دقیقه) → resample به روزانه")
+
+            # ۳. resample به روزانه
+            df = df.set_index("date")
+            df_daily = df.resample("D").agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+            ).dropna(subset=["close"])
+            df_daily = df_daily.reset_index()
+            df_daily.columns = ["date", "open", "high", "low", "close"]
+            df = df_daily
+            print(f"   ✅ [{coin}] بعد از resample: {len(df)} روز کاری")
+        else:
+            print(f"   ✅ [{coin}] تایم‌فریم روزانه تشخیص داده شد "
+                  f"(میانگین فاصله {avg_diff_minutes:.1f} دقیقه)")
+
+        # ۴. هشدار اگر تعداد روزها < 200
+        if len(df) < 200:
+            print(f"   ⚠️ [{coin}] تعداد روزهای OHLC ({len(df)}) کمتر از ۲۰۰ است → "
+                  f"market_regime این کوین 'unknown' خواهد بود (MA200 قابل‌محاسبه نیست).")
+
         df["coin"] = coin
         frames.append(df[columns])
 
