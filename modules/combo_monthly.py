@@ -169,13 +169,37 @@ def load_news_from_directory(news_dir):
 
 # ================================ OHLC بارگذاری ================================
 
+def extract_coin_name(filename):
+    """
+    استخراج نام واقعی کوین از نام فایل OHLC تکه‌تکه‌شده.
+    مثال: BTCUSDT-5m-2018-01-01_2018-01-10.csv → BTCUSDT
+    الگو: هر چیزی قبل از اولین توکن تایم‌فریم (مثل -5m- یا -1h- یا -1d- یا -1w-)
+    که با خط‌تیره از دو طرف جدا شده.
+    اگر الگوی تایم‌فریم پیدا نشد (مثلاً فایل از قبل به‌ازای هر کوین یکی است،
+    بدون پسوند تایم‌فریم/بازه)، کل نام فایل (بدون پسوند) به‌عنوان نام کوین
+    برگردانده می‌شود (سازگاری با عقب).
+    """
+    base = os.path.splitext(os.path.basename(filename))[0]
+    match = re.match(r'^(.+?)-\d+[mhdwM]-', base)
+    if match:
+        return match.group(1).upper()
+    return base
+
+
 def load_ohlc_data(ohlc_dir):
     """
     [اولویت ۱] بارگذاری داده‌های OHLC از پوشه.
+    - فایل‌های OHLC ممکن است به‌صورت تکه‌تکه (مثلاً بازه‌های ۱۰روزه) برای یک
+      کوین ذخیره شده باشند؛ نام واقعی کوین از روی نام فایل استخراج می‌شود
+      (extract_coin_name) و تمام تکه‌های مربوط به یک کوین قبل از resample
+      با هم ادغام می‌شوند.
     - ستون‌های date یا timestamp را می‌پذیرد.
-    - تایم‌فریم را بر اساس میانگین فاصله‌ی زمانی بین رکوردها تشخیص می‌دهد.
-    - اگر تایم‌فریم زیر-روزانه بود، با pd.Grouper(freq='D') به روزانه resample می‌کند.
-    - اگر بعد از resample تعداد روزها < 200 بود، هشدار چاپ می‌کند.
+    - تایم‌فریم را بر اساس میانگین فاصله‌ی زمانی بین رکوردهای *ادغام‌شده‌ی*
+      هر کوین تشخیص می‌دهد.
+    - اگر تایم‌فریم زیر-روزانه بود، resample روزانه روی کل سری زمانی آن
+      کوین اعمال می‌شود (نه روی هر فایل/تکه به‌تنهایی).
+    - اگر بعد از ادغام و resample، تعداد کل روزهای آن کوین < 200 بود،
+      هشدار چاپ می‌کند (MA200 قابل‌محاسبه نخواهد بود).
     """
     columns = ["date", "coin", "open", "high", "low", "close"]
     if not ohlc_dir or not os.path.isdir(ohlc_dir):
@@ -185,24 +209,27 @@ def load_ohlc_data(ohlc_dir):
     if not csv_paths:
         return pd.DataFrame(columns=columns)
 
-    frames = []
+    # ۱. خواندن خام تمام فایل‌ها و گروه‌بندی بر اساس نام واقعی کوین
+    #    (چند فایل/تکه می‌توانند به یک کوین تعلق داشته باشند)
+    coin_raw_frames = defaultdict(list)
     for path in csv_paths:
-        coin = os.path.splitext(os.path.basename(path))[0]
+        coin = extract_coin_name(path)
+        fname = os.path.basename(path)
         try:
             df = pd.read_csv(path)
-        except Exception:
+        except Exception as e:
+            print(f"   ⚠️ خطا در خواندن {fname}: {e}")
             continue
 
         df.columns = [str(col).strip().lower() for col in df.columns]
 
-        # ۱. پشتیبانی از ستون timestamp به‌عنوان date
+        # پشتیبانی از ستون timestamp به‌عنوان date
         if "date" not in df.columns and "timestamp" in df.columns:
             df = df.rename(columns={"timestamp": "date"})
-            print(f"   ℹ️ [{coin}] ستون 'timestamp' به 'date' تغییر نام داد.")
 
         required = {"date", "open", "high", "low", "close"}
         if not required.issubset(set(df.columns)):
-            print(f"   ⚠️ [{coin}] ستون‌های لازم یافت نشد → نادیده گرفته شد.")
+            print(f"   ⚠️ [{fname}] ستون‌های لازم یافت نشد → نادیده گرفته شد.")
             continue
 
         df = df[["date", "open", "high", "low", "close"]].copy()
@@ -211,9 +238,25 @@ def load_ohlc_data(ohlc_dir):
         if df.empty:
             continue
 
-        df = df.sort_values("date").reset_index(drop=True)
+        coin_raw_frames[coin].append(df)
 
-        # ۲. تشخیص تایم‌فریم (میانگین فاصله‌ی زمانی بین رکوردها)
+    if not coin_raw_frames:
+        return pd.DataFrame(columns=columns)
+
+    coin_names_preview = ', '.join(list(coin_raw_frames.keys())[:5])
+    more_suffix = '...' if len(coin_raw_frames) > 5 else ''
+    print(f"📦 {len(csv_paths)} فایل CSV → {len(coin_raw_frames)} کوین یکتا شناسایی شد "
+          f"(مثال: {coin_names_preview}{more_suffix})")
+
+    frames = []
+    for coin, parts in coin_raw_frames.items():
+        # ۲. ادغام تمام تکه‌های یک کوین در یک DataFrame واحد
+        df = pd.concat(parts, ignore_index=True)
+
+        # ۳. مرتب‌سازی بر اساس تاریخ (و حذف رکوردهای تکراری احتمالی در مرز تکه‌ها)
+        df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+
+        # ۴. تشخیص تایم‌فریم روی کل سری زمانیِ ادغام‌شده (نه هر فایل جداگانه)
         if len(df) >= 2:
             time_diffs = df["date"].diff().dropna()
             avg_diff_minutes = time_diffs.dt.total_seconds().mean() / 60.0
@@ -227,10 +270,10 @@ def load_ohlc_data(ohlc_dir):
                 f"{int(avg_diff_minutes)}دقیقه‌ای" if avg_diff_minutes < 60
                 else f"{avg_diff_minutes/60:.1f}ساعته"
             )
-            print(f"   ⏱️ [{coin}] تایم‌فریم تشخیص داده شد: ~{timeframe_str} "
-                  f"(میانگین فاصله {avg_diff_minutes:.1f} دقیقه) → resample به روزانه")
+            print(f"   ⏱️ [{coin}] {len(parts)} فایل ادغام شد → تایم‌فریم: ~{timeframe_str} "
+                  f"(میانگین فاصله {avg_diff_minutes:.1f} دقیقه) → resample به روزانه روی کل سری")
 
-            # ۳. resample به روزانه
+            # ۵. resample روزانه روی کل داده‌ی ادغام‌شده‌ی کوین
             df = df.set_index("date")
             df_daily = df.resample("D").agg(
                 open=("open", "first"),
@@ -241,14 +284,15 @@ def load_ohlc_data(ohlc_dir):
             df_daily = df_daily.reset_index()
             df_daily.columns = ["date", "open", "high", "low", "close"]
             df = df_daily
-            print(f"   ✅ [{coin}] بعد از resample: {len(df)} روز کاری")
+            print(f"   ✅ [{coin}] بعد از ادغام و resample: {len(df)} روز کاری "
+                  f"(از {len(parts)} فایل تکه‌ای)")
         else:
-            print(f"   ✅ [{coin}] تایم‌فریم روزانه تشخیص داده شد "
-                  f"(میانگین فاصله {avg_diff_minutes:.1f} دقیقه)")
+            print(f"   ✅ [{coin}] {len(parts)} فایل ادغام شد → تایم‌فریم روزانه "
+                  f"(میانگین فاصله {avg_diff_minutes:.1f} دقیقه)، مجموع {len(df)} روز")
 
-        # ۴. هشدار اگر تعداد روزها < 200
+        # ۶. هشدار اگر تعداد کل روزها (پس از ادغام همه‌ی تکه‌ها) کمتر از ۲۰۰ بود
         if len(df) < 200:
-            print(f"   ⚠️ [{coin}] تعداد روزهای OHLC ({len(df)}) کمتر از ۲۰۰ است → "
+            print(f"   ⚠️ [{coin}] تعداد کل روزهای OHLC پس از ادغام ({len(df)}) کمتر از ۲۰۰ است → "
                   f"market_regime این کوین 'unknown' خواهد بود (MA200 قابل‌محاسبه نیست).")
 
         df["coin"] = coin
@@ -259,7 +303,8 @@ def load_ohlc_data(ohlc_dir):
 
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.sort_values(["coin", "date"]).reset_index(drop=True)
-    print(f"✅ OHLC: {len(combined)} ردیف از {len(frames)} کوین بارگذاری شد.")
+    print(f"✅ OHLC: {len(combined)} ردیف از {len(frames)} کوین "
+          f"(ادغام‌شده از {len(csv_paths)} فایل) بارگذاری شد.")
     return combined
 
 
