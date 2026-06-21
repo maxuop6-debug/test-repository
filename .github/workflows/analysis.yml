@@ -323,34 +323,91 @@ jobs:
             exit 0
           fi
 
-          META_FILE_REMOTE="strategies/${STRAT}/1.json"
-          META_CONTENT=$(gh api "repos/$THIRD_REPO/contents/$META_FILE_REMOTE" \
+          # [اولویت ۱] فایل strategies/${STRAT}.js — منبع اصلی متادیتا
+          # [اولویت ۲ - fallback] strategies/${STRAT}/1.json — فقط اگر .js یافت نشد
+          # stop_loss_initial اجباری است: اگر در هیچ‌کدام یافت نشد، pipeline با exit 1 متوقف می‌شود.
+          META_SOURCE=""
+          META_CONTENT=""
+
+          JS_FILE_REMOTE="strategies/${STRAT}.js"
+          JS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/$JS_FILE_REMOTE" \
             -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
 
-          if [ -z "$META_CONTENT" ]; then
-            JS_FILE_REMOTE="strategies/${STRAT}.js"
-            JS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/$JS_FILE_REMOTE" \
-              -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
-            if [ -z "$JS_CONTENT" ]; then
-              META_CONTENT='{"move_percents":[],"stop_loss_initial":-2.0,"max_move_percent":null}'
+          if [ -n "$JS_CONTENT" ]; then
+            echo "$JS_CONTENT" > /tmp/prep/strat.js
+            META_CONTENT=$(node -e "
+              const fs=require('fs');
+              const js=fs.readFileSync('/tmp/prep/strat.js','utf8');
+              // [اولویت ۱] استخراج move_percents از stopLossStages
+              let mp=[];
+              let mpSource='none';
+              const sm=js.match(/stopLossStages\s*[:=]\s*\[([\s\S]*?)\]/);
+              if(sm){
+                for(const m of sm[1].matchAll(/movePercent\s*:\s*([\d.]+)/g)) mp.push(parseFloat(m[1]));
+                if(mp.length>0) mpSource='stopLossStages';
+              }
+              // [اولویت ۲] fallback به movePercent مستقیم (پشتیبانی از هر دو فرم: کلید آبجکت یا تخصیص متغیر)
+              if(mp.length===0){
+                let mm=js.match(/movePercent\s*[:=]\s*\[(.*?)\]/s);
+                if(mm){let n=mm[1].match(/[\d.]+/g);if(n){mp=n.map(Number);mpSource='movePercent_direct';}}
+              }
+              // stop_loss_initial اجباری است — بدون مقدار پیش‌فرض (هر دو فرم: کلید آبجکت یا تخصیص متغیر)
+              let sl=js.match(/stopLossInitial\s*[:=]\s*(-?[\d.]+)/);
+              if(!sl){
+                console.error('__NO_STOP_LOSS_INITIAL__');
+                process.exit(1);
+              }
+              let stop=parseFloat(sl[1]);
+              let max=mp.length?mp[mp.length-1]:null;
+              console.error('منبع move_percents: ' + mpSource);
+              console.error('move_percents استخراج‌شده (' + mp.length + ' عنصر): ' + JSON.stringify(mp));
+              console.error('stop_loss_initial از .js خوانده شد: ' + stop);
+              console.log(JSON.stringify({move_percents:mp,stop_loss_initial:stop,max_move_percent:max}));
+            " 2>/tmp/prep/js_meta.log)
+            JS_META_EXIT=$?
+
+            if [ $JS_META_EXIT -ne 0 ]; then
+              if grep -q "__NO_STOP_LOSS_INITIAL__" /tmp/prep/js_meta.log 2>/dev/null; then
+                echo "❌ stopLossInitial در فایل $JS_FILE_REMOTE یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود."
+                echo "❌ pipeline باید fail شود: stop_loss_initial اجباری است."
+                exit 1
+              fi
+              echo "⚠️ خطا در پردازش $JS_FILE_REMOTE: $(cat /tmp/prep/js_meta.log)"
+              META_CONTENT=""
             else
-              echo "$JS_CONTENT" > /tmp/prep/strat.js
-              META_CONTENT=$(node -e "
-                const fs=require('fs');
-                const js=fs.readFileSync('/tmp/prep/strat.js','utf8');
-                // [اولویت ۳] استخراج move_percents از stopLossStages
-                let mp=[];
-                const sm=js.match(/stopLossStages\s*:\s*\[([\s\S]*?)\]/);
-                if(sm){for(const m of sm[1].matchAll(/movePercent\s*:\s*([\d.]+)/g))mp.push(parseFloat(m[1]));}
-                // fallback به movePercent مستقیم
-                if(mp.length===0){let mm=js.match(/movePercent\s*:\s*\[(.*?)\]/s);if(mm){let n=mm[1].match(/[\d.]+/g);if(n)mp=n.map(Number);}}
-                let sl=js.match(/stopLossInitial\s*:\s*([\d.-]+)/);
-                let stop=sl?parseFloat(sl[1]):-2.0;
-                let max=mp.length?mp[mp.length-1]:null;
-                console.log(JSON.stringify({move_percents:mp,stop_loss_initial:stop,max_move_percent:max}));
-              " 2>/dev/null || echo '{"move_percents":[],"stop_loss_initial":-2.0,"max_move_percent":null}')
+              cat /tmp/prep/js_meta.log >&2
+              META_SOURCE=".js"
             fi
           fi
+
+          # [اولویت ۲ - fallback] strategies/${STRAT}/1.json — فقط اگر .js یافت نشد یا قابل‌استفاده نبود
+          if [ -z "$META_CONTENT" ]; then
+            echo "ℹ️ فایل $JS_FILE_REMOTE یافت نشد یا قابل پردازش نبود → بازگشت به fallback (1.json)."
+            META_FILE_REMOTE="strategies/${STRAT}/1.json"
+            META_CONTENT=$(gh api "repos/$THIRD_REPO/contents/$META_FILE_REMOTE" \
+              -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
+
+            if [ -z "$META_CONTENT" ]; then
+              echo "❌ نه فایل $JS_FILE_REMOTE و نه فایل $META_FILE_REMOTE یافت نشد."
+              echo "❌ pipeline باید fail شود: هیچ منبع متادیتایی موجود نیست."
+              exit 1
+            fi
+
+            HAS_SL=$(echo "$META_CONTENT" | jq 'has("stop_loss_initial") and .stop_loss_initial != null')
+            if [ "$HAS_SL" != "true" ]; then
+              echo "❌ stop_loss_initial در فایل $META_FILE_REMOTE یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود."
+              echo "❌ pipeline باید fail شود: stop_loss_initial اجباری است."
+              exit 1
+            fi
+
+            META_SOURCE="1.json"
+            MOVE_PERCENTS_LEN=$(echo "$META_CONTENT" | jq '(.move_percents // []) | length')
+            SL_FROM_JSON=$(echo "$META_CONTENT" | jq '.stop_loss_initial')
+            echo "move_percents استخراج‌شده ($MOVE_PERCENTS_LEN عنصر) از $META_FILE_REMOTE"
+            echo "stop_loss_initial از 1.json خوانده شد: $SL_FROM_JSON"
+          fi
+
+          echo "✅ [متادیتا] منبع نهایی: $META_SOURCE"
 
           echo "$META_CONTENT" > /tmp/prep/meta.json
           node -e "
@@ -358,19 +415,28 @@ jobs:
             const trades=JSON.parse(fs.readFileSync('/tmp/prep/all_trades.json','utf8'));
             const meta=JSON.parse(fs.readFileSync('/tmp/prep/meta.json','utf8'));
             const tradeList=Array.isArray(trades)?trades:trades.trades;
+            if(meta.stop_loss_initial===undefined || meta.stop_loss_initial===null){
+              console.error('__NO_STOP_LOSS_INITIAL__');
+              process.exit(1);
+            }
             fs.writeFileSync('/tmp/prep/all_trades.json',JSON.stringify({
               trades:tradeList,
               metadata:{
                 move_percents:meta.move_percents||[],
-                stop_loss_initial:meta.stop_loss_initial||-2.0,
-                max_move_percent:meta.max_move_percent||null
+                stop_loss_initial:meta.stop_loss_initial,
+                max_move_percent:(meta.max_move_percent!==undefined?meta.max_move_percent:null)
               }
             }));
           " 2>/tmp/prep/inject_error.log
-          if [ $? -ne 0 ]; then
+          INJECT_EXIT=$?
+          if [ $INJECT_EXIT -ne 0 ]; then
+            if grep -q "__NO_STOP_LOSS_INITIAL__" /tmp/prep/inject_error.log 2>/dev/null; then
+              echo "❌ stop_loss_initial اجباری است و در متادیتای نهایی یافت نشد."
+              exit 1
+            fi
             echo "❌ خطا در inject metadata: $(cat /tmp/prep/inject_error.log)"; exit 1
           fi
-          echo "✅ فایل یکپارچه آماده شد."
+          echo "✅ فایل یکپارچه آماده شد (متادیتا از منبع: $META_SOURCE)."
 
       - name: 3. راه‌اندازی پایتون و نصب کتابخانه‌ها
         if: steps.prev_check.outputs.already_done != 'true'
