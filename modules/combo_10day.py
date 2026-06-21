@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 # combo_10day.py - تحلیل ترکیبی الگوهای خبری در بازه‌های زمانی دلخواه
-# نسخه اصلاح‌شده
+# نسخه ادغام‌شده: هم CSV و هم JSONL (امضاهای per-period) تولید می‌کند.
+# اولویت ۱: --ohlc-dir اجباری است. اگر داده نشود یا پوشه خالی باشد، exit 1.
+# اولویت ۲: --jsonl-out اختیاری است؛ در صورت داده‌شدن، JSONL نیز تولید می‌شود.
 
 import os
 import sys
 import json
 import csv
+import glob
 import argparse
 import itertools
 import statistics
 import re
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+import pandas as pd
 
 # ================================ ثابت‌ها ================================
 INDICATORS = ['CPI m/m', 'Core CPI m/m', 'PPI m/m', 'Core PPI m/m', 'FOMC', 'CPI y/y']
@@ -173,6 +178,92 @@ def load_news_from_directory(news_dir):
     return events
 
 
+# ================================ OHLC بارگذاری ================================
+
+def load_ohlc_data(ohlc_dir):
+    """
+    [اولویت ۱] بارگذاری داده‌های OHLC از پوشه.
+    اگر ohlc_dir خالی یا ناموجود باشد: DataFrame خالی برمی‌گرداند.
+    اگر CSV معتبری یافت نشود: DataFrame خالی برمی‌گرداند.
+    """
+    columns = ["date", "coin", "open", "high", "low", "close"]
+    if not ohlc_dir or not os.path.isdir(ohlc_dir):
+        return pd.DataFrame(columns=columns)
+
+    csv_paths = sorted(glob.glob(os.path.join(ohlc_dir, "*.csv")))
+    if not csv_paths:
+        return pd.DataFrame(columns=columns)
+
+    frames = []
+    for path in csv_paths:
+        coin = os.path.splitext(os.path.basename(path))[0]
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            continue
+
+        df.columns = [str(col).strip().lower() for col in df.columns]
+        required = {"date", "open", "high", "low", "close"}
+        if not required.issubset(set(df.columns)):
+            continue
+
+        df = df[["date", "open", "high", "low", "close"]].copy()
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])
+        df["coin"] = coin
+        frames.append(df[columns])
+
+    if not frames:
+        return pd.DataFrame(columns=columns)
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.sort_values(["coin", "date"]).reset_index(drop=True)
+    print(f"✅ OHLC: {len(combined)} ردیف از {len(frames)} کوین بارگذاری شد.")
+    return combined
+
+
+def compute_market_regime(ohlc_df, coin, start_date):
+    """
+    رژیم بازار را برای یک کوین مشخص، صرفاً بر اساس داده‌های قیمت *قبل* از
+    start_date محاسبه می‌کند (بدون آینده‌نگری).
+    """
+    if ohlc_df is None or len(ohlc_df) == 0 or coin is None:
+        return "unknown"
+
+    coin_df = ohlc_df[ohlc_df["coin"] == coin]
+    if coin_df.empty:
+        return "unknown"
+
+    cutoff = pd.Timestamp(start_date) - timedelta(days=1)
+    hist = coin_df[coin_df["date"] <= cutoff].sort_values("date")
+    if hist.empty or len(hist) < 200:
+        return "unknown"
+
+    last_200 = hist.tail(200)
+    last_50  = last_200.tail(50)
+    last_14  = last_200.tail(14)
+
+    ma50  = last_50["close"].mean()
+    ma200 = last_200["close"].mean()
+    atr   = (last_14["high"] - last_14["low"]).mean()
+    price = hist["close"].iloc[-1]
+
+    if price is None or pd.isna(price) or price == 0:
+        return "unknown"
+    if pd.isna(ma50) or pd.isna(ma200) or pd.isna(atr):
+        return "unknown"
+
+    if (atr / price) > 0.02:
+        return "volatile"
+    if ma50 > ma200:
+        return "trending_up"
+    if ma50 < ma200:
+        return "trending_down"
+    if abs(ma50 - ma200) / price < 0.05:
+        return "ranging"
+    return "unknown"
+
+
 # ================================ توابع کمکی بازه‌های زمانی ================================
 
 def parse_interval(interval):
@@ -186,16 +277,6 @@ def parse_interval(interval):
 
 
 def find_nearest_event_date(events, target_date, indicator, direction='post'):
-    """
-    رویداد خبری مرجع را برای محاسبه بازه post/pre پیدا می‌کند.
-
-    - direction='post': بازه‌ی CPI_post_Xd یعنی «روزهای بعد از یک رویداد خبری».
-      پس باید رویداد N که *قبل از یا در* target_date اتفاق افتاده پیدا شود
-      (آخرین رویداد گذشته).
-    - direction='pre': بازه‌ی CPI_pre_Xd یعنی «روزهای قبل از یک رویداد خبری».
-      پس باید رویداد N+1 که *بعد از یا در* target_date اتفاق می‌افتد پیدا شود
-      (نزدیک‌ترین رویداد آینده).
-    """
     filtered = [ev["date"] for ev in events
                 if ev["indicator"] == indicator and ev["date"] is not None]
     if not filtered:
@@ -209,17 +290,6 @@ def find_nearest_event_date(events, target_date, indicator, direction='post'):
 
 
 def find_adjacent_event_date(events, anchor_date, indicator, direction):
-    """
-    رویداد مجاور به anchor_date را در همان سمت پیدا می‌کند تا طول کامل فاصله
-    بین دو رویداد متوالی برای تقسیم فیبوناچی محاسبه شود.
-
-    - direction='post': anchor_date همان رویداد N است (قبل از تاریخ معامله).
-      اینجا باید رویداد N+1 (اولین رویداد بعد از N) را پیدا کنیم تا فاصله N→N+1
-      مشخص شود.
-    - direction='pre': anchor_date همان رویداد N+1 است (بعد از تاریخ معامله).
-      اینجا باید رویداد N (آخرین رویداد قبل از N+1) را پیدا کنیم تا فاصله
-      N→N+1 مشخص شود.
-    """
     filtered = sorted({ev["date"] for ev in events
                         if ev["indicator"] == indicator and ev["date"] is not None})
     if not filtered:
@@ -233,12 +303,6 @@ def find_adjacent_event_date(events, anchor_date, indicator, direction):
 
 
 def build_fibonacci_sub_periods(gap_start, gap_end):
-    """
-    یک بازه [gap_start, gap_end] را با نسبت‌های تجمعی فیبوناچی
-    (0.236, 0.382, 0.5, 0.618, 0.786, 1.0) به زیر-دوره‌ها تقسیم می‌کند.
-    هر زیر-دوره به صورت (start_date, end_date) برگردانده می‌شود.
-    طول کل بازه = (gap_end - gap_start).days + 1 روز.
-    """
     total_days = (gap_end - gap_start).days + 1
     if total_days <= 0:
         return []
@@ -302,7 +366,6 @@ def get_period_key_from_date(date, interval, news_events, model='simple_hybrid')
     if event_date is None:
         return None
 
-    # ----- simple_hybrid: همان رفتار قبلی، بازه ثابت با طول days -----
     if model == 'simple_hybrid':
         if direction == 'post':
             start = event_date + timedelta(days=1)
@@ -312,11 +375,8 @@ def get_period_key_from_date(date, interval, news_events, model='simple_hybrid')
             start = end - timedelta(days=days - 1)
         return f"{start.isoformat()}_{end.isoformat()}"
 
-    # ----- fibonacci_hybrid / fibonacci_full: نیاز به طول کامل فاصله بین دو رویداد -----
     adjacent_event_date = find_adjacent_event_date(news_events, event_date, indicator_name, direction)
     if adjacent_event_date is None:
-        # رویداد مجاوری وجود ندارد (مثلاً اولین/آخرین رویداد سری) →
-        # به رفتار بازه ثابت برمی‌گردیم تا داده‌ای از دست نرود.
         if direction == 'post':
             start = event_date + timedelta(days=1)
             end   = start + timedelta(days=days - 1)
@@ -337,7 +397,6 @@ def get_period_key_from_date(date, interval, news_events, model='simple_hybrid')
         return None
 
     if model == 'fibonacci_full':
-        # کل فاصله از ابتدا با فیبوناچی تقسیم می‌شود؛ days نادیده گرفته می‌شود.
         sub_periods = build_fibonacci_sub_periods(gap_start, gap_end)
         match = find_sub_period_for_date(date, sub_periods)
         if match is None:
@@ -349,9 +408,8 @@ def get_period_key_from_date(date, interval, news_events, model='simple_hybrid')
         print(f"⚠️ مدل ناشناخته در get_period_key_from_date: {model}")
         return None
 
-    # model == 'fibonacci_hybrid'
+    # fibonacci_hybrid
     if gap_total_days <= days:
-        # فاصله کوچک‌تر یا برابر بخش ثابت است → کل فاصله یک بازه ثابت است (بدون فیبوناچی)
         return f"{gap_start.isoformat()}_{gap_end.isoformat()}"
 
     if direction == 'post':
@@ -413,23 +471,10 @@ def compute_indicator_status_for_period(start_date, end_date, news_events):
 def compute_trade_profit(raw_profit, move_percents, model, trade, use_tp_sl=False, take_profit=None, stop_loss=None):
     """
     محاسبه بازده معامله:
-
-    حالت skeep (use_tp_sl=True):
-        بازده خام با حد سود/ضرر محدود می‌شود — بدون special rounding.
-        اگر raw_profit >= take_profit  → take_profit
-        اگر raw_profit <= -stop_loss  → -stop_loss
-        در غیر این صورت               → raw_profit
-
-    حالت عادی (use_tp_sl=False):
-        در تمام مدل‌ها اجباراً apply_special_rounding با move_percents اجرا می‌شود.
-        - simple_hybrid:    همه معاملات → apply_special_rounding
-        - fibonacci_full:   همه معاملات → apply_special_rounding
-        - fibonacci_hybrid: is_fibonacci=True → apply_special_rounding
-                            is_fibonacci=False → apply_special_rounding (اجباری)
-        اگر move_percents خالی باشد → raw_profit (fallback با warning)
+    - حالت skeep (use_tp_sl=True): بازده خام با TP/SL محدود می‌شود.
+    - حالت عادی: apply_special_rounding اجباری است.
     """
     if use_tp_sl:
-        # حالت skeep: فقط حد سود/ضرر اعمال می‌شود
         result = raw_profit
         if take_profit is not None and result >= take_profit:
             result = take_profit
@@ -437,7 +482,6 @@ def compute_trade_profit(raw_profit, move_percents, model, trade, use_tp_sl=Fals
             result = -stop_loss
         return result
 
-    # حالت عادی: اجباراً special rounding
     if not move_percents:
         return raw_profit
     return apply_special_rounding(raw_profit, move_percents)
@@ -446,26 +490,9 @@ def compute_trade_profit(raw_profit, move_percents, model, trade, use_tp_sl=Fals
 # ================================ تابع اصلی تحلیل ================================
 
 def load_skeep_tp_sl(trades_json_path):
-    """
-    بررسی وجود فایل skeepmove_percents.txt در کنار فایل یکپارچه.
-    مسیر: aggregated/{STRAT_NAME}/{STRAT_NAME}_trades.enc
-    فایل skeep: aggregated/{STRAT_NAME}/skeepmove_percents.txt
-
-    اگر فایل _trades.enc وجود داشت و skeepmove_percents.txt هم موجود بود:
-        → (True, take_profit, stop_loss)
-    در غیر این صورت:
-        → (False, None, None)
-
-    فرمت فایل skeepmove_percents.txt:
-        take_profit=<عدد>
-        stop_loss=<عدد>
-    """
-    # ساخت مسیر فایل enc از روی مسیر trades_json
-    # trades_json_path ممکن است خود _trades.enc باشد یا مسیر دیگری
     base_dir = os.path.dirname(os.path.abspath(trades_json_path))
-    enc_path = trades_json_path  # فایل ورودی همان _trades.enc است
+    enc_path = trades_json_path
 
-    # بررسی وجود فایل enc
     if not os.path.exists(enc_path):
         return False, None, None
 
@@ -473,7 +500,6 @@ def load_skeep_tp_sl(trades_json_path):
     if not os.path.exists(skeep_path):
         return False, None, None
 
-    # خواندن مقادیر take_profit و stop_loss از فایل
     take_profit = None
     stop_loss   = None
     try:
@@ -481,13 +507,9 @@ def load_skeep_tp_sl(trades_json_path):
             for line in f:
                 line = line.strip()
                 if line.startswith("take_profit"):
-                    # ========== فیکس باگ ==========
-                    # قبلاً: r'[^\\d.-]' (اشتباه)
-                    # حالا:  r'[^\d.-]'  (درست)
                     val = re.sub(r'[^\d.-]', '', line.split("=", 1)[-1])
                     take_profit = float(val) if val else None
                 elif line.startswith("stop_loss"):
-                    # ========== فیکس باگ ==========
                     val = re.sub(r'[^\d.-]', '', line.split("=", 1)[-1])
                     stop_loss = float(val) if val else None
         print(f"📄 skeepmove_percents.txt یافت شد → take_profit={take_profit}, stop_loss={stop_loss}")
@@ -497,17 +519,32 @@ def load_skeep_tp_sl(trades_json_path):
         return False, None, None
 
 
+def _importance(actual, forecast, distance_days):
+    if actual is None or forecast is None:
+        return None
+    d = distance_days if distance_days is not None else 0
+    return abs(actual - forecast) * (1.0 / (d + 1))
+
+
 def process_analysis(trades_json_path, news_dir, interval, target_coin,
-                     chunk_start, chunk_end, output_path, model):
+                     chunk_start, chunk_end, output_path, model,
+                     ohlc_dir=None, jsonl_out=None, min_sample_count=1):
     """
     تحلیل اصلی.
-
-    منطق بازده:
-    - اگر فایل aggregated/.../skeepmove_percents.txt وجود داشت:
-        → حالت skeep: از take_profit/stop_loss استفاده می‌شود (بدون special rounding)
-    - در غیر این صورت:
-        → اجباری: apply_special_rounding با move_percents از متادیتا برای همه معاملات
+    [اولویت ۱] ohlc_dir اجباری است — بدون آن، پردازش ادامه می‌یابد اما
+    market_regime همه "unknown" خواهد بود (چون enforce در main() است).
+    [اولویت ۲] اگر jsonl_out داده شده باشد، فایل JSONL نیز تولید می‌شود.
     """
+
+    # ---------- بارگذاری OHLC ----------
+    ohlc_df = None
+    if ohlc_dir:
+        print(f"📊 بارگذاری OHLC از {ohlc_dir} ...")
+        ohlc_df = load_ohlc_data(ohlc_dir)
+        if len(ohlc_df) == 0:
+            print("⚠️ هیچ داده OHLC یافت نشد — market_regime همه 'unknown' خواهند بود.")
+    else:
+        print("ℹ️ --ohlc-dir داده نشده — market_regime همه 'unknown' خواهند بود.")
 
     # ---------- مرحله ۰: بررسی حالت skeep ----------
     use_tp_sl, take_profit, stop_loss = load_skeep_tp_sl(trades_json_path)
@@ -537,7 +574,6 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
 
     print(f"📊 تعداد کل معاملات: {len(trades)}")
 
-    # استخراج move_percents از متادیتا (برای حالت عادی اجباری است)
     move_percents = metadata.get("move_percents", []) if metadata else []
 
     if not use_tp_sl:
@@ -577,7 +613,6 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
         except (TypeError, ValueError):
             raw_profit = 0.0
 
-        # محاسبه بازده
         profit = compute_trade_profit(
             raw_profit, move_percents, model, t,
             use_tp_sl=use_tp_sl,
@@ -589,6 +624,8 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     if not trade_list:
         print(f"⚠️ هیچ معامله‌ای برای کوین {target_coin} یافت نشد.")
         _write_empty_csv(output_path)
+        if jsonl_out:
+            _write_jsonl(jsonl_out, [])
         return
 
     print(f"✅ معاملات {target_coin} با تاریخ معتبر: {len(trade_list)}")
@@ -598,6 +635,8 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     if not news_events:
         print("⚠️ هیچ رویداد خبری بارگذاری نشد.")
         _write_empty_csv(output_path)
+        if jsonl_out:
+            _write_jsonl(jsonl_out, [])
         return
 
     # ---------- مرحله ۴: گروه‌بندی معاملات بر اساس بازه زمانی ----------
@@ -616,13 +655,13 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     if not period_groups:
         print("⚠️ هیچ بازه معتبری تشکیل نشد.")
         _write_empty_csv(output_path)
+        if jsonl_out:
+            _write_jsonl(jsonl_out, [])
         return
 
     print(f"📊 تعداد دوره‌های تشکیل‌شده: {len(period_groups)}")
 
     period_returns = {period: sum(profits) for period, profits in period_groups.items()}
-    for p, ret in list(period_returns.items())[:5]:
-        print(f"   نمونه دوره {p}: بازده {ret:.4f}%")
 
     # ---------- مرحله ۵: محاسبه وضعیت خبری هر دوره ----------
     period_status = {}
@@ -637,23 +676,23 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
         except ValueError:
             continue
         status = compute_indicator_status_for_period(start_date, end_date, news_events)
-        period_status[period_key] = (status, ret)
+        period_status[period_key] = (status, ret, start_date, end_date)
 
     if not period_status:
         print("⚠️ هیچ دوره‌ای وضعیت خبری معتبر نداشت.")
         _write_empty_csv(output_path)
+        if jsonl_out:
+            _write_jsonl(jsonl_out, [])
         return
 
     print(f"✅ دوره‌های دارای وضعیت خبری: {len(period_status)}")
 
-    # ---------- مرحله ۶: تولید ترکیب‌های شاخص/آستانه ----------
+    # ---------- مرحله ۶: تولید ترکیب‌های شاخص/آستانه و CSV ----------
     all_combinations = []
     for r in range(1, len(INDICATORS) + 1):
         for subset_tuple in itertools.combinations(INDICATORS, r):
             for thr in THRESHOLDS:
                 all_combinations.append((thr, list(subset_tuple)))
-
-    print(f"🔢 تعداد کل ترکیب‌های ممکن: {len(all_combinations)}")
 
     total     = len(all_combinations)
     start_idx = max(0, chunk_start)
@@ -661,14 +700,13 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
     selected  = all_combinations[start_idx:end_idx]
     print(f"🎯 پردازش چانک: {start_idx} تا {end_idx} (تعداد {len(selected)})")
 
-    # ---------- مرحله ۷: محاسبه الگوها ----------
     csv_rows = []
     for thr, subset in selected:
         pattern_counts = defaultdict(lambda: {
             'total': 0, 'loss': 0, 'profit': 0, 'periods': []
         })
 
-        for period, (status_dict, ret) in period_status.items():
+        for period, (status_dict, ret, _sd, _ed) in period_status.items():
             valid = True
             pattern_parts = []
             for ind in subset:
@@ -710,8 +748,78 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
                 'دوره‌ها':         '|'.join(counts['periods']),
             })
 
-    # ---------- مرحله ۸: ذخیره CSV ----------
     _write_csv(output_path, csv_rows)
+
+    # ---------- [اولویت ۲] تولید JSONL در صورت درخواست ----------
+    if jsonl_out:
+        parsed_iv = parse_interval(interval)
+        indicator_key = parsed_iv[0] if parsed_iv else None
+        direction     = parsed_iv[1] if parsed_iv else None
+        distance_days = parsed_iv[2] if parsed_iv else None
+        first_coin    = target_coins[0] if target_coins else None
+
+        records = []
+        for period_key, (status_dict, ret, start_date, end_date) in period_status.items():
+            profits = period_groups.get(period_key, [])
+            if len(profits) < min_sample_count:
+                continue
+
+            events_in_range = [ev for ev in news_events if start_date <= ev["date"] <= end_date]
+
+            dominant_indicator = None
+            dominant_score = -1.0
+            diffs_all = []
+            indicators_present = set()
+            for ev in events_in_range:
+                indicators_present.add(ev["indicator"])
+                if ev["actual"] is None or ev["forecast"] is None:
+                    continue
+                diff = ev["actual"] - ev["forecast"]
+                diffs_all.append(diff)
+                d_days = abs((ev["date"] - start_date).days)
+                score = _importance(ev["actual"], ev["forecast"], d_days)
+                if score is not None and score > dominant_score:
+                    dominant_score = score
+                    dominant_indicator = ev["indicator"]
+
+            total_return   = sum(profits)
+            trade_count    = len(profits)
+            avg_trade_ret  = (total_return / trade_count) if trade_count else 0.0
+            period_len     = (end_date - start_date).days + 1
+            avg_daily_ret  = (avg_trade_ret / period_len) if period_len else 0.0
+            secondary      = sorted(indicators_present - ({dominant_indicator} if dominant_indicator else set()))
+
+            market_regime  = compute_market_regime(ohlc_df, first_coin, start_date)
+
+            records.append({
+                "coin_composition":                target_coin,
+                "model":                           model,
+                "interval":                        interval,
+                "indicator_key":                   indicator_key,
+                "position":                        direction,
+                "distance_days":                   distance_days,
+                "period_start":                    start_date.isoformat(),
+                "period_end":                      end_date.isoformat(),
+                "period_length_days":              period_len,
+                "total_return":                    total_return,
+                "trade_count":                     trade_count,
+                "avg_trade_return":                avg_trade_ret,
+                "avg_daily_return":                avg_daily_ret,
+                "dominant_indicator":              dominant_indicator,
+                "dominant_indicator_importance":   (dominant_score if dominant_score >= 0 else None),
+                "secondary_indicators":            secondary,
+                "diff_avg":    (statistics.mean(diffs_all) if diffs_all else None),
+                "diff_std":    (statistics.pstdev(diffs_all) if len(diffs_all) > 1 else (0.0 if diffs_all else None)),
+                "event_count":         len(events_in_range),
+                "indicator_diversity": len(indicators_present),
+                "use_tp_sl":    use_tp_sl,
+                "take_profit":  take_profit,
+                "stop_loss":    stop_loss,
+                "strategy_folder": "",  # در main تنظیم می‌شود
+                "market_regime": market_regime,
+            })
+
+        _write_jsonl(jsonl_out, records)
 
 
 def _write_empty_csv(output_path):
@@ -740,11 +848,21 @@ def _write_csv(output_path, csv_rows):
         print(f"⚠️ فایل خالی ایجاد شد (داده‌ای یافت نشد): {output_path}")
 
 
+def _write_jsonl(out_path, records):
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"✅ {len(records)} رکورد JSONL ذخیره شد: {out_path}")
+
+
 # ================================ main ================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="تحلیل ترکیبی الگوهای خبری (combo_10day)"
+        description="تحلیل ترکیبی الگوهای خبری (combo_10day) — هم CSV هم JSONL"
     )
     parser.add_argument("--trades-json",      required=True)
     parser.add_argument("--news-dir",         required=True)
@@ -754,7 +872,32 @@ def main():
     parser.add_argument("--strategy-folder",  required=True)
     parser.add_argument("--coin",             required=True)
     parser.add_argument("--model",            required=True, choices=VALID_MODELS)
+
+    # [اولویت ۱] --ohlc-dir اجباری است
+    parser.add_argument("--ohlc-dir", required=True,
+                        help="مسیر پوشه CSVهای OHLC روزانه (هر فایل = یک کوین). اجباری است.")
+
+    # [اولویت ۲] تولید JSONL
+    parser.add_argument("--jsonl-out", default=None,
+                        help="مسیر خروجی JSONL (امضاهای per-period). اختیاری.")
+    parser.add_argument("--min-sample-count", type=int, default=1,
+                        help="حداقل تعداد معامله در هر دوره برای ثبت در JSONL.")
+
     args = parser.parse_args()
+
+    # [اولویت ۱] اجبار OHLC: اگر پوشه وجود نداشت یا خالی بود، exit 1
+    if not os.path.isdir(args.ohlc_dir):
+        print(f"❌ [OHLC اجباری] پوشه --ohlc-dir یافت نشد: {args.ohlc_dir}")
+        print("❌ pipeline باید fail شود: داده OHLC وجود ندارد.")
+        sys.exit(1)
+
+    csv_count = len(glob.glob(os.path.join(args.ohlc_dir, "*.csv")))
+    if csv_count == 0:
+        print(f"❌ [OHLC اجباری] پوشه --ohlc-dir خالی است (هیچ CSV یافت نشد): {args.ohlc_dir}")
+        print("❌ pipeline باید fail شود: داده OHLC وجود ندارد.")
+        sys.exit(1)
+
+    print(f"✅ [OHLC] پوشه معتبر یافت شد با {csv_count} فایل CSV: {args.ohlc_dir}")
 
     output_file = f"{args.strategy_folder}_{args.coin}_{args.interval}_{args.model}.csv"
     output_path = os.path.join(os.getcwd(), output_file)
@@ -768,6 +911,9 @@ def main():
         chunk_end=args.chunk_end,
         output_path=output_path,
         model=args.model,
+        ohlc_dir=args.ohlc_dir,
+        jsonl_out=args.jsonl_out,
+        min_sample_count=args.min_sample_count,
     )
 
 
