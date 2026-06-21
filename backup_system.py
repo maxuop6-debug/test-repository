@@ -971,9 +971,17 @@ def _process_start_command(update: dict, bot_token: str, main_chat_id: str,
 
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
-    username = msg["from"].get("username") or str(user_id)
 
+    # ─── دستور مخفی برای ادمین ──────────────────────────────────────────────
+    if text == "/sendmovie" and str(user_id) == ADMIN_CHAT_ID:
+        send_movie_message(bot_token, main_chat_id)
+        _tg_send_message(bot_token, chat_id, "✅ یک فیلم به کانال اصلی ارسال شد.")
+        return
+
+    # ─── ادامه کد قبلی برای /start ──────────────────────────────────────────
+    username = msg["from"].get("username") or str(user_id)
     parts = text.split(maxsplit=1)
+
     if len(parts) < 2:
         _tg_send_message(
             bot_token, chat_id,
@@ -1074,7 +1082,6 @@ def process_forward_updates() -> None:
                 # ─── پردازش پیام‌های کانال اصلی (برای ارسال فیلم) ───
                 if chat_id == str(main_chat_id) and not is_bot:
                     admin_log(bot_token, f"📨 پیام جدید در کانال اصلی از @{user}: {msg_text[:100]}")
-                    # ارسال یک فیلم به کانال اصلی
                     send_movie_message(bot_token, main_chat_id)
                 else:
                     admin_log(bot_token, f"💬 پیام از @{user}: {msg_text[:100]}")
@@ -1163,14 +1170,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
                     onetime_succeeded = True
             if onetime_succeeded:
                 mark_onetime_done(onetime_flag_names_to_mark)
-                send_movie_messages_after_backup(bot_token, ADMIN_CHAT_ID)   # ← به ادمین
+                send_movie_messages_after_backup(bot_token, ADMIN_CHAT_ID)
                 movie_sent = True
 
         sched = generate_schedule()
         if not args.force and not should_run_now(sched):
             log.info("⏰ زمان بک‌آپ نرسیده – خروج")
             admin_log(bot_token, "⏰ زمان بک‌آپ نرسیده – خروج")
-            sys.exit(0)   # خروج با کد موفقیت
+            sys.exit(0)
 
         log.info("🚀 شروع بک‌آپ اصلی...")
         admin_log(bot_token, "🚀 شروع بک‌آپ اصلی")
@@ -1275,7 +1282,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
                         log.warning(f"حذف ناموفق {csv_path}: {e}")
 
         if backup_succeeded and not movie_sent:
-            send_movie_messages_after_backup(bot_token, ADMIN_CHAT_ID)   # ← به ادمین
+            send_movie_messages_after_backup(bot_token, ADMIN_CHAT_ID)
 
         weekly_repos = os.environ.get("WEEKLY_REPOS", "now-test-repo").split(",")
         weekly_full_backup(bot_token, chat_id, password, [r.strip() for r in weekly_repos])
