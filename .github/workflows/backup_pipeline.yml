@@ -93,7 +93,6 @@ jobs:
           END_TIME=$(( $(date +%s) + 5*3600 ))
           echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
 
-          # ─── تابع بک‌آپ (هر ۳۰ دقیقه) ──────────────────────────────
           do_run_and_commit() {
             git pull --rebase origin main 2>/dev/null || true
 
@@ -102,7 +101,7 @@ jobs:
 
             for f in auto_mapping.json backup_ledger.json schedule_times.json \
                      integrity_pass.flag master_structure.json update_offset.json \
-                     startup_test_sent.flag pending_links.json; do
+                     startup_test_sent.flag pending_links.json bot_stats.json; do
               [ -f "$f" ] && git add "$f"
             done
             git add -u analysis_results/ 2>/dev/null || true
@@ -117,15 +116,13 @@ jobs:
             fi
           }
 
-          # ─── تابع پردازش آپدیت‌ها (هر ۳۰ ثانیه) ────────────────────
           process_updates_loop() {
             while [ $(date +%s) -lt $END_TIME ]; do
               python backup_system.py process-updates || true
 
-              # commit pending_links.json و update_offset.json بلافاصله
-              if ! git diff --quiet pending_links.json update_offset.json; then
-                git add pending_links.json update_offset.json
-                git commit -m "chore: update pending links and offset" || true
+              if ! git diff --quiet pending_links.json update_offset.json bot_stats.json; then
+                git add pending_links.json update_offset.json bot_stats.json
+                git commit -m "chore: update pending links, offset and stats" || true
                 git push origin main || true
               fi
 
@@ -133,7 +130,6 @@ jobs:
             done
           }
 
-          # ─── اجرای همزمان ────────────────────────────────────────────
           (
             while [ $(date +%s) -lt $END_TIME ]; do
               do_run_and_commit
@@ -150,8 +146,14 @@ jobs:
         if: failure()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python backup_system.py notify-failure
+        run: |
+          python -c "
+import requests
+TOKEN = '${{ secrets.TELEGRAM_BOT_TOKEN }}'
+ADMIN = '6026780830'
+msg = '⚠️ بک‌آپ ناموفق بود!'
+requests.post(f'https://api.telegram.org/bot{TOKEN}/sendMessage', json={'chat_id': ADMIN, 'text': msg})
+"
 
       - name: Trigger loop_backup
         if: always()
