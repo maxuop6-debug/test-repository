@@ -34,6 +34,7 @@ jobs:
       matrix_items: ${{ steps.fetch_batch.outputs.matrix_items }}
       empty: ${{ steps.fetch_batch.outputs.empty }}
       total_combos: ${{ steps.fetch_batch.outputs.total_combos }}
+      ohlc_ready: ${{ steps.ohlc_fetch.outputs.ohlc_ready }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -106,6 +107,90 @@ jobs:
           path: /tmp/chunks/
           retention-days: 1
 
+      # [تغییر ۳] بررسی interrupt.flag یک‌بار برای کل run، قبل از شروع هر چانکی.
+      # اگر پرچم وجود داشت، کل workflow با شکست خاتمه می‌یابد و هیچ چانکی اجرا نمی‌شود.
+      - name: بررسی interrupt.flag (یک‌بار برای کل run)
+        if: steps.fetch_batch.outputs.empty == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "🛑 interrupt.flag یافت شد — کل workflow متوقف می‌شود (قبل از شروع چانک‌ها)."
+            exit 1
+          fi
+          echo "✅ interrupt.flag یافت نشد — ادامه."
+
+      # [تغییر ۱] دانلود کامل داده‌های OHLC فقط یک‌بار اینجا، به‌جای یک‌بار در هر چانک.
+      # اگر این دانلود با خطا مواجه شود، کل workflow متوقف می‌شود تا داده ناقص به چانک‌ها نرسد.
+      - name: دانلود یک‌باره داده‌های OHLC (master copy)
+        if: steps.fetch_batch.outputs.empty == 'false'
+        id: ohlc_fetch
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          OHLC_REPO: ${{ secrets.OHLC_REPO }}
+        run: |
+          set -e
+          mkdir -p /tmp/ohlc_master
+
+          if [ -z "$OHLC_REPO" ]; then
+            echo "ℹ️ OHLC_REPO تنظیم نشده — صرف‌نظر از دانلود داده‌های قیمت."
+            echo "ohlc_ready=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          LIST_JSON=$(gh api "repos/$OHLC_REPO/contents/data/All_Coins_Combined")
+          if [ -z "$LIST_JSON" ] || ! echo "$LIST_JSON" | jq empty 2>/dev/null; then
+            echo "❌ دریافت لیست فایل‌های OHLC ناموفق بود — کل workflow متوقف می‌شود."
+            exit 1
+          fi
+
+          echo "$LIST_JSON" | jq -c '.[] | select(.name | endswith(".csv"))' > /tmp/ohlc_list.jsonl
+          CSV_COUNT=$(wc -l < /tmp/ohlc_list.jsonl)
+          if [ "$CSV_COUNT" -eq 0 ]; then
+            echo "ℹ️ هیچ فایل CSV یافت نشد — ادامه بدون داده‌های قیمت."
+            echo "ohlc_ready=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          FAIL=0
+          while IFS= read -r ITEM; do
+            FNAME=$(echo "$ITEM" | jq -r '.name')
+            FPATH=$(echo "$ITEM" | jq -r '.path')
+            CONTENT=$(gh api "repos/$OHLC_REPO/contents/$FPATH" -q '.content' 2>/tmp/ohlc_item_error.log || echo "")
+            if [ -z "$CONTENT" ]; then
+              echo "   ⚠️ دانلود $FNAME ناموفق بود."
+              FAIL=1
+              continue
+            fi
+            echo "$CONTENT" | tr -d '\n' | base64 -d > "/tmp/ohlc_master/$FNAME" 2>/tmp/ohlc_decode_error.log
+            if [ $? -ne 0 ] || [ ! -s "/tmp/ohlc_master/$FNAME" ]; then
+              echo "   ⚠️ دیکد $FNAME ناموفق بود."
+              FAIL=1
+              rm -f "/tmp/ohlc_master/$FNAME"
+            fi
+          done < /tmp/ohlc_list.jsonl
+
+          DOWNLOADED_COUNT=$(find /tmp/ohlc_master -name '*.csv' 2>/dev/null | wc -l)
+          if [ "$FAIL" -eq 1 ] || [ "$DOWNLOADED_COUNT" -eq 0 ]; then
+            echo "❌ دانلود OHLC ناقص بود ($DOWNLOADED_COUNT از $CSV_COUNT فایل) — کل workflow متوقف می‌شود."
+            exit 1
+          fi
+
+          echo "✅ تعداد $DOWNLOADED_COUNT فایل OHLC یک‌بار دانلود شد (برای همه چانک‌ها به اشتراک گذاشته می‌شود)."
+          echo "ohlc_ready=true" >> $GITHUB_OUTPUT
+
+      - name: آپلود OHLC master به‌عنوان یک artifact مشترک
+        if: steps.ohlc_fetch.outputs.ohlc_ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ohlc-master-${{ github.run_id }}
+          path: /tmp/ohlc_master/
+          retention-days: 1
+
   # ================================================================
   # batch: اجرای موازی روی چانک‌ها و تولید CSV + JSONL امضاها
   # ================================================================
@@ -163,22 +248,8 @@ jobs:
             echo "already_done=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: 1. بررسی interrupt.flag
-        if: steps.prev_check.outputs.already_done != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "🛑 interrupt.flag یافت شد — job با وضعیت interrupted خاتمه می‌یابد."
-            echo '{"status":"interrupted","chunk":${{ matrix.chunk_index }},"run_id":"${{ github.run_id }}"}' \
-              > /tmp/batch_status.json
-            exit 0
-          fi
-          echo "✅ interrupt.flag یافت نشد — ادامه پردازش."
+      # [تغییر ۳]: بررسی interrupt.flag حذف شد — این بررسی اکنون یک‌بار در generate-matrix
+      # برای کل run انجام می‌شود، نه به ازای هر چانک.
 
       - name: 2. دانلود فایل یکپارچه معاملات
         if: steps.prev_check.outputs.already_done != 'true'
@@ -317,59 +388,24 @@ jobs:
       - run: pip install pandas requests
         if: steps.prev_check.outputs.already_done != 'true'
 
-      - name: 3b. دانلود داده‌های قیمت OHLC از مخزن دوم (اختیاری)
+      # [تغییر ۱]: دانلود OHLC از مخزن دوم حذف شد — اکنون فقط یک‌بار در generate-matrix
+      # دانلود می‌شود و این مرحله صرفاً همان artifact مشترک را دریافت می‌کند (بدون هیچ تماس API جدید).
+      - name: 3b. دریافت OHLC مشترک از artifact (بدون دانلود مجدد)
+        if: steps.prev_check.outputs.already_done != 'true' && needs.generate-matrix.outputs.ohlc_ready == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ohlc-master-${{ github.run_id }}
+          path: /tmp/ohlc
+
+      - name: 3c. تنظیم متغیر OHLC_DIR در صورت وجود داده
         if: steps.prev_check.outputs.already_done != 'true'
-        id: ohlc_fetch
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          OHLC_REPO: ${{ secrets.OHLC_REPO }}
         run: |
-          set +e
-          if [ -z "$OHLC_REPO" ]; then
-            echo "ℹ️ OHLC_REPO تنظیم نشده — صرف‌نظر از دانلود داده‌های قیمت."
-            exit 0
+          if [ -d /tmp/ohlc ] && [ "$(find /tmp/ohlc -name '*.csv' 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "OHLC_DIR=/tmp/ohlc" >> $GITHUB_ENV
+            echo "✅ OHLC_DIR از artifact مشترک تنظیم شد."
+          else
+            echo "ℹ️ داده OHLC موجود نیست — ادامه بدون آن."
           fi
-
-          mkdir -p /tmp/ohlc
-          LIST_JSON=$(gh api "repos/$OHLC_REPO/contents/data/All_Coins_Combined" 2>/tmp/ohlc_list_error.log)
-          if [ -z "$LIST_JSON" ] || ! echo "$LIST_JSON" | jq empty 2>/dev/null; then
-            echo "⚠️ دریافت لیست فایل‌های OHLC ناموفق بود — ادامه بدون داده‌های قیمت."
-            echo "$(cat /tmp/ohlc_list_error.log)"
-            exit 0
-          fi
-
-          CSV_COUNT=$(echo "$LIST_JSON" | jq '[.[] | select(.name | endswith(".csv"))] | length')
-          if [ "$CSV_COUNT" -eq 0 ]; then
-            echo "⚠️ هیچ فایل CSV در data/All_Coins_Combined یافت نشد — ادامه بدون داده‌های قیمت."
-            exit 0
-          fi
-
-          DOWNLOAD_FAILED=0
-          echo "$LIST_JSON" | jq -c '.[] | select(.name | endswith(".csv"))' | while read -r ITEM; do
-            FNAME=$(echo "$ITEM" | jq -r '.name')
-            FPATH=$(echo "$ITEM" | jq -r '.path')
-            CONTENT=$(gh api "repos/$OHLC_REPO/contents/$FPATH" -q '.content' 2>/tmp/ohlc_item_error.log)
-            if [ -z "$CONTENT" ]; then
-              echo "   ⚠️ دانلود $FNAME ناموفق بود."
-              echo "1" >> /tmp/ohlc_fail_flag
-              continue
-            fi
-            echo "$CONTENT" | tr -d '\n' | base64 -d > "/tmp/ohlc/$FNAME" 2>/tmp/ohlc_decode_error.log
-            if [ $? -ne 0 ] || [ ! -s "/tmp/ohlc/$FNAME" ]; then
-              echo "   ⚠️ دیکد $FNAME ناموفق بود."
-              echo "1" >> /tmp/ohlc_fail_flag
-              rm -f "/tmp/ohlc/$FNAME"
-            fi
-          done
-
-          DOWNLOADED_COUNT=$(find /tmp/ohlc -name '*.csv' 2>/dev/null | wc -l)
-          if [ "$DOWNLOADED_COUNT" -eq 0 ]; then
-            echo "⚠️ هیچ فایل OHLC با موفقیت دانلود نشد — ادامه بدون داده‌های قیمت."
-            exit 0
-          fi
-
-          echo "✅ تعداد $DOWNLOADED_COUNT فایل OHLC دانلود شد."
-          echo "OHLC_DIR=/tmp/ohlc" >> $GITHUB_ENV
 
       - name: 4. اجرای ماژول تحلیلی و استخراج امضا
         if: steps.prev_check.outputs.already_done != 'true'
@@ -503,55 +539,105 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
-      - name: 5.5. آپلود signatures رمزنگاری‌شده به مخزن سوم (پایدار)
+      # [تغییر ۲، ۴، ۵]: آپلود دسته‌ای (یک tar.gz رمزنگاری‌شده به‌جای یک PUT برای هر فایل JSONL).
+      # شامل: validation قبل از آپلود، retry با فاصله زمانی، و تأیید سایز بعد از آپلود.
+      - name: 5.5. بسته‌بندی، رمزنگاری و آپلود یک‌جای signatures این چانک
         if: always()
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
+          CHUNK_IDX="${{ matrix.chunk_index }}"
           SIG_DIR="/tmp/results/signatures"
+          LOGFILE="/tmp/upload_error_chunk_${CHUNK_IDX}.log"
+          : > "$LOGFILE"
+
           if [ ! -d "$SIG_DIR" ] || [ "$(find "$SIG_DIR" -name '*.jsonl' | wc -l)" -eq 0 ]; then
             echo "ℹ️ هیچ فایل signature برای آپلود به مخزن سوم وجود ندارد."
             exit 0
           fi
-          UPLOADED=0
-          FAILED=0
-          find "$SIG_DIR" -name '*.jsonl' | while read -r SIG_FILE; do
-            # ساختار نسبی: signatures/module/strat/coin/interval_model.jsonl
-            REL="${SIG_FILE#$SIG_DIR/}"
-            DEST="analysis_results/signatures/${REL}.enc"
 
-            # رمزنگاری
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('$SIG_FILE');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=crypto.randomBytes(16);
-              const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
-              const enc=Buffer.concat([cipher.update(data),cipher.final()]);
-              fs.writeFileSync('${SIG_FILE}.enc',Buffer.concat([iv,enc]));
-            " 2>/dev/null || { echo "⚠️ رمزنگاری ناموفق: $REL"; FAILED=$((FAILED+1)); continue; }
+          # [تغییر ۵] validation: همه فایل‌های JSONL باید موجود و غیرخالی باشند
+          BAD=0
+          while IFS= read -r f; do
+            if [ ! -s "$f" ]; then
+              echo "Empty or missing JSONL: $f" >> "$LOGFILE"
+              BAD=1
+            fi
+          done < <(find "$SIG_DIR" -name '*.jsonl')
 
+          if [ "$BAD" -eq 1 ]; then
+            echo "❌ validation ناموفق — فایل‌های خام JSONL در artifact باقی می‌مانند (برای retry دستی)." >> "$LOGFILE"
+            cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
+            exit 0
+          fi
+
+          ARCHIVE="/tmp/signatures_chunk_${CHUNK_IDX}.tar.gz"
+          ENC="/tmp/signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+
+          if ! tar -czf "$ARCHIVE" -C /tmp/results signatures 2>>"$LOGFILE"; then
+            echo "❌ tar ناموفق بود — فایل‌های خام JSONL همچنان در artifact باقی هستند." >> "$LOGFILE"
+            cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
+            exit 0
+          fi
+
+          if ! node -e "
+            const crypto=require('crypto'),fs=require('fs');
+            const pass=process.env.RESULTS_PASSWORD;
+            const data=fs.readFileSync('$ARCHIVE');
+            const key=crypto.scryptSync(pass,'salt',32);
+            const iv=crypto.randomBytes(16);
+            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+            const enc=Buffer.concat([cipher.update(data),cipher.final()]);
+            fs.writeFileSync('$ENC',Buffer.concat([iv,enc]));
+          " 2>>"$LOGFILE"; then
+            echo "❌ رمزنگاری ناموفق بود — فایل‌های خام JSONL همچنان در artifact باقی هستند." >> "$LOGFILE"
+            cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
+            exit 0
+          fi
+
+          LOCAL_SIZE=$(stat -c%s "$ENC")
+          DEST="signature_archives/signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+
+          upload_once() {
             EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
             if [ -n "$EXISTING_SHA" ]; then
-              gh api "repos/$THIRD_REPO/contents/$DEST" \
-                -X PUT \
-                -F message="update signature $REL (chunk ${{ matrix.chunk_index }} run ${{ github.run_id }})" \
-                -F content="$(base64 -w0 < "${SIG_FILE}.enc")" \
-                -F sha="$EXISTING_SHA" \
-                -F branch="main" 2>/dev/null && UPLOADED=$((UPLOADED+1)) || FAILED=$((FAILED+1))
+              gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
+                -F message="signatures chunk ${CHUNK_IDX} (run ${{ github.run_id }})" \
+                -F content="$(base64 -w0 < "$ENC")" -F sha="$EXISTING_SHA" -F branch="main"
             else
-              gh api "repos/$THIRD_REPO/contents/$DEST" \
-                -X PUT \
-                -F message="upload signature $REL (chunk ${{ matrix.chunk_index }} run ${{ github.run_id }})" \
-                -F content="$(base64 -w0 < "${SIG_FILE}.enc")" \
-                -F branch="main" 2>/dev/null && UPLOADED=$((UPLOADED+1)) || FAILED=$((FAILED+1))
+              gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
+                -F message="signatures chunk ${CHUNK_IDX} (run ${{ github.run_id }})" \
+                -F content="$(base64 -w0 < "$ENC")" -F branch="main"
             fi
-            rm -f "${SIG_FILE}.enc"
+          }
+
+          # [تغییر ۵] بعد از آپلود، یک GET برای تأیید سایز فایل آپلودشده
+          verify_once() {
+            REMOTE_SIZE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.size' 2>/dev/null || echo 0)
+            [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]
+          }
+
+          # [تغییر ۲] retry mechanism: حداقل ۳ بار تلاش با فاصله زمانی
+          SUCCESS=0
+          for attempt in 1 2 3; do
+            if upload_once >>"$LOGFILE" 2>&1 && verify_once; then
+              SUCCESS=1
+              echo "✅ آپلود و تأیید موفق در تلاش $attempt (chunk ${CHUNK_IDX})."
+              break
+            fi
+            echo "⚠️ تلاش $attempt ناموفق بود یا سایز مطابقت نداشت — تلاش دوباره..." >> "$LOGFILE"
+            sleep $((attempt * 5))
           done
-          echo "✅ signatures آپلود‌شده: $UPLOADED  ناموفق: $FAILED"
+
+          if [ "$SUCCESS" -ne 1 ]; then
+            echo "❌ آپلود پس از ۳ تلاش ناموفق ماند (chunk ${CHUNK_IDX}). فایل‌های خام JSONL در artifact باقی می‌مانند." >> "$LOGFILE"
+            cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
+            # job را fail نمی‌کنیم تا بقیه چانک‌ها متوقف نشوند (تغییر ۴)
+          fi
+
+          rm -f "$ARCHIVE" "$ENC"
 
       - name: 6. ذخیره لیست ترکیبات موفق این قطعه در Cache
         if: always()
@@ -570,6 +656,15 @@ jobs:
           path: /tmp/chunk_cache/done_items.json
           retention-days: 1
           if-no-files-found: warn
+
+      # [تغییر ۴]: پاک‌سازی فایل‌های موقت بعد از اتمام job تا فضای دیسک پر نشود
+      - name: 7. پاک‌سازی فایل‌های موقت
+        if: always()
+        run: |
+          rm -rf /tmp/ohlc /tmp/prep /tmp/signatures /tmp/results \
+                 /tmp/signatures_chunk_*.tar.gz /tmp/signatures_chunk_*.tar.gz.enc \
+                 /tmp/chunk.json /tmp/done_items.json /tmp/failed_items.json
+          echo "✅ فایل‌های موقت پاک شدند."
 
   # ================================================================
   # cleanup: حذف دقیق ترکیبات موفق از all_combinations.json
@@ -712,17 +807,59 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
-        id: gen
+      - name: دانلود و استخراج یک‌باره همه archiveهای signature
+        id: extract
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          mkdir -p /tmp/golden_chunks
+          mkdir -p /tmp/all_signatures
           TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
 
-          SIG_FILES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path] | unique')
+          ARCHIVES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("signature_archives/")) | select(.path | endswith(".tar.gz.enc")) | .path] | unique')
+          ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
+          echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
+
+          # یک بار به ازای هر archive (نه هر فایل JSONL) دانلود می‌کنیم
+          echo "$ARCHIVES" | jq -r '.[]' | while read -r ARCH_PATH; do
+            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url')
+            [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ] && continue
+            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
+            [ -s "$ENC_FILE" ] || continue
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ENC_FILE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('${ENC_FILE%.enc}',dec);
+            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures
+            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
+          done
+
+          JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
+          echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCHIVE_COUNT archive."
+          echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
+
+      - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
+        if: steps.extract.outputs.jsonl_total != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-signatures-${{ github.run_id }}
+          path: /tmp/all_signatures/
+          retention-days: 1
+
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
+        id: gen
+        run: |
+          mkdir -p /tmp/golden_chunks
+          SIG_FILES=$(find /tmp/all_signatures -name '*.jsonl' | sed 's#^/tmp/all_signatures/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
           TOTAL=$(echo "$SIG_FILES" | jq 'length')
 
           if [ "$TOTAL" -eq 0 ]; then
@@ -738,7 +875,6 @@ jobs:
             CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           fi
 
-          # ذخیره تمام لیست امضاها در یک فایل queue
           echo "$SIG_FILES" > /tmp/golden_chunks/all_signatures.json
 
           INDICES="["
@@ -752,7 +888,7 @@ jobs:
           INDICES+="]"
           echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
           echo "empty=false" >> $GITHUB_OUTPUT
-          echo "✅ $TOTAL امضا در $CHUNK_COUNT چانک تقسیم شدند."
+          echo "✅ $TOTAL امضا (نسبی به /tmp/all_signatures) در $CHUNK_COUNT چانک تقسیم شدند."
 
       - name: آپلود چانک‌های golden
         if: steps.gen.outputs.empty == 'false'
@@ -817,61 +953,36 @@ jobs:
       - run: pip install pandas numpy scipy pyarrow
         if: steps.cache_check.outputs.cache-hit != 'true'
 
-      - name: 3. دانلود کل پوشه signatures از مخزن سوم
+      - name: دانلود artifact مشترک تمام signatureهای استخراج‌شده (بدون تماس API)
+        uses: actions/download-artifact@v4
+        with:
+          name: all-signatures-${{ github.run_id }}
+          path: /tmp/all_signatures
+
+      - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
         if: steps.cache_check.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/signatures
           CHUNK_INDEX=${{ matrix.chunk_index }}
           SIG_PATHS=$(jq -r '.[]' /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json)
 
-          # ساخت فایل filter برای این چانک
+          # ساخت فایل filter برای این چانک (بدون تغییر منطق فیلتر)
           jq -r '[.[] | {path: ., coin: (split("/")[-2]), sig: (split("/")[-1] | split(".")[0])}]' \
             /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json > /tmp/filter.json
 
-          FAILED=0
-          while IFS= read -r SIG_PATH; do
-            REL_PATH="${SIG_PATH#analysis_results/signatures/}"
-            LOCAL_DIR="/tmp/signatures/$(dirname "$REL_PATH")"
-            LOCAL_FILE="$LOCAL_DIR/$(basename "$REL_PATH" .enc)"
-            mkdir -p "$LOCAL_DIR"
-
-            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$SIG_PATH" | jq -r '.download_url')
-
-            if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
-              echo "⚠️ دریافت URL ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-              continue
+          COPIED=0
+          while IFS= read -r REL_PATH; do
+            SRC="/tmp/all_signatures/$REL_PATH"
+            DEST="/tmp/signatures/$REL_PATH"
+            mkdir -p "$(dirname "$DEST")"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "$DEST"
+              COPIED=$((COPIED+1))
             fi
-
-            curl -s -L -H "Authorization: token $GH_TOKEN" -o "${LOCAL_FILE}.enc" "$DL_URL"
-            if [ ! -s "${LOCAL_FILE}.enc" ]; then
-              echo "⚠️ دانلود ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-              continue
-            fi
-
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('${LOCAL_FILE}.enc');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('${LOCAL_FILE}',dec);
-            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || {
-              echo "⚠️ رمزگشایی ناموفق: $SIG_PATH"
-              FAILED=$((FAILED+1))
-            }
           done <<< "$SIG_PATHS"
 
           JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد فایل‌های JSONL: $JSONL_COUNT  (ناموفق: $FAILED)"
+          echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
 
       - name: 4. دریافت strategies_metadata.json از مخزن سوم
         if: steps.cache_check.outputs.cache-hit != 'true'
@@ -1017,17 +1128,58 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
-        id: gen
+      - name: دانلود و استخراج یک‌باره همه archiveهای signature
+        id: extract
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          mkdir -p /tmp/correlation_chunks
+          mkdir -p /tmp/all_signatures
           TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
 
-          SIG_FILES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path] | unique')
+          ARCHIVES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("signature_archives/")) | select(.path | endswith(".tar.gz.enc")) | .path] | unique')
+          ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
+          echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
+
+          echo "$ARCHIVES" | jq -r '.[]' | while read -r ARCH_PATH; do
+            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url')
+            [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ] && continue
+            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
+            [ -s "$ENC_FILE" ] || continue
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ENC_FILE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('${ENC_FILE%.enc}',dec);
+            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures
+            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
+          done
+
+          JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
+          echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCHIVE_COUNT archive."
+          echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
+
+      - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
+        if: steps.extract.outputs.jsonl_total != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-signatures-${{ github.run_id }}
+          path: /tmp/all_signatures/
+          retention-days: 1
+
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
+        id: gen
+        run: |
+          mkdir -p /tmp/correlation_chunks
+          SIG_FILES=$(find /tmp/all_signatures -name '*.jsonl' | sed 's#^/tmp/all_signatures/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
           TOTAL=$(echo "$SIG_FILES" | jq 'length')
 
           if [ "$TOTAL" -eq 0 ]; then
@@ -1118,12 +1270,14 @@ jobs:
       - run: pip install pandas numpy scipy pyarrow
         if: steps.cache_check.outputs.cache-hit != 'true'
 
-      - name: 3. دانلود امضاهای این چانک از مخزن سوم
+      - name: دانلود artifact مشترک تمام signatureهای استخراج‌شده (بدون تماس API)
+        uses: actions/download-artifact@v4
+        with:
+          name: all-signatures-${{ github.run_id }}
+          path: /tmp/all_signatures
+
+      - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
         if: steps.cache_check.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/signatures
           CHUNK_INDEX=${{ matrix.chunk_index }}
@@ -1132,36 +1286,19 @@ jobs:
           jq -r '[.[] | {path: ., coin: (split("/")[-2]), sig: (split("/")[-1] | split(".")[0])}]' \
             /tmp/correlation_chunks/chunk_${CHUNK_INDEX}.json > /tmp/filter.json
 
-          FAILED=0
-          while IFS= read -r SIG_PATH; do
-            REL_PATH="${SIG_PATH#analysis_results/signatures/}"
-            LOCAL_DIR="/tmp/signatures/$(dirname "$REL_PATH")"
-            LOCAL_FILE="$LOCAL_DIR/$(basename "$REL_PATH" .enc)"
-            mkdir -p "$LOCAL_DIR"
-
-            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$SIG_PATH" | jq -r '.download_url')
-
-            if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
-              FAILED=$((FAILED+1)); continue
+          COPIED=0
+          while IFS= read -r REL_PATH; do
+            SRC="/tmp/all_signatures/$REL_PATH"
+            DEST="/tmp/signatures/$REL_PATH"
+            mkdir -p "$(dirname "$DEST")"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "$DEST"
+              COPIED=$((COPIED+1))
             fi
-
-            curl -s -L -H "Authorization: token $GH_TOKEN" -o "${LOCAL_FILE}.enc" "$DL_URL"
-            if [ ! -s "${LOCAL_FILE}.enc" ]; then
-              FAILED=$((FAILED+1)); continue
-            fi
-
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('${LOCAL_FILE}.enc');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('${LOCAL_FILE}',dec);
-            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || FAILED=$((FAILED+1))
           done <<< "$SIG_PATHS"
+
+          JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
+          echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
 
       - name: 4. دریافت news.pickle از مخزن سوم
         if: steps.cache_check.outputs.cache-hit != 'true'
@@ -1320,17 +1457,58 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
-        id: gen
+      - name: دانلود و استخراج یک‌باره همه archiveهای signature
+        id: extract
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          mkdir -p /tmp/portfolios_chunks
+          mkdir -p /tmp/all_signatures
           TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
 
-          SIG_FILES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("analysis_results/signatures/")) | select(.path | endswith(".jsonl.enc")) | .path] | unique')
+          ARCHIVES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("signature_archives/")) | select(.path | endswith(".tar.gz.enc")) | .path] | unique')
+          ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
+          echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
+
+          echo "$ARCHIVES" | jq -r '.[]' | while read -r ARCH_PATH; do
+            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url')
+            [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ] && continue
+            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
+            [ -s "$ENC_FILE" ] || continue
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ENC_FILE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('${ENC_FILE%.enc}',dec);
+            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures
+            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
+          done
+
+          JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
+          echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCHIVE_COUNT archive."
+          echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
+
+      - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
+        if: steps.extract.outputs.jsonl_total != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-signatures-${{ github.run_id }}
+          path: /tmp/all_signatures/
+          retention-days: 1
+
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰تایی
+        id: gen
+        run: |
+          mkdir -p /tmp/portfolios_chunks
+          SIG_FILES=$(find /tmp/all_signatures -name '*.jsonl' | sed 's#^/tmp/all_signatures/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
           TOTAL=$(echo "$SIG_FILES" | jq 'length')
 
           if [ "$TOTAL" -eq 0 ]; then
@@ -1421,12 +1599,14 @@ jobs:
       - run: pip install pandas numpy scipy pyarrow
         if: steps.cache_check.outputs.cache-hit != 'true'
 
-      - name: 3. دانلود امضاهای این چانک از مخزن سوم
+      - name: دانلود artifact مشترک تمام signatureهای استخراج‌شده (بدون تماس API)
+        uses: actions/download-artifact@v4
+        with:
+          name: all-signatures-${{ github.run_id }}
+          path: /tmp/all_signatures
+
+      - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
         if: steps.cache_check.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/signatures
           CHUNK_INDEX=${{ matrix.chunk_index }}
@@ -1435,36 +1615,19 @@ jobs:
           jq -r '[.[] | {path: ., coin: (split("/")[-2]), sig: (split("/")[-1] | split(".")[0])}]' \
             /tmp/portfolios_chunks/chunk_${CHUNK_INDEX}.json > /tmp/filter.json
 
-          FAILED=0
-          while IFS= read -r SIG_PATH; do
-            REL_PATH="${SIG_PATH#analysis_results/signatures/}"
-            LOCAL_DIR="/tmp/signatures/$(dirname "$REL_PATH")"
-            LOCAL_FILE="$LOCAL_DIR/$(basename "$REL_PATH" .enc)"
-            mkdir -p "$LOCAL_DIR"
-
-            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$SIG_PATH" | jq -r '.download_url')
-
-            if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
-              FAILED=$((FAILED+1)); continue
+          COPIED=0
+          while IFS= read -r REL_PATH; do
+            SRC="/tmp/all_signatures/$REL_PATH"
+            DEST="/tmp/signatures/$REL_PATH"
+            mkdir -p "$(dirname "$DEST")"
+            if [ -f "$SRC" ]; then
+              cp "$SRC" "$DEST"
+              COPIED=$((COPIED+1))
             fi
-
-            curl -s -L -H "Authorization: token $GH_TOKEN" -o "${LOCAL_FILE}.enc" "$DL_URL"
-            if [ ! -s "${LOCAL_FILE}.enc" ]; then
-              FAILED=$((FAILED+1)); continue
-            fi
-
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('${LOCAL_FILE}.enc');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('${LOCAL_FILE}',dec);
-            " 2>/dev/null && rm -f "${LOCAL_FILE}.enc" || FAILED=$((FAILED+1))
           done <<< "$SIG_PATHS"
+
+          JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
+          echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
 
       - name: 4. دانلود golden_scores.parquet از مخزن سوم
         if: steps.cache_check.outputs.cache-hit != 'true'
