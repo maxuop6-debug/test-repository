@@ -137,9 +137,8 @@ jobs:
           mkdir -p /tmp/ohlc_master
 
           if [ -z "$OHLC_REPO" ]; then
-            echo "ℹ️ OHLC_REPO تنظیم نشده — صرف‌نظر از دانلود داده‌های قیمت."
-            echo "ohlc_ready=false" >> $GITHUB_OUTPUT
-            exit 0
+            echo "❌ [OHLC اجباری] متغیر OHLC_REPO تنظیم نشده — کل workflow متوقف می‌شود."
+            exit 1
           fi
 
           echo "📦 شروع git clone کامل مخزن OHLC (depth=1, بدون هیچ filter) ..."
@@ -156,9 +155,8 @@ jobs:
 
           CSV_COUNT=$(find "$OHLC_PATH" -name '*.csv' | wc -l)
           if [ "$CSV_COUNT" -eq 0 ]; then
-            echo "ℹ️ هیچ فایل CSV یافت نشد — ادامه بدون داده‌های قیمت."
-            echo "ohlc_ready=false" >> $GITHUB_OUTPUT
-            exit 0
+            echo "❌ [OHLC اجباری] هیچ فایل CSV در data/All_Coins_Combined یافت نشد — کل workflow متوقف می‌شود."
+            exit 1
           fi
 
           # کپی همه CSV ها به مسیری که بقیه job‌ها انتظار دارند
@@ -340,9 +338,12 @@ jobs:
               META_CONTENT=$(node -e "
                 const fs=require('fs');
                 const js=fs.readFileSync('/tmp/prep/strat.js','utf8');
-                let mm=js.match(/movePercent\s*:\s*\[(.*?)\]/s);
+                // [اولویت ۳] استخراج move_percents از stopLossStages
                 let mp=[];
-                if(mm){let n=mm[1].match(/[\d.]+/g);if(n)mp=n.map(Number);}
+                const sm=js.match(/stopLossStages\s*:\s*\[([\s\S]*?)\]/);
+                if(sm){for(const m of sm[1].matchAll(/movePercent\s*:\s*([\d.]+)/g))mp.push(parseFloat(m[1]));}
+                // fallback به movePercent مستقیم
+                if(mp.length===0){let mm=js.match(/movePercent\s*:\s*\[(.*?)\]/s);if(mm){let n=mm[1].match(/[\d.]+/g);if(n)mp=n.map(Number);}}
                 let sl=js.match(/stopLossInitial\s*:\s*([\d.-]+)/);
                 let stop=sl?parseFloat(sl[1]):-2.0;
                 let max=mp.length?mp[mp.length-1]:null;
@@ -388,17 +389,18 @@ jobs:
           name: ohlc-master-${{ github.run_id }}
           path: /tmp/ohlc
 
-      - name: 3c. تنظیم متغیر OHLC_DIR در صورت وجود داده
+      - name: 3c. تنظیم متغیر OHLC_DIR — اجباری است
         if: steps.prev_check.outputs.already_done != 'true'
         run: |
           if [ -d /tmp/ohlc ] && [ "$(find /tmp/ohlc -name '*.csv' 2>/dev/null | wc -l)" -gt 0 ]; then
             echo "OHLC_DIR=/tmp/ohlc" >> $GITHUB_ENV
             echo "✅ OHLC_DIR از artifact مشترک تنظیم شد."
           else
-            echo "ℹ️ داده OHLC موجود نیست — ادامه بدون آن."
+            echo "❌ [OHLC اجباری] داده OHLC در artifact مشترک موجود نیست — این job fail می‌شود."
+            exit 1
           fi
 
-      - name: 4. اجرای ماژول تحلیلی و استخراج امضا
+      - name: 4. اجرای ماژول تحلیلی (CSV + JSONL یکجا)
         if: steps.prev_check.outputs.already_done != 'true'
         id: execute_batch
         run: |
@@ -422,11 +424,28 @@ jobs:
 
             echo "   📊 پردازش: $STRAT / $COIN / $INTERVAL / $MODEL"
 
-            # ============================================================
-            # ماژول deep پارامترهای متفاوتی دارد – فعلاً اسکیپ می‌شود
-            # ============================================================
             if [ "$MODULE" == "deep" ]; then
               echo "   ⚠️ ماژول deep پشتیبانی نمی‌شود – رد می‌شود."
+              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
+              continue
+            fi
+
+            # [اولویت ۲] مسیر JSONL خروجی برای combo_10day / combo_monthly
+            JSONL_OUT_ARG=""
+            if [[ "$MODULE" == "combo_10day" || "$MODULE" == "combo_monthly" ]]; then
+              SIG_OUT="/tmp/results/signatures/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.jsonl"
+              mkdir -p "$(dirname $SIG_OUT)"
+              JSONL_OUT_ARG="--jsonl-out $SIG_OUT --min-sample-count 5"
+            fi
+
+            # [اولویت ۱] --ohlc-dir اجباری برای combo ماژول‌ها
+            OHLC_ARG=""
+            if [ -n "$OHLC_DIR" ]; then
+              OHLC_ARG="--ohlc-dir $OHLC_DIR"
+            else
+              echo "   ❌ OHLC_DIR تنظیم نشده — این ترکیب fail می‌شود."
               jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
                 '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
                 /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
@@ -439,7 +458,9 @@ jobs:
               --strategy-folder $STRAT \
               --coin $COIN \
               --interval $INTERVAL \
-              --model $MODEL"
+              --model $MODEL \
+              $OHLC_ARG \
+              $JSONL_OUT_ARG"
             if [ -n "$CHUNK_START" ] && [ -n "$CHUNK_END" ]; then
               CMD="$CMD --chunk-start $CHUNK_START --chunk-end $CHUNK_END"
             fi
@@ -464,27 +485,6 @@ jobs:
               DEST_DIR="/tmp/results/${MODULE}/${STRAT}/${SAFE_COIN}"
               mkdir -p "$DEST_DIR"
               mv "$OUTPUT_FILE" "$DEST_DIR/${INTERVAL}_${MODEL}.csv"
-
-              if [[ "$MODULE" == "combo_10day" || "$MODULE" == "combo_monthly" ]]; then
-                EXTRACT_SCRIPT="modules/extract_signatures_10day.py"
-                [ "$MODULE" == "combo_monthly" ] && EXTRACT_SCRIPT="modules/extract_signatures_monthly.py"
-                SIG_OUT="/tmp/results/signatures/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.jsonl"
-                mkdir -p "$(dirname $SIG_OUT)"
-                EXTRACT_CMD="python $EXTRACT_SCRIPT \
-                  --trades-json /tmp/prep/all_trades.json \
-                  --news-dir data/news \
-                  --interval $INTERVAL \
-                  --strategy-folder $STRAT \
-                  --coin $COIN \
-                  --model $MODEL \
-                  --min-sample-count 5 \
-                  --out $SIG_OUT"
-                if [ -n "$OHLC_DIR" ]; then
-                  EXTRACT_CMD="$EXTRACT_CMD --ohlc-dir $OHLC_DIR"
-                fi
-                eval $EXTRACT_CMD 2>&1 | tee -a /tmp/item_output.log
-                [ $? -eq 0 ] && echo "      ✅ امضا استخراج شد." || echo "      ⚠️ استخراج امضا ناموفق بود (ادامه)."
-              fi
 
               jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
                 '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
@@ -521,11 +521,11 @@ jobs:
             echo "ℹ️ chunk ${{ matrix.chunk_index }} ناقص ($DONE_COUNT/$TOTAL) — پرچم ثبت نشد."
           fi
 
-      - name: 5. آپلود نتایج (CSV + signatures) به‌عنوان artifact
+      - name: 5. آپلود نتایج (CSV + JSONL signatures) به‌عنوان artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: batch-results-${{ github.run_id }}
+          name: batch-results-${{ github.run_id }}-${{ matrix.chunk_index }}
           path: /tmp/results/
           retention-days: 3
           if-no-files-found: warn
@@ -689,8 +689,13 @@ jobs:
       - name: ادغام لیست‌های done از artifact ها
         run: |
           mkdir -p /tmp/done_artifacts
-          find /tmp/done_artifacts_raw -name 'done_items.json' -print0 2>/dev/null \
-            | xargs -0 -I{} cp {} /tmp/done_artifacts/$(basename $(dirname {})).json 2>/dev/null || true
+          # [فیکس باگ xargs] به‌جای xargs که با مسیرهای حاوی فاصله مشکل دارد،
+          # از find با while read استفاده می‌شود.
+          find /tmp/done_artifacts_raw -name 'done_items.json' -print0 2>/dev/null | \
+            while IFS= read -r -d '' src; do
+              parent_dir=$(basename "$(dirname "$src")")
+              cp "$src" "/tmp/done_artifacts/${parent_dir}.json"
+            done || true
 
       - name: ادغام لیست‌های done و حذف دقیق از all_combinations.json
         env:
