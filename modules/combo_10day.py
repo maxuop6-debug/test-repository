@@ -244,7 +244,10 @@ def load_ohlc_data(ohlc_dir):
             continue
 
         df = df[["date", "open", "high", "low", "close"]].copy()
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        # [اصلاح تایم‌زون] بعد از تبدیل به datetime، تایم‌زون را حذف می‌کنیم تا
+        # مقایسه با Timestampهای naive در compute_market_regime با خطای
+        # "Invalid comparison between dtype=datetime64[ns, UTC] and Timestamp" مواجه نشود.
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.tz_localize(None)
         df = df.dropna(subset=["date"])
         if df.empty:
             continue
@@ -316,6 +319,8 @@ def load_ohlc_data(ohlc_dir):
     combined = combined.sort_values(["coin", "date"]).reset_index(drop=True)
     print(f"✅ OHLC: {len(combined)} ردیف از {len(frames)} کوین "
           f"(ادغام‌شده از {len(csv_paths)} فایل) بارگذاری شد.")
+    tz_info = combined["date"].dt.tz if len(combined) > 0 else None
+    print(f"🕒 [تایم‌زون] ستون date تایم‌زون‌زدایی شد (tz_localize(None)) → tz فعلی: {tz_info}")
     return combined
 
 
