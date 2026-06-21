@@ -209,14 +209,24 @@ def main():
         print("❌ خطا در آپلود all_combinations.json")
         sys.exit(1)
 
-    # ========== 7. ایجاد completed_strategies.json در صورت عدم وجود ==========
-    if not completed_content:
-        print("📤 ایجاد completed_strategies.json (خالی)...")
-        tmp_completed = "/tmp/completed_strategies.json"
-        with open(tmp_completed, "w") as f:
-            json.dump([], f)
-        sha_completed = get_file_sha(third_repo, "completed_strategies.json")
-        upload_file_with_curl(third_repo, "completed_strategies.json", tmp_completed, sha_completed)
+    # ========== 7. آپدیت completed_strategies.json با استراتژی‌های تازه‌پردازش‌شده ==========
+    # نکته مهم: این کار باید همین‌جا و بلافاصله بعد از آپلود موفق all_combinations.json
+    # انجام شود، چون یک اسکریپت دیگر ترکیب‌ها را یکی‌یکی از all_combinations.json حذف می‌کند.
+    # یعنی نمی‌توان بر اساس وجود/عدم‌وجود یک ترکیب در آن فایل تشخیص داد که استراتژی قبلاً
+    # پردازش شده یا نه. تنها معیار قابل‌اعتماد، ثبت اسم استراتژی در completed_strategies.json
+    # است، در همان لحظه‌ای که ترکیب‌هایش نوشته می‌شوند.
+    updated_completed = completed_strategies + strategies_to_process
+    print(f"📤 آپدیت completed_strategies.json با {len(strategies_to_process)} استراتژی جدید...")
+    tmp_completed = "/tmp/completed_strategies.json"
+    with open(tmp_completed, "w", encoding="utf-8") as f:
+        json.dump(updated_completed, f, indent=2, ensure_ascii=False)
+    sha_completed = get_file_sha(third_repo, "completed_strategies.json")
+    if upload_file_with_curl(third_repo, "completed_strategies.json", tmp_completed, sha_completed):
+        print("✅ completed_strategies.json با موفقیت آپدیت شد.")
+    else:
+        print("❌ خطا در آپدیت completed_strategies.json — توجه: all_combinations.json آپلود شد")
+        print("   ولی completed_strategies آپدیت نشد. در اجرای بعدی همین استراتژی‌ها دوباره پردازش می‌شوند.")
+        sys.exit(1)
 
     print("✅ عملیات ساخت و به‌روزرسانی صف با موفقیت پایان یافت.")
 
