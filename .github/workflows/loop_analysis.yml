@@ -312,51 +312,34 @@ jobs:
                 fi
                 echo "   ✅ ادغام نهایی کامل شد."
 
-                # ========== مرحله: ساخت یا بارگذاری متادیتا (1.json) با پرچم skip ==========
-                echo "   📥 بررسی متادیتا (1.json) برای $STRAT ..."
+                # ========== مرحله: ساخت یا بارگذاری متادیتا با اولویت .js سپس 1.json ==========
+                # [اولویت ۱] strategies/${STRAT}.js — همیشه ابتدا بررسی می‌شود.
+                # [اولویت ۲ - fallback] strategies/${STRAT}/1.json — فقط اگر .js وجود نداشت.
+                # stop_loss_initial اجباری است: اگر در هیچ‌کدام یافت نشد، pipeline با exit 1 متوقف می‌شود.
+                echo "   📥 بررسی متادیتا برای $STRAT (اولویت ۱: .js، اولویت ۲: 1.json)..."
                 METADATA_SUCCESS=false
+                META_SOURCE=""
                 META_FILE="/tmp/third_repo/strategies/${STRAT}/1.json"
                 META_DONE_FLAG="/tmp/third_repo/strategies/${STRAT}/.metadata_generated"
+                JS_FILE="/tmp/third_repo/strategies/${STRAT}.js"
+                STRAT_DIR="/tmp/third_repo/strategies/${STRAT}/"
+                mkdir -p "$STRAT_DIR"
 
-                if [ -f "$META_DONE_FLAG" ] && [ -f "$META_FILE" ]; then
-                  echo "   ⏭️ پرچم skip یافت شد → متادیتا قبلاً برای $STRAT ساخته شده. رد می‌شود."
-                  cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
-                  METADATA_SUCCESS=true
-                fi
-
-                if [ "$METADATA_SUCCESS" = false ] && [ -f "$META_FILE" ]; then
-                  echo "   ✅ فایل 1.json از مخزن محلی یافت شد."
-                  cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
-                  METADATA_SUCCESS=true
-                  touch "$META_DONE_FLAG"
-                  echo "   🏁 پرچم skip برای $STRAT ثبت شد."
-                fi
-
-                if [ "$METADATA_SUCCESS" = false ]; then
-                  echo "   ⚠️ فایل 1.json یافت نشد. در حال ساخت خودکار از روی فایل استراتژی..."
-                  STRAT_DIR="/tmp/third_repo/strategies/${STRAT}/"
-                  mkdir -p "$STRAT_DIR"
-                  JS_FILE="/tmp/third_repo/strategies/${STRAT}.js"
-                  if [ ! -f "$JS_FILE" ]; then
-                    echo "   ❌ فایل استراتژی ${STRAT}.js در مخزن سوم یافت نشد. این استراتژی رد می‌شود."
-                    rm -rf "/tmp/agg_${STRAT}"
-                    continue
-                  fi
-                  echo "   🔧 ساخت 1.json از روی ${JS_FILE}..."
+                if [ -f "$JS_FILE" ]; then
+                  echo "   🔧 [اولویت ۱] فایل ${JS_FILE} یافت شد → استخراج متادیتا از .js..."
+                  set +e
                   node -e "
                     const fs = require('fs');
                     const jsContent = fs.readFileSync('$JS_FILE', 'utf8');
 
                     // [مرحله ۱] جستجوی stopLossStages و استخراج movePercent از داخل آن
-                    // ساختار مورد انتظار:
-                    //   stopLossStages: [
-                    //     { movePercent: X, stopLoss: Y },
-                    //     ...
-                    //   ]
+                    // ساختار مورد انتظار (هم به‌صورت کلید آبجکت و هم تخصیص متغیر):
+                    //   stopLossStages: [ { movePercent: X, stopLossPercent: Y }, ... ]
+                    //   const stopLossStages = [ { movePercent: X, stopLossPercent: Y }, ... ];
                     let move_percents = [];
                     let source = 'none';
 
-                    const stagesMatch = jsContent.match(/stopLossStages\s*:\s*\[([\s\S]*?)\]/);
+                    const stagesMatch = jsContent.match(/stopLossStages\s*[:=]\s*\[([\s\S]*?)\]/);
                     if (stagesMatch) {
                       const stagesBody = stagesMatch[1];
                       const mpMatches = [...stagesBody.matchAll(/movePercent\s*:\s*([\d.]+)/g)];
@@ -367,8 +350,9 @@ jobs:
                     }
 
                     // [مرحله ۲] fallback: اگر stopLossStages یافت نشد یا movePercent نداشت
+                    // (پشتیبانی از هر دو فرم: کلید آبجکت یا تخصیص متغیر)
                     if (move_percents.length === 0) {
-                      const mmArr = jsContent.match(/movePercent\s*:\s*\[(.*?)\]/s);
+                      const mmArr = jsContent.match(/movePercent\s*[:=]\s*\[(.*?)\]/s);
                       if (mmArr) {
                         const numbers = mmArr[1].match(/[\d.]+/g);
                         if (numbers && numbers.length > 0) {
@@ -384,10 +368,16 @@ jobs:
                     }
 
                     console.log('منبع move_percents: ' + source);
-                    console.log('move_percents استخراج‌شده: ' + JSON.stringify(move_percents));
+                    console.log('move_percents استخراج‌شده (' + move_percents.length + ' عنصر): ' + JSON.stringify(move_percents));
 
-                    let slMatch = jsContent.match(/stopLossInitial\s*:\s*([\d.-]+)/);
-                    let stop_loss = slMatch ? parseFloat(slMatch[1]) : -2.0;
+                    // stop_loss_initial اجباری است — بدون مقدار پیش‌فرض (هر دو فرم: کلید آبجکت یا تخصیص متغیر)
+                    let slMatch = jsContent.match(/stopLossInitial\s*[:=]\s*(-?[\d.]+)/);
+                    if (!slMatch) {
+                      console.error('__NO_STOP_LOSS_INITIAL__');
+                      process.exit(1);
+                    }
+                    let stop_loss = parseFloat(slMatch[1]);
+                    console.log('stop_loss_initial از .js خوانده شد: ' + stop_loss);
                     let max_move = move_percents.length ? move_percents[move_percents.length-1] : null;
                     const meta = {
                       move_percents: move_percents,
@@ -396,21 +386,62 @@ jobs:
                     };
                     fs.writeFileSync('$META_FILE', JSON.stringify(meta, null, 2));
                   "
+                  JS_META_EXIT=$?
+                  set -e
+
+                  if [ $JS_META_EXIT -ne 0 ]; then
+                    echo "   ❌ stopLossInitial در فایل ${JS_FILE} یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود."
+                    echo "   ❌ pipeline باید fail شود: stop_loss_initial اجباری است."
+                    exit 1
+                  fi
+
                   if [ -s "$META_FILE" ]; then
-                    echo "   ✅ فایل 1.json با موفقیت ساخته شد."
+                    echo "   ✅ متادیتا با موفقیت از .js استخراج و در 1.json ذخیره شد."
                     cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
                     METADATA_SUCCESS=true
+                    META_SOURCE=".js"
                     touch "$META_DONE_FLAG"
-                    echo "   🏁 پرچم skip برای $STRAT ثبت شد."
                   else
-                    echo "   ❌ ساخت فایل 1.json ناموفق بود. این استراتژی رد می‌شود."
+                    echo "   ❌ ساخت فایل 1.json از .js ناموفق بود."
                     rm -rf "/tmp/agg_${STRAT}"
                     continue
                   fi
                 fi
 
+                # [اولویت ۲ - fallback] strategies/${STRAT}/1.json — فقط اگر .js وجود نداشت
+                if [ "$METADATA_SUCCESS" = false ]; then
+                  echo "   ℹ️ فایل ${JS_FILE} یافت نشد → بازگشت به fallback (1.json)."
+                  if [ -f "$META_FILE" ]; then
+                    HAS_SL=$(jq 'has("stop_loss_initial") and .stop_loss_initial != null' "$META_FILE")
+                    if [ "$HAS_SL" != "true" ]; then
+                      echo "   ❌ stop_loss_initial در فایل ${META_FILE} یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود."
+                      echo "   ❌ pipeline باید fail شود: stop_loss_initial اجباری است."
+                      exit 1
+                    fi
+                    echo "   ✅ فایل 1.json از مخزن محلی یافت شد."
+                    MOVE_PERCENTS_LEN=$(jq '(.move_percents // []) | length' "$META_FILE")
+                    SL_FROM_JSON=$(jq '.stop_loss_initial' "$META_FILE")
+                    echo "   move_percents استخراج‌شده ($MOVE_PERCENTS_LEN عنصر) از ${META_FILE}"
+                    echo "   stop_loss_initial از 1.json خوانده شد: $SL_FROM_JSON"
+                    cp "$META_FILE" "/tmp/agg_${STRAT}/1.json"
+                    METADATA_SUCCESS=true
+                    META_SOURCE="1.json"
+                    touch "$META_DONE_FLAG"
+                  else
+                    echo "   ❌ نه فایل ${JS_FILE} و نه فایل ${META_FILE} یافت نشد. این استراتژی رد می‌شود."
+                    echo "   ❌ pipeline باید fail شود: هیچ منبع متادیتایی موجود نیست."
+                    exit 1
+                  fi
+                fi
+
+                echo "   ✅ [متادیتا] منبع نهایی برای $STRAT: $META_SOURCE"
+
                 MOVE_PERCENTS=$(jq -c '.move_percents // []' "/tmp/agg_${STRAT}/1.json")
-                STOP_LOSS=$(jq '.stop_loss_initial // -2.0' "/tmp/agg_${STRAT}/1.json")
+                STOP_LOSS=$(jq '.stop_loss_initial' "/tmp/agg_${STRAT}/1.json")
+                if [ "$STOP_LOSS" = "null" ]; then
+                  echo "   ❌ stop_loss_initial اجباری است و در متادیتای نهایی یافت نشد."
+                  exit 1
+                fi
                 MAX_MOVE=$(jq '.max_move_percent // (if .move_percents then .move_percents[-1] else null end)' "/tmp/agg_${STRAT}/1.json")
 
                 jq -n \
