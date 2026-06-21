@@ -126,7 +126,7 @@ jobs:
 
       # [تغییر ۱] دانلود کامل داده‌های OHLC فقط یک‌بار اینجا، به‌جای یک‌بار در هر چانک.
       # اگر این دانلود با خطا مواجه شود، کل workflow متوقف می‌شود تا داده ناقص به چانک‌ها نرسد.
-      - name: دانلود یک‌باره داده‌های OHLC (master copy)
+      - name: دانلود یک‌باره داده‌های OHLC (master copy — git clone)
         if: steps.fetch_batch.outputs.empty == 'false'
         id: ohlc_fetch
         env:
@@ -142,45 +142,36 @@ jobs:
             exit 0
           fi
 
-          LIST_JSON=$(gh api "repos/$OHLC_REPO/contents/data/All_Coins_Combined")
-          if [ -z "$LIST_JSON" ] || ! echo "$LIST_JSON" | jq empty 2>/dev/null; then
-            echo "❌ دریافت لیست فایل‌های OHLC ناموفق بود — کل workflow متوقف می‌شود."
+          echo "📦 شروع git clone کامل مخزن OHLC (depth=1, بدون هیچ filter) ..."
+          git clone \
+            --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${OHLC_REPO}.git" \
+            /tmp/ohlc_clone
+
+          OHLC_PATH="/tmp/ohlc_clone/data/All_Coins_Combined"
+          if [ ! -d "$OHLC_PATH" ]; then
+            echo "❌ پوشه data/All_Coins_Combined در مخزن OHLC یافت نشد — کل workflow متوقف می‌شود."
             exit 1
           fi
 
-          echo "$LIST_JSON" | jq -c '.[] | select(.name | endswith(".csv"))' > /tmp/ohlc_list.jsonl
-          CSV_COUNT=$(wc -l < /tmp/ohlc_list.jsonl)
+          CSV_COUNT=$(find "$OHLC_PATH" -name '*.csv' | wc -l)
           if [ "$CSV_COUNT" -eq 0 ]; then
             echo "ℹ️ هیچ فایل CSV یافت نشد — ادامه بدون داده‌های قیمت."
             echo "ohlc_ready=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          FAIL=0
-          while IFS= read -r ITEM; do
-            FNAME=$(echo "$ITEM" | jq -r '.name')
-            FPATH=$(echo "$ITEM" | jq -r '.path')
-            CONTENT=$(gh api "repos/$OHLC_REPO/contents/$FPATH" -q '.content' 2>/tmp/ohlc_item_error.log || echo "")
-            if [ -z "$CONTENT" ]; then
-              echo "   ⚠️ دانلود $FNAME ناموفق بود."
-              FAIL=1
-              continue
-            fi
-            echo "$CONTENT" | tr -d '\n' | base64 -d > "/tmp/ohlc_master/$FNAME" 2>/tmp/ohlc_decode_error.log
-            if [ $? -ne 0 ] || [ ! -s "/tmp/ohlc_master/$FNAME" ]; then
-              echo "   ⚠️ دیکد $FNAME ناموفق بود."
-              FAIL=1
-              rm -f "/tmp/ohlc_master/$FNAME"
-            fi
-          done < /tmp/ohlc_list.jsonl
+          # کپی همه CSV ها به مسیری که بقیه job‌ها انتظار دارند
+          cp "$OHLC_PATH"/*.csv /tmp/ohlc_master/
+          rm -rf /tmp/ohlc_clone
 
-          DOWNLOADED_COUNT=$(find /tmp/ohlc_master -name '*.csv' 2>/dev/null | wc -l)
-          if [ "$FAIL" -eq 1 ] || [ "$DOWNLOADED_COUNT" -eq 0 ]; then
-            echo "❌ دانلود OHLC ناقص بود ($DOWNLOADED_COUNT از $CSV_COUNT فایل) — کل workflow متوقف می‌شود."
+          DOWNLOADED_COUNT=$(find /tmp/ohlc_master -name '*.csv' | wc -l)
+          if [ "$DOWNLOADED_COUNT" -ne "$CSV_COUNT" ]; then
+            echo "❌ کپی ناقص: $DOWNLOADED_COUNT از $CSV_COUNT فایل — کل workflow متوقف می‌شود."
             exit 1
           fi
 
-          echo "✅ تعداد $DOWNLOADED_COUNT فایل OHLC یک‌بار دانلود شد (برای همه چانک‌ها به اشتراک گذاشته می‌شود)."
+          echo "✅ تعداد $DOWNLOADED_COUNT فایل OHLC دانلود شد (برای همه چانک‌ها به اشتراک گذاشته می‌شود)."
           echo "ohlc_ready=true" >> $GITHUB_OUTPUT
 
       - name: آپلود OHLC master به‌عنوان یک artifact مشترک
