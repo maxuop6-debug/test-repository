@@ -370,13 +370,31 @@ jobs:
                     console.log('منبع move_percents: ' + source);
                     console.log('move_percents استخراج‌شده (' + move_percents.length + ' عنصر): ' + JSON.stringify(move_percents));
 
-                    // stop_loss_initial اجباری است — بدون مقدار پیش‌فرض (هر دو فرم: کلید آبجکت یا تخصیص متغیر)
+                    // stop_loss_initial اجباری است — بدون مقدار پیش‌فرض
+                    // [حالت ۱] فرم مستقیم: stopLossInitial: عدد  (هر دو فرم: کلید آبجکت یا تخصیص متغیر)
+                    // [حالت ۲ - fallback] فرم فرمولی: stopLoss: close * 0.995
+                    //   درصد استاپ‌لاس از روی ضریب حساب می‌شود: (1 - ضریب) * 100
+                    let stop_loss = null;
+                    let sl_source = 'none';
+
                     let slMatch = jsContent.match(/stopLossInitial\s*[:=]\s*(-?[\d.]+)/);
-                    if (!slMatch) {
+                    if (slMatch) {
+                      stop_loss = parseFloat(slMatch[1]);
+                      sl_source = 'stopLossInitial_direct';
+                    } else {
+                      const slFormulaMatch = jsContent.match(/stopLoss\s*:\s*close\s*\*\s*([\d.]+)/);
+                      if (slFormulaMatch) {
+                        const multiplier = parseFloat(slFormulaMatch[1]);
+                        stop_loss = parseFloat(((1 - multiplier) * 100).toFixed(6));
+                        sl_source = 'stopLoss_close_formula';
+                      }
+                    }
+
+                    if (stop_loss === null) {
                       console.error('__NO_STOP_LOSS_INITIAL__');
                       process.exit(1);
                     }
-                    let stop_loss = parseFloat(slMatch[1]);
+                    console.log('منبع stop_loss_initial: ' + sl_source);
                     console.log('stop_loss_initial از .js خوانده شد: ' + stop_loss);
                     let max_move = move_percents.length ? move_percents[move_percents.length-1] : null;
                     const meta = {
@@ -390,7 +408,7 @@ jobs:
                   set -e
 
                   if [ $JS_META_EXIT -ne 0 ]; then
-                    echo "   ❌ stopLossInitial در فایل ${JS_FILE} یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود."
+                    echo "   ❌ نه stopLossInitial و نه فرمول stopLoss: close * عدد در فایل ${JS_FILE} یافت نشد. هیچ مقدار پیش‌فرضی استفاده نمی‌شود."
                     echo "   ❌ pipeline باید fail شود: stop_loss_initial اجباری است."
                     exit 1
                   fi
