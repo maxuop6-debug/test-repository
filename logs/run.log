@@ -15,3 +15,6 @@ find: ‘backtest_results’: No such file or directory
 ✅ هیچ استراتژی جدیدی برای ترکیب‌سازی وجود ندارد.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 26
+🔄 فراخوانی analysis.yml (حالت fixed_batch)...
+https://github.com/Amir9287171/test-repository/actions/runs/27920179631
+✅ فراخوانی analysis.yml موفق بود (تلاش 1).
