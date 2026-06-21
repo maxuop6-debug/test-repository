@@ -147,13 +147,13 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
-          python -c "
+          python3 - <<EOF
 import requests
-TOKEN = '${{ secrets.TELEGRAM_BOT_TOKEN }}'
-ADMIN = '6026780830'
-msg = '⚠️ بک‌آپ ناموفق بود!'
-requests.post(f'https://api.telegram.org/bot{TOKEN}/sendMessage', json={'chat_id': ADMIN, 'text': msg})
-"
+TOKEN = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+ADMIN = "6026780830"
+msg = "⚠️ بک‌آپ ناموفق بود!"
+requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", json={"chat_id": ADMIN, "text": msg})
+EOF
 
       - name: Trigger loop_backup
         if: always()
