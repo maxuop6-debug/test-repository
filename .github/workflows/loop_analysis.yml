@@ -347,29 +347,44 @@ jobs:
                     const fs = require('fs');
                     const jsContent = fs.readFileSync('$JS_FILE', 'utf8');
 
-                    // [اولویت ۳] استخراج move_percents از stopLossStages (نه movePercent مستقیم)
+                    // [مرحله ۱] جستجوی stopLossStages و استخراج movePercent از داخل آن
                     // ساختار مورد انتظار:
                     //   stopLossStages: [
                     //     { movePercent: X, stopLoss: Y },
                     //     ...
                     //   ]
                     let move_percents = [];
+                    let source = 'none';
+
                     const stagesMatch = jsContent.match(/stopLossStages\s*:\s*\[([\s\S]*?)\]/);
                     if (stagesMatch) {
                       const stagesBody = stagesMatch[1];
-                      const mpMatches = stagesBody.matchAll(/movePercent\s*:\s*([\d.]+)/g);
-                      for (const m of mpMatches) {
-                        move_percents.push(parseFloat(m[1]));
+                      const mpMatches = [...stagesBody.matchAll(/movePercent\s*:\s*([\d.]+)/g)];
+                      if (mpMatches.length > 0) {
+                        move_percents = mpMatches.map(m => parseFloat(m[1]));
+                        source = 'stopLossStages';
                       }
                     }
-                    // fallback: اگر stopLossStages یافت نشد، از movePercent مستقیم استفاده می‌شود
+
+                    // [مرحله ۲] fallback: اگر stopLossStages یافت نشد یا movePercent نداشت
                     if (move_percents.length === 0) {
-                      let mm = jsContent.match(/movePercent\s*:\s*\[(.*?)\]/s);
-                      if (mm) {
-                        let numbers = mm[1].match(/[\d.]+/g);
-                        if (numbers) move_percents = numbers.map(Number);
+                      const mmArr = jsContent.match(/movePercent\s*:\s*\[(.*?)\]/s);
+                      if (mmArr) {
+                        const numbers = mmArr[1].match(/[\d.]+/g);
+                        if (numbers && numbers.length > 0) {
+                          move_percents = numbers.map(Number);
+                          source = 'movePercent_direct';
+                        }
                       }
                     }
+
+                    // [مرحله ۳] اگر هیچ‌کدام نبود
+                    if (move_percents.length === 0) {
+                      source = 'empty_fallback';
+                    }
+
+                    console.log('منبع move_percents: ' + source);
+                    console.log('move_percents استخراج‌شده: ' + JSON.stringify(move_percents));
 
                     let slMatch = jsContent.match(/stopLossInitial\s*:\s*([\d.-]+)/);
                     let stop_loss = slMatch ? parseFloat(slMatch[1]) : -2.0;
@@ -380,7 +395,6 @@ jobs:
                       max_move_percent: max_move
                     };
                     fs.writeFileSync('$META_FILE', JSON.stringify(meta, null, 2));
-                    console.log('move_percents استخراج‌شده:', JSON.stringify(move_percents));
                   "
                   if [ -s "$META_FILE" ]; then
                     echo "   ✅ فایل 1.json با موفقیت ساخته شد."
