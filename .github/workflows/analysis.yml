@@ -752,26 +752,19 @@ jobs:
           path: /tmp/done_artifacts_raw
           merge-multiple: false
 
-      - name: ادغام لیست‌های done از artifact ها
-        run: |
-          mkdir -p /tmp/done_artifacts
-          # [فیکس باگ xargs] به‌جای xargs که با مسیرهای حاوی فاصله مشکل دارد،
-          # از find با while read استفاده می‌شود.
-          find /tmp/done_artifacts_raw -name 'done_items.json' -print0 2>/dev/null | \
-            while IFS= read -r -d '' src; do
-              parent_dir=$(basename "$(dirname "$src")")
-              cp "$src" "/tmp/done_artifacts/${parent_dir}.json"
-            done || true
-
       - name: ادغام لیست‌های done و حذف دقیق از all_combinations.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           CURL="/usr/bin/curl"
-          # [تغییر ۳]: fallback برای done_items.json های خالی یا نامعتبر
-          find /tmp/done_artifacts -name 'done_items.json' -print0 \
-            | xargs -0 -I{} sh -c 'jq empty "{}" 2>/dev/null && cat "{}" || echo "[]"' \
+          # [فیکس]: فایل‌های done_items.json مستقیماً از done_artifacts_raw خوانده می‌شوند.
+          # مرحله کپی قبلی نام فایل‌ها را به نام دایرکتوری تغییر می‌داد،
+          # در نتیجه find با pattern 'done_items.json' هیچ‌چیزی پیدا نمی‌کرد.
+          find /tmp/done_artifacts_raw -name 'done_items.json' -print0 2>/dev/null \
+            | while IFS= read -r -d '' f; do
+                jq empty "$f" 2>/dev/null && cat "$f" || echo "[]"
+              done \
             | jq -s 'add // []' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
           [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
 
