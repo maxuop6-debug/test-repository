@@ -596,8 +596,10 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
-      # [تغییر ۲، ۴، ۵]: آپلود دسته‌ای (یک tar.gz رمزنگاری‌شده به‌جای یک PUT برای هر فایل JSONL).
-      # شامل: validation قبل از آپلود، retry با فاصله زمانی، و تأیید سایز بعد از آپلود.
+      # [اصلاح]: آپلود دسته‌ای — یک آرشیو رمزنگاری‌شده به‌ازای هر STRAT داخل این چانک
+      # (به‌جای یک آرشیو واحد برای کل چانک) تا تداخل نام‌گذاری بین استراتژی‌های مختلف رخ ندهد.
+      # شامل: validation قبل از آپلود، retry با فاصله زمانی، تأیید سایز بعد از آپلود،
+      # و fail واقعی job در صورت شکست نهایی آپلود.
       - name: 5.5. بسته‌بندی، رمزنگاری و آپلود یک‌جای signatures این چانک
         if: always()
         env:
@@ -609,13 +611,23 @@ jobs:
           SIG_DIR="/tmp/results/signatures"
           LOGFILE="/tmp/upload_error_chunk_${CHUNK_IDX}.log"
           : > "$LOGFILE"
+          OVERALL_FAIL=0
 
-          if [ ! -d "$SIG_DIR" ] || [ "$(find "$SIG_DIR" -name '*.jsonl' | wc -l)" -eq 0 ]; then
-            echo "ℹ️ هیچ فایل signature برای آپلود به مخزن سوم وجود ندارد."
+          echo "🔎 بررسی وجود فایل‌های JSONL در: $SIG_DIR"
+          if [ -d "$SIG_DIR" ]; then
+            echo "[DEBUG] محتوای $SIG_DIR (تا ۳ سطح):"
+            find "$SIG_DIR" -maxdepth 3 -mindepth 1 | sed 's/^/[DEBUG]   /'
+          fi
+
+          JSONL_TOTAL=$(find "$SIG_DIR" -name '*.jsonl' 2>/dev/null | wc -l)
+          echo "[DEBUG] تعداد کل فایل‌های JSONL یافت‌شده: $JSONL_TOTAL"
+
+          if [ ! -d "$SIG_DIR" ] || [ "$JSONL_TOTAL" -eq 0 ]; then
+            echo "ℹ️ هیچ فایل signature برای آپلود به مخزن سوم وجود ندارد (chunk ${CHUNK_IDX})."
             exit 0
           fi
 
-          # [تغییر ۵] validation: همه فایل‌های JSONL باید موجود و غیرخالی باشند
+          # [validation] همه فایل‌های JSONL باید موجود و غیرخالی باشند
           BAD=0
           while IFS= read -r f; do
             if [ ! -s "$f" ]; then
@@ -625,76 +637,116 @@ jobs:
           done < <(find "$SIG_DIR" -name '*.jsonl')
 
           if [ "$BAD" -eq 1 ]; then
-            echo "❌ validation ناموفق — فایل‌های خام JSONL در artifact باقی می‌مانند (برای retry دستی)." >> "$LOGFILE"
+            echo "❌ validation ناموفق — یک یا چند فایل JSONL خالی/خراب است (chunk ${CHUNK_IDX})." | tee -a "$LOGFILE"
+            cat "$LOGFILE"
             cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
-            exit 0
+            exit 1
           fi
 
-          ARCHIVE="/tmp/signatures_chunk_${CHUNK_IDX}.tar.gz"
-          ENC="/tmp/signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
-
-          if ! tar -czf "$ARCHIVE" -C /tmp/results signatures 2>>"$LOGFILE"; then
-            echo "❌ tar ناموفق بود — فایل‌های خام JSONL همچنان در artifact باقی هستند." >> "$LOGFILE"
+          # هر JSONL در مسیر signatures/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.jsonl قرار دارد.
+          # برای جلوگیری از تداخل نام‌گذاری بین استراتژی‌های مختلف داخل یک چانک،
+          # به‌ازای هر زیرپوشه‌ی MODULE/STRAT یک آرشیو مجزا می‌سازیم.
+          STRAT_DIRS=$(find "$SIG_DIR" -mindepth 2 -maxdepth 2 -type d | sort)
+          if [ -z "$STRAT_DIRS" ]; then
+            echo "❌ ساختار پوشه‌ی signatures غیرمنتظره است — هیچ زیرپوشه‌ی MODULE/STRAT یافت نشد." | tee -a "$LOGFILE"
             cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
-            exit 0
+            exit 1
           fi
 
-          if ! node -e "
-            const crypto=require('crypto'),fs=require('fs');
-            const pass=process.env.RESULTS_PASSWORD;
-            const data=fs.readFileSync('$ARCHIVE');
-            const key=crypto.scryptSync(pass,'salt',32);
-            const iv=crypto.randomBytes(16);
-            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
-            const enc=Buffer.concat([cipher.update(data),cipher.final()]);
-            fs.writeFileSync('$ENC',Buffer.concat([iv,enc]));
-          " 2>>"$LOGFILE"; then
-            echo "❌ رمزنگاری ناموفق بود — فایل‌های خام JSONL همچنان در artifact باقی هستند." >> "$LOGFILE"
-            cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
-            exit 0
-          fi
+          RUN_TS=$(date -u +%Y%m%dT%H%M%SZ)
 
-          LOCAL_SIZE=$(stat -c%s "$ENC")
-          DEST="signature_archives/signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+          while IFS= read -r STRAT_DIR; do
+            # STRAT_DIR چیزی مثل /tmp/results/signatures/combo_10day/MyStrategy است
+            MODULE_NAME=$(basename "$(dirname "$STRAT_DIR")")
+            STRAT_NAME_RAW=$(basename "$STRAT_DIR")
+            SAFE_STRAT=$(echo "$STRAT_NAME_RAW" | sed 's/[^a-zA-Z0-9._-]/_/g')
 
-          upload_once() {
-            EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
-            if [ -n "$EXISTING_SHA" ]; then
-              gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
-                -F message="signatures chunk ${CHUNK_IDX} (run ${{ github.run_id }})" \
-                -F content="$(base64 -w0 < "$ENC")" -F sha="$EXISTING_SHA" -F branch="main"
-            else
-              gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
-                -F message="signatures chunk ${CHUNK_IDX} (run ${{ github.run_id }})" \
-                -F content="$(base64 -w0 < "$ENC")" -F branch="main"
+            STRAT_JSONL_COUNT=$(find "$STRAT_DIR" -name '*.jsonl' | wc -l)
+            if [ "$STRAT_JSONL_COUNT" -eq 0 ]; then
+              echo "ℹ️ هیچ JSONL برای strategy=$STRAT_NAME_RAW (module=$MODULE_NAME) — رد می‌شود."
+              continue
             fi
-          }
 
-          # [تغییر ۵] بعد از آپلود، یک GET برای تأیید سایز فایل آپلودشده
-          verify_once() {
-            REMOTE_SIZE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.size' 2>/dev/null || echo 0)
-            [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]
-          }
+            ARCHIVE="/tmp/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}.tar.gz"
+            ENC="/tmp/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
 
-          # [تغییر ۲] retry mechanism: حداقل ۳ بار تلاش با فاصله زمانی
-          SUCCESS=0
-          for attempt in 1 2 3; do
-            if upload_once >>"$LOGFILE" 2>&1 && verify_once; then
-              SUCCESS=1
-              echo "✅ آپلود و تأیید موفق در تلاش $attempt (chunk ${CHUNK_IDX})."
-              break
+            echo "📦 بسته‌بندی $STRAT_JSONL_COUNT فایل JSONL برای strategy=$STRAT_NAME_RAW (module=$MODULE_NAME) ..."
+            if ! tar -czf "$ARCHIVE" -C /tmp/results signatures/${MODULE_NAME}/${STRAT_NAME_RAW} 2>>"$LOGFILE"; then
+              echo "❌ tar ناموفق بود برای strategy=$STRAT_NAME_RAW (chunk ${CHUNK_IDX})." | tee -a "$LOGFILE"
+              OVERALL_FAIL=1
+              continue
             fi
-            echo "⚠️ تلاش $attempt ناموفق بود یا سایز مطابقت نداشت — تلاش دوباره..." >> "$LOGFILE"
-            sleep $((attempt * 5))
-          done
 
-          if [ "$SUCCESS" -ne 1 ]; then
-            echo "❌ آپلود پس از ۳ تلاش ناموفق ماند (chunk ${CHUNK_IDX}). فایل‌های خام JSONL در artifact باقی می‌مانند." >> "$LOGFILE"
+            if ! node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ARCHIVE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=crypto.randomBytes(16);
+              const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+              const enc=Buffer.concat([cipher.update(data),cipher.final()]);
+              fs.writeFileSync('$ENC',Buffer.concat([iv,enc]));
+            " 2>>"$LOGFILE"; then
+              echo "❌ رمزنگاری ناموفق بود برای strategy=$STRAT_NAME_RAW (chunk ${CHUNK_IDX})." | tee -a "$LOGFILE"
+              OVERALL_FAIL=1
+              rm -f "$ARCHIVE"
+              continue
+            fi
+
+            LOCAL_SIZE=$(stat -c%s "$ENC")
+            DEST="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+
+            upload_once() {
+              EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
+              if [ -n "$EXISTING_SHA" ]; then
+                # [جلوگیری از overwrite] فایل با همین نام از قبل وجود دارد —
+                # به‌جای overwrite، با timestamp یکتا آپلود می‌کنیم.
+                echo "⚠️ فایل $DEST از قبل موجود است — برای جلوگیری از overwrite، نام با timestamp یکتا می‌شود." | tee -a "$LOGFILE"
+                DEST="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
+                gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
+                  -F message="signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} (run ${{ github.run_id }})" \
+                  -F content="$(base64 -w0 < "$ENC")" -F branch="main"
+              else
+                gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
+                  -F message="signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} (run ${{ github.run_id }})" \
+                  -F content="$(base64 -w0 < "$ENC")" -F branch="main"
+              fi
+            }
+
+            # بعد از آپلود، یک GET برای تأیید سایز فایل آپلودشده (روی مسیر نهایی DEST که ممکن است در upload_once تغییر کرده باشد)
+            verify_once() {
+              REMOTE_SIZE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.size' 2>/dev/null || echo 0)
+              [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]
+            }
+
+            # retry mechanism: حداقل ۳ بار تلاش با فاصله زمانی
+            SUCCESS=0
+            for attempt in 1 2 3; do
+              if upload_once >>"$LOGFILE" 2>&1 && verify_once; then
+                SUCCESS=1
+                echo "✅ آپلود و تأیید موفق در تلاش $attempt → $DEST (strategy=$STRAT_NAME_RAW, chunk ${CHUNK_IDX})."
+                break
+              fi
+              echo "⚠️ تلاش $attempt ناموفق بود یا سایز مطابقت نداشت (strategy=$STRAT_NAME_RAW) — تلاش دوباره..." >> "$LOGFILE"
+              sleep $((attempt * 5))
+            done
+
+            if [ "$SUCCESS" -ne 1 ]; then
+              echo "❌ آپلود پس از ۳ تلاش ناموفق ماند برای strategy=$STRAT_NAME_RAW (chunk ${CHUNK_IDX})." | tee -a "$LOGFILE"
+              OVERALL_FAIL=1
+            fi
+
+            rm -f "$ARCHIVE" "$ENC"
+          done <<< "$STRAT_DIRS"
+
+          if [ "$OVERALL_FAIL" -ne 0 ]; then
+            echo "❌ حداقل یک آپلود signature ناموفق ماند — جزئیات:"
+            cat "$LOGFILE"
             cp "$LOGFILE" /tmp/chunk_cache/ 2>/dev/null || true
-            # job را fail نمی‌کنیم تا بقیه چانک‌ها متوقف نشوند (تغییر ۴)
+            exit 1
           fi
 
-          rm -f "$ARCHIVE" "$ENC"
+          echo "✅ تمام آرشیوهای signature این چانک با موفقیت آپلود و تأیید شدند (chunk ${CHUNK_IDX})."
 
       - name: 6. ذخیره لیست ترکیبات موفق این قطعه در Cache
         if: always()
@@ -719,7 +771,7 @@ jobs:
         if: always()
         run: |
           rm -rf /tmp/ohlc /tmp/prep /tmp/signatures /tmp/results \
-                 /tmp/signatures_chunk_*.tar.gz /tmp/signatures_chunk_*.tar.gz.enc \
+                 /tmp/*_signatures_chunk_*.tar.gz /tmp/*_signatures_chunk_*.tar.gz.enc \
                  /tmp/chunk.json /tmp/done_items.json /tmp/failed_items.json
           echo "✅ فایل‌های موقت پاک شدند."
 
@@ -1054,14 +1106,15 @@ jobs:
             exit 1
           fi
 
-      # [تغییر ۲]: اضافه کردن --interrupt-flag و --signatures-filter
+      # [اصلاح]: حذف --signatures-filter چون این فلگ در golden.py تعریف نشده (باعث کرش argparse می‌شد).
+      # فیلتر کردن signature‌های مخصوص این چانک قبلاً در مرحله ۳ با کپی انتخابی به /tmp/signatures انجام شده،
+      # و golden.py با rglob تمام JSONL های زیر --signatures-dir را به‌درستی می‌خواند.
       - name: 5. اجرای golden.py برای این چانک
         if: steps.cache_check.outputs.cache-hit != 'true'
         run: |
           mkdir -p /tmp/golden_chunk_cache
           python modules/golden.py \
             --signatures-dir /tmp/signatures \
-            --signatures-filter /tmp/filter.json \
             --strategies-json /tmp/strategies_metadata.json \
             --output-dir /tmp/golden_chunk_cache \
             --interrupt-flag ${{ runner.temp }}/interrupt.flag \
