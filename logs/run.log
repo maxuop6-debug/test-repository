@@ -50,3 +50,14 @@ https://github.com/Amir9287171/test-repository/actions/runs/27956171172
 https://github.com/Amir9287171/test-repository/actions/runs/27956173169
 هیچ تغییری در لاگ وجود ندارد.
 🔍 بررسی پرچم‌های وقفه...
+==============================================
+   🔄 شروع یکپارچه‌سازی نتایج بک‌تست (با clone محلی)
+==============================================
+
+0- وضعیت منابع سیستم:
+/dev/root        72G   53G   20G  74% /
+Mem:            15Gi       1.3Gi       9.1Gi        41Mi       5.6Gi        14Gi
+
+1- دریافت لیست استراتژی‌ها از مخزن سوم (با اسکن محلی)...
+find: ‘backtest_results’: No such file or directory
+⚠️ هیچ استراتژی در backtest_results یافت نشد.
