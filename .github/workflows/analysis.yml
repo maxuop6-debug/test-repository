@@ -703,14 +703,21 @@ jobs:
                 # به‌جای overwrite، با timestamp یکتا آپلود می‌کنیم.
                 echo "⚠️ فایل $DEST از قبل موجود است — برای جلوگیری از overwrite، نام با timestamp یکتا می‌شود." | tee -a "$LOGFILE"
                 DEST="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
-                gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
-                  -F message="signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} (run ${{ github.run_id }})" \
-                  -F content="$(base64 -w0 < "$ENC")" -F branch="main"
-              else
-                gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
-                  -F message="signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} (run ${{ github.run_id }})" \
-                  -F content="$(base64 -w0 < "$ENC")" -F branch="main"
               fi
+              # [فیکس] به‌جای پاس دادن content به‌عنوان آرگومان shell (که موجب "Argument list too long" می‌شود)،
+              # payload کامل را در یک فایل JSON می‌سازیم و با --input به gh api می‌دهیم.
+              base64 -w0 "$ENC" > /tmp/enc_b64_${CHUNK_IDX}.txt
+              jq -n \
+                --arg msg "signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} (run ${{ github.run_id }})" \
+                --rawfile content /tmp/enc_b64_${CHUNK_IDX}.txt \
+                --arg branch "main" \
+                '{message: $msg, content: $content, branch: $branch}' \
+                > /tmp/payload_upload_${CHUNK_IDX}.json
+              gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
+                --input /tmp/payload_upload_${CHUNK_IDX}.json
+              local exit_code=$?
+              rm -f /tmp/enc_b64_${CHUNK_IDX}.txt /tmp/payload_upload_${CHUNK_IDX}.json
+              return $exit_code
             }
 
             # بعد از آپلود، یک GET برای تأیید سایز فایل آپلودشده (روی مسیر نهایی DEST که ممکن است در upload_once تغییر کرده باشد)
