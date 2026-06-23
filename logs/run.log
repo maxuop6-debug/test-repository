@@ -10012,3 +10012,6 @@ stop_loss_initial از .js خوانده شد: -0.5
 ✅ عملیات ساخت و به‌روزرسانی صف با موفقیت پایان یافت.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 13
+🔄 فراخوانی analysis.yml (حالت fixed_batch)...
+https://github.com/Amir9287171/test-repository/actions/runs/28051861189
+✅ فراخوانی analysis.yml موفق بود (تلاش 1).
