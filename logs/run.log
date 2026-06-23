@@ -1,3 +1,13 @@
 🔍 بررسی پرچم‌های وقفه...
 ⚠️ پرچم وقفه یافت شد! حذف می‌شود...
-{"content":null,"commit":{"sha":"d960909f35c715d3972f2104fc34073d802b35f2","node_id":"C_kwDOSzHo_9oAKGQ5NjA5MDlmMzVjNzE1ZDM5NzJmMjEwNGZjMzQwNzNkODAyYjM1ZjI","url":"https://api.github.com/repos/Amir9287171/now-test-repo/git/commits/d960909f35c715d3972f2104fc34073d802b35f2","html_url":"https://github.com/Amir9287171/now-test-repo/commit/d960909f35c715d3972f2104fc34073d802b35f2","author":{"name":"Amir9287171","email":"ad64356vv@gmail.com","date":"2026-06-23T12:31:48Z"},"committer":{"name":"Amir9287171","email":"ad64356vv@gmail.com","date":"2026-06-23T12:31:48Z"},"tree":{"sha":"51bfb36e12a3a4f29e0c7acca1dbb0bf3d7ebdf7","url":"https://api.github.com/repos/Amir9287171/now-test-repo/git/trees/51bfb36e12a3a4f29e0c7acca1dbb0bf3d7ebdf7"},"message":"clear interrupt","parents":[{"sha":"2fc02b8046d5479bb65f3ef7d281993dc72fa259","url":"https://api.github.com/repos/Amir9287171/now-test-repo/git/commits/2fc02b8046d5479bb65f3ef7d281993dc72fa259","html_url":"https://github.com/Amir9287171/now-test-repo/commit/2fc02b8046d5479bb65f3ef7d281993dc72fa259"}],"verification":{"verified":false,"reason":"unsigned","signature":null,"payload":null,"verified_at":null}}}
+{"content":null,"commit":{"sha":"d960909f35c715d3972f2104fc34073d802b35f2","node_id":"C_kwDOSzHo_9oAKGQ5NjA5MDlmMzVjNzE1ZDM5NzJmMjEwNGZjMzQwNzNkODAyYjM1ZjI","url":"https://api.github.com/repos/Amir9287171/now-test-repo/git/commits/d960909f35c715d3972f2104fc34073d802b35f2","html_url":"https://github.com/Amir9287171/now-test-repo/commit/d960909f35c715d3972f2104fc34073d802b35f2","author":{"name":"Amir9287171","email":"ad64356vv@gmail.com","date":"2026-06-23T12:31:48Z"},"committer":{"name":"Amir9287171","email":"ad64356vv@gmail.com","date":"2026-06-23T12:31:48Z"},"tree":{"sha":"51bfb36e12a3a4f29e0c7acca1dbb0bf3d7ebdf7","url":"https://api.github.com/repos/Amir9287171/now-test-repo/git/trees/51bfb36e12a3a4f29e0c7acca1dbb0bf3d7ebdf7"},"message":"clear interrupt","parents":[{"sha":"2fc02b8046d5479bb65f3ef7d281993dc72fa259","url":"https://api.github.com/repos/Amir9287171/now-test-repo/git/commits/2fc02b8046d5479bb65f3ef7d281993dc72fa259","html_url":"https://github.com/Amir9287171/now-test-repo/commit/2fc02b8046d5479bb65f3ef7d281993dc72fa259"}],"verification":{"verified":false,"reason":"unsigned","signature":null,"payload":null,"verified_at":null}}}==============================================
+   🔄 شروع یکپارچه‌سازی نتایج بک‌تست (با clone محلی)
+==============================================
+
+0- وضعیت منابع سیستم:
+/dev/root       145G   56G   89G  39% /
+Mem:            15Gi       900Mi        13Gi        42Mi       1.6Gi        14Gi
+
+1- دریافت لیست استراتژی‌ها از مخزن سوم (با اسکن محلی)...
+find: ‘backtest_results’: No such file or directory
+⚠️ هیچ استراتژی در backtest_results یافت نشد.
