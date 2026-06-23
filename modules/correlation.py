@@ -101,7 +101,12 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
 
     if signatures_filter and os.path.exists(signatures_filter):
         with open(signatures_filter, "r", encoding="utf-8") as f:
-            allowed_signatures = set(json.load(f))
+            _filter_data = json.load(f)
+        # filter.json ممکن است آرایه‌ای از dict (با کلید path) یا آرایه‌ای از string باشد
+        if _filter_data and isinstance(_filter_data[0], dict):
+            allowed_signatures = set(item["path"] for item in _filter_data)
+        else:
+            allowed_signatures = set(_filter_data)
         if "signature" in df.columns:
             before = len(df)
             df = df[df["signature"].isin(allowed_signatures)].copy()
