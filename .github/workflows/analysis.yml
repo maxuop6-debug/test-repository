@@ -67,7 +67,17 @@ jobs:
           fi
 
           TOTAL_COMBOS=$(jq length /tmp/all_combinations.json)
-          echo "[DEBUG] تعداد کل ترکیب‌ها: $TOTAL_COMBOS"
+          echo "[DEBUG] تعداد کل ترکیب‌ها (قبل از cap): $TOTAL_COMBOS"
+
+          # محدود کردن به حداکثر ۱۳۰۰۰ ترکیب در هر اجرا
+          MAX_COMBOS_PER_RUN=13000
+          if [ "$TOTAL_COMBOS" -gt "$MAX_COMBOS_PER_RUN" ]; then
+            echo "[DEBUG] تعداد ترکیب‌ها ($TOTAL_COMBOS) از سقف ($MAX_COMBOS_PER_RUN) بیشتر است — برش اعمال می‌شود."
+            jq ".[:$MAX_COMBOS_PER_RUN]" /tmp/all_combinations.json > /tmp/all_combinations_capped.json
+            mv /tmp/all_combinations_capped.json /tmp/all_combinations.json
+            TOTAL_COMBOS=$MAX_COMBOS_PER_RUN
+          fi
+          echo "[DEBUG] تعداد ترکیب‌های پردازش‌شونده این اجرا: $TOTAL_COMBOS"
           echo "total_combos=$TOTAL_COMBOS" >> $GITHUB_OUTPUT
 
           CHUNK_SIZE=500
@@ -705,15 +715,22 @@ jobs:
             fi
 
             LOCAL_SIZE=$(stat -c%s "$ENC")
-            DEST="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+            DEST_BASE="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+            # ذخیره DEST اولیه در فایل موقت تا بین تابع و حلقه retry قابل اشتراک باشد
+            echo "$DEST_BASE" > /tmp/current_dest_${CHUNK_IDX}.txt
 
             upload_once() {
+              # DEST را از فایل موقت می‌خوانیم تا تغییرات بین retry‌ها حفظ شود
+              local DEST
+              DEST=$(cat /tmp/current_dest_${CHUNK_IDX}.txt)
               EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
               if [ -n "$EXISTING_SHA" ]; then
                 # [جلوگیری از overwrite] فایل با همین نام از قبل وجود دارد —
                 # به‌جای overwrite، با timestamp یکتا آپلود می‌کنیم.
                 echo "⚠️ فایل $DEST از قبل موجود است — برای جلوگیری از overwrite، نام با timestamp یکتا می‌شود." | tee -a "$LOGFILE"
                 DEST="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
+                # DEST جدید را در فایل موقت ذخیره می‌کنیم تا retry‌های بعدی و verify_once از آن استفاده کنند
+                echo "$DEST" > /tmp/current_dest_${CHUNK_IDX}.txt
               fi
               # [فیکس] به‌جای پاس دادن content به‌عنوان آرگومان shell (که موجب "Argument list too long" می‌شود)،
               # payload کامل را در یک فایل JSON می‌سازیم و با --input به gh api می‌دهیم.
@@ -731,8 +748,11 @@ jobs:
               return $exit_code
             }
 
-            # بعد از آپلود، یک GET برای تأیید سایز فایل آپلودشده (روی مسیر نهایی DEST که ممکن است در upload_once تغییر کرده باشد)
+            # بعد از آپلود، یک GET برای تأیید سایز فایل آپلودشده
+            # DEST نهایی از فایل موقت خوانده می‌شود (همان مسیری که upload_once نوشته)
             verify_once() {
+              local DEST
+              DEST=$(cat /tmp/current_dest_${CHUNK_IDX}.txt)
               REMOTE_SIZE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.size' 2>/dev/null || echo 0)
               [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]
             }
@@ -741,13 +761,16 @@ jobs:
             SUCCESS=0
             for attempt in 1 2 3; do
               if upload_once >>"$LOGFILE" 2>&1 && verify_once; then
+                FINAL_DEST=$(cat /tmp/current_dest_${CHUNK_IDX}.txt)
                 SUCCESS=1
-                echo "✅ آپلود و تأیید موفق در تلاش $attempt → $DEST (strategy=$STRAT_NAME_RAW, chunk ${CHUNK_IDX})."
+                echo "✅ آپلود و تأیید موفق در تلاش $attempt → $FINAL_DEST (strategy=$STRAT_NAME_RAW, chunk ${CHUNK_IDX})."
                 break
               fi
-              echo "⚠️ تلاش $attempt ناموفق بود یا سایز مطابقت نداشت (strategy=$STRAT_NAME_RAW) — تلاش دوباره..." >> "$LOGFILE"
+              echo "⚠️ تلاش $attempt ناموفق بود یا سایز مطابقت نداشت (strategy=$STRAT_NAME_RAW) — تلاش دوباره..."
               sleep $((attempt * 5))
             done
+
+            rm -f /tmp/current_dest_${CHUNK_IDX}.txt
 
             if [ "$SUCCESS" -ne 1 ]; then
               echo "❌ آپلود پس از ۳ تلاش ناموفق ماند برای strategy=$STRAT_NAME_RAW (chunk ${CHUNK_IDX})." | tee -a "$LOGFILE"
