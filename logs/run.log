@@ -33,3 +33,20 @@ Mem:            15Gi       1.2Gi        13Gi        42Mi       1.6Gi        14Gi
 ✅ هیچ استراتژی جدیدی برای ترکیب‌سازی وجود ندارد.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 0
+🔍 بررسی پرچم وقفه...
+🔍 بررسی golden_status.json (برای ادامه از آخرین نقطه توقف)...
+   ℹ️ golden_status.json یافت نشد. اجرای golden از ابتدا آغاز می‌شود.
+📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای golden: 2
+🔄 فراخوانی analysis.yml برای golden...
+https://github.com/Amir9287171/test-repository/actions/runs/28061244743
+✅ فراخوانی golden موفق بود (تلاش 1).
+📊 تعداد استراتژی‌ها: قبل=2 بعد=5
+⚠️ استراتژی جدیدی حین اجرای golden یکپارچه شد. فعال‌سازی پرچم وقفه...
+{
+	"message": "API rate limit exceeded for user ID 223898777. If you reach out to GitHub Support for help, please include the request ID 7045:1A455D:17E516:5771CF:6A3B07D1 and timestamp 2026-06-23 22:25:21 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https:\/\/docs.github.com\/en\/site-policy\/github-terms\/github-terms-of-service)",
+	"documentation_url": "https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api#rate-limiting",
+	"status": "403"
+}
+gh: API rate limit exceeded for user ID 223898777. If you reach out to GitHub Support for help, please include the request ID 7045:1A455D:17E516:5771CF:6A3B07D1 and timestamp 2026-06-23 22:25:21 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) (HTTP 403)
+🔁 فراخوانی مجدد loop_analysis.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28061245700
