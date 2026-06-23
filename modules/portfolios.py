@@ -214,7 +214,12 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
 
     if signatures_filter is not None and Path(signatures_filter).exists():
         with open(signatures_filter, "r", encoding="utf-8") as f:
-            allowed_signatures = set(json.load(f))
+            _filter_data = json.load(f)
+        # filter.json ممکن است آرایه‌ای از dict (با کلید path) یا آرایه‌ای از string باشد
+        if _filter_data and isinstance(_filter_data[0], dict):
+            allowed_signatures = set(item["path"] for item in _filter_data)
+        else:
+            allowed_signatures = set(_filter_data)
         before = len(data)
         data = data[data["signature"].isin(allowed_signatures)].copy()
         log.info(
