@@ -577,6 +577,17 @@ jobs:
           [ -f /tmp/done_items.json ] && cp /tmp/done_items.json /tmp/chunk_cache/done_items.json || echo "[]" > /tmp/chunk_cache/done_items.json
           [ -f /tmp/failed_items.json ] && cp /tmp/failed_items.json /tmp/chunk_cache/failed_items.json || echo "[]" > /tmp/chunk_cache/failed_items.json
           [ -d /tmp/results ] && cp -r /tmp/results/. /tmp/chunk_cache/results/ || true
+
+          # [فیکس] حذف فایل‌های JSONL خالی که مربوط به ترکیبات fail‌شده هستند.
+          # این فایل‌ها توسط mkdir -p در حلقه پردازش ساخته می‌شوند اما اگر پایتون fail کند
+          # محتوایی درون آن‌ها نوشته نمی‌شود و validation در step 5.5 را fail می‌کنند.
+          EMPTY_BEFORE=$(find /tmp/chunk_cache/results -name '*.jsonl' -empty 2>/dev/null | wc -l)
+          find /tmp/chunk_cache/results -name '*.jsonl' -empty -delete 2>/dev/null || true
+          find /tmp/results -name '*.jsonl' -empty -delete 2>/dev/null || true
+          if [ "$EMPTY_BEFORE" -gt 0 ]; then
+            echo "ℹ️ $EMPTY_BEFORE فایل JSONL خالی حذف شد (مربوط به ترکیبات fail‌شده)."
+          fi
+
           DONE_COUNT=$(jq length /tmp/chunk_cache/done_items.json 2>/dev/null || echo 0)
           FAILED_COUNT=$(jq length /tmp/chunk_cache/failed_items.json 2>/dev/null || echo 0)
           TOTAL=$(jq length /tmp/chunk.json 2>/dev/null || echo 0)
