@@ -313,9 +313,6 @@ jobs:
                 echo "   ✅ ادغام نهایی کامل شد."
 
                 # ========== مرحله: ساخت یا بارگذاری متادیتا با اولویت .js سپس 1.json ==========
-                # [اولویت ۱] strategies/${STRAT}.js — همیشه ابتدا بررسی می‌شود.
-                # [اولویت ۲ - fallback] strategies/${STRAT}/1.json — فقط اگر .js وجود نداشت.
-                # stop_loss_initial اجباری است: اگر در هیچ‌کدام یافت نشد، pipeline با exit 1 متوقف می‌شود.
                 echo "   📥 بررسی متادیتا برای $STRAT (اولویت ۱: .js، اولویت ۲: 1.json)..."
                 METADATA_SUCCESS=false
                 META_SOURCE=""
@@ -332,10 +329,6 @@ jobs:
                     const fs = require('fs');
                     const jsContent = fs.readFileSync('$JS_FILE', 'utf8');
 
-                    // [مرحله ۱] جستجوی stopLossStages و استخراج movePercent از داخل آن
-                    // ساختار مورد انتظار (هم به‌صورت کلید آبجکت و هم تخصیص متغیر):
-                    //   stopLossStages: [ { movePercent: X, stopLossPercent: Y }, ... ]
-                    //   const stopLossStages = [ { movePercent: X, stopLossPercent: Y }, ... ];
                     let move_percents = [];
                     let source = 'none';
 
@@ -349,8 +342,6 @@ jobs:
                       }
                     }
 
-                    // [مرحله ۲] fallback: اگر stopLossStages یافت نشد یا movePercent نداشت
-                    // (پشتیبانی از هر دو فرم: کلید آبجکت یا تخصیص متغیر)
                     if (move_percents.length === 0) {
                       const mmArr = jsContent.match(/movePercent\s*[:=]\s*\[(.*?)\]/s);
                       if (mmArr) {
@@ -362,7 +353,6 @@ jobs:
                       }
                     }
 
-                    // [مرحله ۳] اگر هیچ‌کدام نبود
                     if (move_percents.length === 0) {
                       source = 'empty_fallback';
                     }
@@ -370,10 +360,6 @@ jobs:
                     console.log('منبع move_percents: ' + source);
                     console.log('move_percents استخراج‌شده (' + move_percents.length + ' عنصر): ' + JSON.stringify(move_percents));
 
-                    // stop_loss_initial اجباری است — بدون مقدار پیش‌فرض
-                    // [حالت ۱] فرم مستقیم: stopLossInitial: عدد  (هر دو فرم: کلید آبجکت یا تخصیص متغیر)
-                    // [حالت ۲ - fallback] فرم فرمولی: stopLoss: close * 0.995
-                    //   درصد استاپ‌لاس از روی ضریب حساب می‌شود: (1 - ضریب) * 100
                     let stop_loss = null;
                     let sl_source = 'none';
 
@@ -426,7 +412,6 @@ jobs:
                   fi
                 fi
 
-                # [اولویت ۲ - fallback] strategies/${STRAT}/1.json — فقط اگر .js وجود نداشت
                 if [ "$METADATA_SUCCESS" = false ]; then
                   echo "   ℹ️ فایل ${JS_FILE} یافت نشد → بازگشت به fallback (1.json)."
                   if [ -f "$META_FILE" ]; then
@@ -649,7 +634,6 @@ jobs:
           {
             echo "🔄 فراخوانی analysis.yml (حالت fixed_batch)..."
             for attempt in 1 2 3; do
-              # حذف پارامترهای اضافی - فقط analysis_module ارسال می‌شود
               if gh workflow run analysis.yml --ref main \
                 -f analysis_module="fixed_batch" 2>&1; then
                 echo "✅ فراخوانی analysis.yml موفق بود (تلاش $attempt)."
@@ -660,6 +644,11 @@ jobs:
               fi
             done
           } >> logs/run.log 2>&1
+      - name: فراخوانی مجدد loop_analysis.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
       - name: Save logs after job
         if: always()
         run: |
@@ -700,7 +689,7 @@ jobs:
             python scripts/build_golden_queue.py \
               --progress /tmp/dummy \
               --output-dir /tmp/dummy \
-              --batch-size 100 2>&1
+              --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
               echo "❌ build_golden_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
@@ -749,29 +738,17 @@ jobs:
               exit 0
             fi
 
-            echo "🔍 بررسی golden_status.json (برای ادامه از آخرین نقطه توقف)..."
-            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/golden_status.json" -i 2>/dev/null | head -n1 | cut -d' ' -f2)
-            if [ "$HTTP_CODE" = "200" ]; then
-              STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/golden_status.json" --jq '.content' | base64 -d)
-              echo "   📄 وضعیت فعلی golden: $STATUS_CONTENT"
-            else
-              echo "   ℹ️ golden_status.json یافت نشد. اجرای golden از ابتدا آغاز می‌شود."
+            # بررسی خالی بودن صف golden
+            EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json?t=$(date +%s)" \
+              -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
+            if [ "$EMPTY" = "true" ]; then
+              echo "ℹ️ صف golden خالی است. این ماژول کامل شده."
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
             fi
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          } >> logs/run.log 2>&1
 
-      - name: ثبت تعداد استراتژی‌های یکپارچه‌شده پیش از اجرا
-        if: steps.status_check.outputs.should_run == 'true'
-        id: strat_count
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
-            echo "count=$CURRENT_COUNT" >> $GITHUB_OUTPUT
-            echo "📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای golden: $CURRENT_COUNT"
+            echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
 
       - name: فراخوانی analysis.yml برای golden
@@ -794,36 +771,12 @@ jobs:
             done
           } >> logs/run.log 2>&1
 
-      - name: بررسی یکپارچه‌سازی جدید و فعال‌سازی وقفه در صورت نیاز
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            NEW_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
-            OLD_COUNT="${{ steps.strat_count.outputs.count }}"
-            echo "📊 تعداد استراتژی‌ها: قبل=$OLD_COUNT بعد=$NEW_COUNT"
-            if [ "$NEW_COUNT" -gt "$OLD_COUNT" ]; then
-              echo "⚠️ استراتژی جدیدی حین اجرای golden یکپارچه شد. فعال‌سازی پرچم وقفه..."
-              echo "interrupt" | base64 -w0 > /tmp/flag.txt
-              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt: new strategy aggregated during golden" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
-            else
-              echo "ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت."
-            fi
-          } >> logs/run.log 2>&1
-
-      - name: فراخوانی مجدد loop_analysis.yml پس از اتمام golden
+      - name: فراخوانی مجدد loop_analysis.yml
         if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p logs
-          {
-            echo "🔁 فراخوانی مجدد loop_analysis.yml..."
-            gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
-          } >> logs/run.log 2>&1
+          gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
 
       - name: Save logs after job
         if: always()
@@ -868,7 +821,7 @@ jobs:
             python scripts/build_portfolios_queue.py \
               --progress /tmp/dummy \
               --output-dir /tmp/dummy \
-              --batch-size 100 \
+              --batch-size 500 \
               --min-score 45 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
@@ -918,29 +871,16 @@ jobs:
               exit 0
             fi
 
-            echo "🔍 بررسی portfolios_status.json (برای ادامه از آخرین نقطه توقف)..."
-            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/portfolios_status.json" -i 2>/dev/null | head -n1 | cut -d' ' -f2)
-            if [ "$HTTP_CODE" = "200" ]; then
-              STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/portfolios_status.json" --jq '.content' | base64 -d)
-              echo "   📄 وضعیت فعلی portfolios: $STATUS_CONTENT"
-            else
-              echo "   ℹ️ portfolios_status.json یافت نشد. اجرای portfolios از ابتدا آغاز می‌شود."
+            EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json?t=$(date +%s)" \
+              -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
+            if [ "$EMPTY" = "true" ]; then
+              echo "ℹ️ صف portfolios خالی است. این ماژول کامل شده."
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
             fi
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          } >> logs/run.log 2>&1
 
-      - name: ثبت تعداد استراتژی‌های یکپارچه‌شده پیش از اجرا
-        if: steps.status_check.outputs.should_run == 'true'
-        id: strat_count
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
-            echo "count=$CURRENT_COUNT" >> $GITHUB_OUTPUT
-            echo "📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای portfolios: $CURRENT_COUNT"
+            echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
 
       - name: فراخوانی analysis.yml برای portfolios
@@ -963,36 +903,12 @@ jobs:
             done
           } >> logs/run.log 2>&1
 
-      - name: بررسی یکپارچه‌سازی جدید و فعال‌سازی وقفه در صورت نیاز
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            NEW_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
-            OLD_COUNT="${{ steps.strat_count.outputs.count }}"
-            echo "📊 تعداد استراتژی‌ها: قبل=$OLD_COUNT بعد=$NEW_COUNT"
-            if [ "$NEW_COUNT" -gt "$OLD_COUNT" ]; then
-              echo "⚠️ استراتژی جدیدی حین اجرای portfolios یکپارچه شد. فعال‌سازی پرچم وقفه..."
-              echo "interrupt" | base64 -w0 > /tmp/flag.txt
-              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt: new strategy aggregated during portfolios" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
-            else
-              echo "ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت."
-            fi
-          } >> logs/run.log 2>&1
-
-      - name: فراخوانی مجدد loop_analysis.yml پس از اتمام portfolios
+      - name: فراخوانی مجدد loop_analysis.yml
         if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p logs
-          {
-            echo "🔁 فراخوانی مجدد loop_analysis.yml..."
-            gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
-          } >> logs/run.log 2>&1
+          gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
 
       - name: Save logs after job
         if: always()
@@ -1034,7 +950,7 @@ jobs:
             python scripts/build_correlation_queue.py \
               --progress /tmp/dummy \
               --output-dir /tmp/dummy \
-              --batch-size 100 2>&1
+              --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
               echo "❌ build_correlation_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
@@ -1083,29 +999,16 @@ jobs:
               exit 0
             fi
 
-            echo "🔍 بررسی correlation_status.json (برای ادامه از آخرین نقطه توقف)..."
-            HTTP_CODE=$(gh api "repos/$THIRD_REPO/contents/correlation_status.json" -i 2>/dev/null | head -n1 | cut -d' ' -f2)
-            if [ "$HTTP_CODE" = "200" ]; then
-              STATUS_CONTENT=$(gh api "repos/$THIRD_REPO/contents/correlation_status.json" --jq '.content' | base64 -d)
-              echo "   📄 وضعیت فعلی correlation: $STATUS_CONTENT"
-            else
-              echo "   ℹ️ correlation_status.json یافت نشد. اجرای correlation از ابتدا آغاز می‌شود."
+            EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)" \
+              -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
+            if [ "$EMPTY" = "true" ]; then
+              echo "ℹ️ صف correlation خالی است. این ماژول کامل شده."
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              exit 0
             fi
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          } >> logs/run.log 2>&1
 
-      - name: ثبت تعداد استراتژی‌های یکپارچه‌شده پیش از اجرا
-        if: steps.status_check.outputs.should_run == 'true'
-        id: strat_count
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            CURRENT_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
-            echo "count=$CURRENT_COUNT" >> $GITHUB_OUTPUT
-            echo "📊 تعداد استراتژی‌های یکپارچه‌شده قبل از اجرای correlation: $CURRENT_COUNT"
+            echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
 
       - name: فراخوانی analysis.yml برای correlation
@@ -1128,36 +1031,22 @@ jobs:
             done
           } >> logs/run.log 2>&1
 
-      - name: بررسی یکپارچه‌سازی جدید و فعال‌سازی وقفه در صورت نیاز
+      - name: فراخوانی مجدد loop_analysis.yml (در صورت ناقص بودن صف correlation)
         if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          mkdir -p logs
-          {
-            NEW_COUNT=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null | wc -l)
-            OLD_COUNT="${{ steps.strat_count.outputs.count }}"
-            echo "📊 تعداد استراتژی‌ها: قبل=$OLD_COUNT بعد=$NEW_COUNT"
-            if [ "$NEW_COUNT" -gt "$OLD_COUNT" ]; then
-              echo "⚠️ استراتژی جدیدی حین اجرای correlation یکپارچه شد. فعال‌سازی پرچم وقفه..."
-              echo "interrupt" | base64 -w0 > /tmp/flag.txt
-              gh api "repos/$THIRD_REPO/contents/interrupt.flag" -X PUT -F message="interrupt: new strategy aggregated during correlation" -F content="@/tmp/flag.txt" -F branch="main" 2>&1 || true
-            else
-              echo "ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت."
-            fi
-          } >> logs/run.log 2>&1
-
-      - name: فراخوانی مجدد loop_analysis.yml پس از اتمام correlation
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p logs
-          {
-            echo "🔁 فراخوانی مجدد loop_analysis.yml..."
+          # بررسی خالی بودن صف correlation
+          EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)" \
+            -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
+          if [ "$EMPTY" != "true" ]; then
+            echo "صف correlation هنوز کامل نشده. فراخوانی مجدد loop_analysis.yml..."
             gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
-          } >> logs/run.log 2>&1
+          else
+            echo "✅ صف correlation خالی است. متوقف می‌شویم."
+          fi
 
       - name: Save logs after job
         if: always()
