@@ -671,15 +671,62 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 5: اجرای golden (پس از اتمام کارهای ثابت)
+  # Job 5a: ساخت صف golden (قبل از dispatch-golden)
   # ============================================================
-  dispatch-golden:
+  prepare-golden-queue:
     needs: [prepare-dispatch, dispatch-fixed]
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
       needs.prepare-dispatch.outputs.total_batches == '0' &&
       (needs.dispatch-fixed.result == 'success' || needs.dispatch-fixed.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: راه‌اندازی پایتون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: ساخت و به‌روزرسانی all_combinations_golden.json
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            python scripts/build_golden_queue.py \
+              --progress /tmp/dummy \
+              --output-dir /tmp/dummy \
+              --batch-size 100 2>&1
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ build_golden_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
+              exit $EXIT_CODE
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after prepare-golden-queue (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 5: اجرای golden (پس از آماده‌سازی صف golden)
+  # ============================================================
+  dispatch-golden:
+    needs: [prepare-dispatch, prepare-golden-queue]
+    if: |
+      always() &&
+      needs.prepare-dispatch.result == 'success' &&
+      needs.prepare-dispatch.outputs.total_batches == '0' &&
+      needs.prepare-golden-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -789,15 +836,65 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 6: اجرای portfolios (پس از اتمام golden)
+  # Job 5c: ساخت صف portfolios (قبل از dispatch-portfolios)
   # ============================================================
-  dispatch-portfolios:
+  prepare-portfolios-queue:
     needs: [prepare-dispatch, dispatch-golden]
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
       needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.dispatch-golden.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: راه‌اندازی پایتون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: ساخت و به‌روزرسانی all_combinations_portfolios.json
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          mkdir -p logs
+          {
+            pip install pandas pyarrow --quiet 2>&1
+            python scripts/build_portfolios_queue.py \
+              --progress /tmp/dummy \
+              --output-dir /tmp/dummy \
+              --batch-size 100 \
+              --min-score 45 2>&1
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ build_portfolios_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
+              exit $EXIT_CODE
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after prepare-portfolios-queue (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 6: اجرای portfolios (پس از آماده‌سازی صف portfolios)
+  # ============================================================
+  dispatch-portfolios:
+    needs: [prepare-dispatch, prepare-portfolios-queue]
+    if: |
+      always() &&
+      needs.prepare-dispatch.result == 'success' &&
+      needs.prepare-dispatch.outputs.total_batches == '0' &&
+      needs.prepare-portfolios-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -907,15 +1004,62 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 6.5: اجرای correlation (اختیاری، پس از اتمام portfolios)
+  # Job 6b: ساخت صف correlation (قبل از dispatch-correlation)
   # ============================================================
-  dispatch-correlation:
+  prepare-correlation-queue:
     needs: [prepare-dispatch, dispatch-portfolios]
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
       needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.dispatch-portfolios.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: راه‌اندازی پایتون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: ساخت و به‌روزرسانی all_combinations_correlation.json
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            python scripts/build_correlation_queue.py \
+              --progress /tmp/dummy \
+              --output-dir /tmp/dummy \
+              --batch-size 100 2>&1
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ build_correlation_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
+              exit $EXIT_CODE
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after prepare-correlation-queue (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 6.5: اجرای correlation (پس از آماده‌سازی صف correlation)
+  # ============================================================
+  dispatch-correlation:
+    needs: [prepare-dispatch, prepare-correlation-queue]
+    if: |
+      always() &&
+      needs.prepare-dispatch.result == 'success' &&
+      needs.prepare-dispatch.outputs.total_batches == '0' &&
+      needs.prepare-correlation-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
