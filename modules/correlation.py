@@ -99,6 +99,11 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
     df = pd.DataFrame(records)
     logger.info("تعداد %d رکورد از %d فایل signatures بارگذاری شد.", len(df), len(jsonl_files))
 
+    # اگر ستون signature وجود نداشت، آن را از فیلدهای موجود بساز
+    if "signature" not in df.columns:
+        logger.info("ستون signature یافت نشد؛ با build_signature ساخته می‌شود.")
+        df["signature"] = df.apply(build_signature, axis=1)
+
     if signatures_filter and os.path.exists(signatures_filter):
         with open(signatures_filter, "r", encoding="utf-8") as f:
             _filter_data = json.load(f)
@@ -131,8 +136,52 @@ def load_golden_scores(golden_scores_path: Optional[str]) -> Optional[pd.DataFra
     return df
 
 
-def load_news(news_pickle_path: Optional[str], fallback_dir: str = "data/news") -> Optional[pd.DataFrame]:
-    """news.pickle را بارگذاری کن؛ در صورت عدم وجود از fallback_dir استفاده کن."""
+def load_news(
+    news_pickle_path: Optional[str] = None,
+    news_dir: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
+    """داده‌های خبری را بارگذاری کن.
+
+    اولویت:
+    ۱. news_dir  — فایل‌های CSV پوشه اخبار (مثل combo_10day)
+    ۲. news_pickle_path — فایل pickle (سازگاری با عقب)
+    """
+    # --- اولویت اول: CSV از news_dir ---
+    if news_dir:
+        news_dir_path = Path(news_dir)
+        if news_dir_path.exists():
+            csv_files = sorted(news_dir_path.glob("*.csv"))
+            if csv_files:
+                frames = []
+                expected_cols = {"date", "indicator", "actual", "forecast", "previous"}
+                for p in csv_files:
+                    try:
+                        chunk_df = pd.read_csv(p)
+                        # ستون‌های ضروری را بررسی کن
+                        present = expected_cols.intersection(chunk_df.columns)
+                        if "date" not in present or "indicator" not in present:
+                            logger.warning(
+                                "فایل CSV %s فاقد ستون‌های ضروری date/indicator است؛ نادیده گرفته شد.",
+                                p.name,
+                            )
+                            continue
+                        frames.append(chunk_df)
+                    except Exception as e:
+                        logger.warning("خطا در خواندن CSV %s: %s", p.name, e)
+                if frames:
+                    df = pd.concat(frames, ignore_index=True)
+                    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                    df = df.dropna(subset=["date"])
+                    logger.info(
+                        "اخبار از %d فایل CSV در %s با %d رکورد بارگذاری شد.",
+                        len(frames), news_dir, len(df),
+                    )
+                    return df
+            logger.warning("هیچ فایل CSV معتبری در %s پیدا نشد.", news_dir)
+        else:
+            logger.warning("مسیر news_dir وجود ندارد: %s", news_dir)
+
+    # --- اولویت دوم: pickle ---
     if news_pickle_path and os.path.exists(news_pickle_path):
         with open(news_pickle_path, "rb") as f:
             news_obj = pickle.load(f)
@@ -140,19 +189,6 @@ def load_news(news_pickle_path: Optional[str], fallback_dir: str = "data/news") 
         df["date"] = pd.to_datetime(df["date"])
         logger.info("news.pickle با %d رکورد بارگذاری شد.", len(df))
         return df
-
-    fallback_path = Path(fallback_dir)
-    if fallback_path.exists():
-        frames = []
-        for p in fallback_path.glob("*.pickle"):
-            with open(p, "rb") as f:
-                obj = pickle.load(f)
-            frames.append(pd.DataFrame(obj) if not isinstance(obj, pd.DataFrame) else obj)
-        if frames:
-            df = pd.concat(frames, ignore_index=True)
-            df["date"] = pd.to_datetime(df["date"])
-            logger.info("اخبار از %s با %d رکورد بارگذاری شد.", fallback_dir, len(df))
-            return df
 
     logger.warning("هیچ داده خبری (news) پیدا نشد.")
     return None
@@ -227,6 +263,21 @@ def _parse_signature_string(sig: str) -> Dict[str, Any]:
                     parsed["distance_days"] = int(parts[i + 1])
                 break
     return parsed
+
+
+def build_signature(row: pd.Series) -> Optional[str]:
+    """از فیلدهای کلیدی یک رشته‌ی امضای منحصربه‌فرد بساز.
+
+    فرمت: {coin_composition}__{dominant_indicator}__{position}__{distance_days}d__{model}__{market_regime}
+    هر فیلد موجود نباشد با «unknown» جایگزین می‌شود.
+    """
+    coin = str(row.get("coin_composition") or "unknown")
+    indicator = str(row.get("dominant_indicator") or "unknown")
+    position = str(row.get("position") or "unknown")
+    distance = str(row.get("distance_days") or "unknown")
+    model = str(row.get("model") or "unknown")
+    regime = str(row.get("market_regime") or "unknown")
+    return f"{coin}__{indicator}__{position}__{distance}d__{model}__{regime}"
 
 
 def extract_news_window_stats(
@@ -889,6 +940,7 @@ def run_correlation_pipeline(
     signatures_dir: str,
     golden_scores_path: Optional[str],
     news_pickle_path: Optional[str],
+    news_dir: Optional[str],
     strategies_json_path: Optional[str],
     version_schema_path: Optional[str],
     output_dir: str,
@@ -909,7 +961,7 @@ def run_correlation_pipeline(
         raise ValueError("هیچ داده‌ای از signatures بارگذاری نشد؛ پایپ‌لاین متوقف شد.")
 
     golden_df = load_golden_scores(golden_scores_path)
-    news_df = load_news(news_pickle_path)
+    news_df = load_news(news_pickle_path=news_pickle_path, news_dir=news_dir)
     _strategies_meta = load_strategies_metadata(strategies_json_path)
     version_schema = load_version_schema(version_schema_path)
 
@@ -1027,6 +1079,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--signatures-dir", required=True, help="مسیر پوشه فایل‌های .jsonl signatures")
     parser.add_argument("--golden-scores", default=None, help="مسیر golden_scores.parquet (اختیاری)")
     parser.add_argument("--news-pickle", default=None, help="مسیر news.pickle")
+    parser.add_argument(
+        "--news-dir",
+        default=None,
+        help="مسیر پوشه‌ی CSVهای اخبار (مثل combo_10day؛ اولویت بر --news-pickle دارد)",
+    )
     parser.add_argument("--strategies-json", default=None, help="مسیر strategies_metadata.json")
     parser.add_argument("--version-schema", default=None, help="مسیر version_schema.json (اختیاری)")
     parser.add_argument("--output-dir", required=True, help="مسیر پوشه خروجی برای ذخیره Parquet")
@@ -1073,6 +1130,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             signatures_dir=args.signatures_dir,
             golden_scores_path=args.golden_scores,
             news_pickle_path=args.news_pickle,
+            news_dir=args.news_dir,
             strategies_json_path=args.strategies_json,
             version_schema_path=args.version_schema,
             output_dir=args.output_dir,
