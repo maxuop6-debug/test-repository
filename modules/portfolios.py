@@ -15,7 +15,6 @@ portfolios.py - ماژول دوم: سبدهای مکمل (Complementary Portfoli
     python portfolios.py \
         --signatures-dir /tmp/signatures \
         --golden-scores /tmp/golden_scores.parquet \
-        --strategies-json /tmp/strategies_metadata.json \
         --version-schema /tmp/version_schema.json \
         --output-dir /tmp/portfolios_output \
         --top-n 15 \
@@ -243,14 +242,17 @@ def load_golden_scores(path: Path) -> pd.DataFrame:
     return df
 
 
-def load_strategies_metadata(path: Path) -> dict:
+def load_strategies_metadata(path: Path | None) -> dict:
+    """بارگذاری metadata استراتژی‌ها (اختیاری — این فایل در هیچ‌جا استفاده نمی‌شود)."""
+    if path is None or not Path(path).exists():
+        return {}
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     if isinstance(raw, list):
         return {str(item.get("folder")): item for item in raw}
     if isinstance(raw, dict):
         return raw
-    raise ValueError("فرمت strategies_metadata.json ناشناخته است.")
+    return {}
 
 
 def load_version_schema(path: Optional[Path]) -> str:
@@ -526,7 +528,7 @@ def evaluate_group(
 def run(
     signatures_dir: Path,
     golden_scores_path: Path,
-    strategies_json_path: Path,
+    strategies_json_path: Optional[Path],
     version_schema_path: Optional[Path],
     output_dir: Path,
     top_n: int,
@@ -744,8 +746,8 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="مسیر فایل golden_scores.parquet",
     )
     parser.add_argument(
-        "--strategies-json", required=True, type=Path,
-        help="مسیر فایل strategies_metadata.json",
+        "--strategies-json", required=False, type=Path, default=None,
+        help="(اختیاری، بی‌استفاده) مسیر فایل strategies_metadata.json",
     )
     parser.add_argument(
         "--version-schema", required=False, type=Path, default=None,
