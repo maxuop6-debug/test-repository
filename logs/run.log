@@ -50,3 +50,7 @@ https://github.com/Amir9287171/test-repository/actions/runs/28088974927
 ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت.
 🔁 فراخوانی مجدد loop_analysis.yml...
 https://github.com/Amir9287171/test-repository/actions/runs/28088976223
+  File "/home/runner/work/test-repository/test-repository/scripts/build_portfolios_queue.py", line 102
+    """
+       ^
+SyntaxError: f-string expression part cannot include a backslash
