@@ -136,6 +136,72 @@ def load_golden_scores(golden_scores_path: Optional[str]) -> Optional[pd.DataFra
     return df
 
 
+def find_column_index(header: List[str], keywords: List[str]) -> int:
+    """اولین ستونی که نام آن شامل یکی از کلیدواژه‌ها باشد را پیدا کن.
+
+    جستجو case-insensitive و partial match است.
+    در صورت عدم وجود، -1 برمی‌گرداند.
+    """
+    header_lower = [h.lower() for h in header]
+    for kw in keywords:
+        kw_lower = kw.lower()
+        for i, h in enumerate(header_lower):
+            if kw_lower in h:
+                return i
+    return -1
+
+
+def parse_percent(value_str) -> Optional[float]:
+    """رشته عددی با کاراکترهای اضافی را به float تبدیل کن.
+
+    کاراکترهای %, $, B (میلیارد), کاما، پرانتز و فاصله حذف می‌شوند.
+    در صورت مقدار خالی یا نامعتبر، None برمی‌گرداند.
+    """
+    if value_str is None:
+        return None
+    if isinstance(value_str, (int, float)):
+        return float(value_str) if not (isinstance(value_str, float) and np.isnan(value_str)) else None
+    s = str(value_str).strip()
+    if not s or s in ("-", "—", "--", "N/A", "n/a", ""):
+        return None
+    # حذف کاراکترهای غیرعددی به‌جز نقطه و علامت منفی
+    import re
+    s = re.sub(r"[%$B,()]", "", s).strip()
+    if not s or s in ("-", ""):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def detect_indicator_from_filename(filename: str) -> str:
+    """نام اندیکاتور را از نام فایل CSV استخراج کن."""
+    stem = Path(filename).stem.lower()
+    # نگاشت نام فایل به نام اندیکاتور استاندارد
+    mapping = {
+        "fomc": "FOMC",
+        "cpi": "CPI",
+        "nfp": "NFP",
+        "gdp": "GDP",
+        "ppi": "PPI",
+        "pce": "PCE",
+        "ism": "ISM",
+        "retail": "Retail Sales",
+        "unemployment": "Unemployment",
+        "housing": "Housing",
+        "jobs": "Jobs",
+        "trade": "Trade Balance",
+        "durable": "Durable Goods",
+        "consumer": "Consumer Confidence",
+    }
+    for key, val in mapping.items():
+        if key in stem:
+            return val
+    # اگر نگاشتی پیدا نشد، از نام فایل استفاده کن
+    return Path(filename).stem.replace("_", " ").title()
+
+
 def load_news(
     news_pickle_path: Optional[str] = None,
     news_dir: Optional[str] = None,
@@ -143,45 +209,10 @@ def load_news(
     """داده‌های خبری را بارگذاری کن.
 
     اولویت:
-    ۱. news_dir  — فایل‌های CSV پوشه اخبار (مثل combo_10day)
-    ۲. news_pickle_path — فایل pickle (سازگاری با عقب)
+    ۱. news_pickle_path — فایل pickle (در صورت وجود، اولویت اول)
+    ۲. news_dir  — فایل‌های CSV پوشه اخبار با پشتیبانی از ساختار واقعی
     """
-    # --- اولویت اول: CSV از news_dir ---
-    if news_dir:
-        news_dir_path = Path(news_dir)
-        if news_dir_path.exists():
-            csv_files = sorted(news_dir_path.glob("*.csv"))
-            if csv_files:
-                frames = []
-                expected_cols = {"date", "indicator", "actual", "forecast", "previous"}
-                for p in csv_files:
-                    try:
-                        chunk_df = pd.read_csv(p)
-                        # ستون‌های ضروری را بررسی کن
-                        present = expected_cols.intersection(chunk_df.columns)
-                        if "date" not in present or "indicator" not in present:
-                            logger.warning(
-                                "فایل CSV %s فاقد ستون‌های ضروری date/indicator است؛ نادیده گرفته شد.",
-                                p.name,
-                            )
-                            continue
-                        frames.append(chunk_df)
-                    except Exception as e:
-                        logger.warning("خطا در خواندن CSV %s: %s", p.name, e)
-                if frames:
-                    df = pd.concat(frames, ignore_index=True)
-                    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-                    df = df.dropna(subset=["date"])
-                    logger.info(
-                        "اخبار از %d فایل CSV در %s با %d رکورد بارگذاری شد.",
-                        len(frames), news_dir, len(df),
-                    )
-                    return df
-            logger.warning("هیچ فایل CSV معتبری در %s پیدا نشد.", news_dir)
-        else:
-            logger.warning("مسیر news_dir وجود ندارد: %s", news_dir)
-
-    # --- اولویت دوم: pickle ---
+    # --- اولویت اول: pickle ---
     if news_pickle_path and os.path.exists(news_pickle_path):
         with open(news_pickle_path, "rb") as f:
             news_obj = pickle.load(f)
@@ -189,6 +220,117 @@ def load_news(
         df["date"] = pd.to_datetime(df["date"])
         logger.info("news.pickle با %d رکورد بارگذاری شد.", len(df))
         return df
+
+    # --- اولویت دوم: CSV از news_dir ---
+    if news_dir:
+        news_dir_path = Path(news_dir)
+        if not news_dir_path.exists():
+            logger.warning("مسیر news_dir وجود ندارد: %s", news_dir)
+        else:
+            csv_files = sorted(news_dir_path.glob("*.csv"))
+            if not csv_files:
+                logger.warning("هیچ فایل CSV در %s پیدا نشد.", news_dir)
+            else:
+                frames = []
+                for p in csv_files:
+                    try:
+                        # خواندن با utf-8-sig برای حذف BOM
+                        raw_df = pd.read_csv(p, encoding="utf-8-sig", dtype=str)
+                        header = list(raw_df.columns)
+
+                        # یافتن ستون تاریخ
+                        date_idx = find_column_index(header, ["date", "expected", "impact"])
+                        if date_idx == -1:
+                            date_idx = 0  # ستون اول به‌عنوان پیش‌فرض
+                        date_col = header[date_idx]
+
+                        # یافتن ستون‌های اصلی
+                        actual_idx = find_column_index(header, ["actual"])
+                        forecast_idx = find_column_index(header, ["forecast", "consensus"])
+                        previous_idx = find_column_index(header, ["previous", "prior"])
+                        reference_idx = find_column_index(header, ["reference", "event", "name"])
+
+                        if actual_idx == -1:
+                            logger.warning(
+                                "فایل CSV %s فاقد ستون Actual است؛ نادیده گرفته شد.", p.name
+                            )
+                            continue
+                        if forecast_idx == -1:
+                            logger.warning(
+                                "فایل CSV %s فاقد ستون Forecast/Consensus است؛ نادیده گرفته شد.", p.name
+                            )
+                            continue
+
+                        actual_col = header[actual_idx]
+                        forecast_col = header[forecast_idx]
+                        previous_col = header[previous_idx] if previous_idx != -1 else None
+                        reference_col = header[reference_idx] if reference_idx != -1 else None
+
+                        # تشخیص اندیکاتور از نام فایل
+                        indicator_name = detect_indicator_from_filename(p.name)
+                        is_fomc = "fomc" in p.name.lower()
+
+                        # فیلتر FOMC: فقط رکوردهای مرتبط با نرخ بهره
+                        chunk_df = raw_df.copy()
+                        if is_fomc and reference_col is not None:
+                            ref_lower = chunk_df[reference_col].fillna("").str.lower()
+                            mask = ref_lower.str.contains("interest rate|fomc", na=False)
+                            chunk_df = chunk_df[mask].copy()
+                            if chunk_df.empty:
+                                logger.warning(
+                                    "فایل FOMC %s پس از فیلتر Interest Rate/FOMC خالی شد؛ نادیده گرفته شد.",
+                                    p.name,
+                                )
+                                continue
+
+                        # parse تاریخ با فرمت‌های مختلف
+                        def parse_date(val):
+                            if not val or str(val).strip() in ("", "nan", "NaN"):
+                                return pd.NaT
+                            for fmt in ("%b %d, %Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+                                try:
+                                    return datetime.strptime(str(val).strip(), fmt)
+                                except ValueError:
+                                    continue
+                            try:
+                                return pd.to_datetime(str(val).strip(), errors="coerce")
+                            except Exception:
+                                return pd.NaT
+
+                        chunk_df["date"] = chunk_df[date_col].apply(parse_date)
+                        chunk_df["indicator"] = indicator_name
+                        chunk_df["actual"] = chunk_df[actual_col].apply(parse_percent)
+                        chunk_df["forecast"] = chunk_df[forecast_col].apply(parse_percent)
+                        if previous_col:
+                            chunk_df["previous"] = chunk_df[previous_col].apply(parse_percent)
+                        else:
+                            chunk_df["previous"] = np.nan
+
+                        # فقط ستون‌های مورد نیاز را نگه دار
+                        keep_cols = ["date", "indicator", "actual", "forecast", "previous"]
+                        result_df = chunk_df[keep_cols].dropna(subset=["date"])
+                        if result_df.empty:
+                            logger.warning("فایل CSV %s پس از parse تاریخ خالی شد.", p.name)
+                            continue
+
+                        frames.append(result_df)
+                        logger.info(
+                            "فایل %s: %d رکورد بارگذاری شد (indicator=%s).",
+                            p.name, len(result_df), indicator_name,
+                        )
+                    except Exception as e:
+                        logger.warning("خطا در خواندن CSV %s: %s", p.name, e)
+
+                if frames:
+                    df = pd.concat(frames, ignore_index=True)
+                    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                    df = df.dropna(subset=["date"])
+                    logger.info(
+                        "اخبار از %d فایل CSV در %s با مجموع %d رکورد بارگذاری شد.",
+                        len(frames), news_dir, len(df),
+                    )
+                    return df
+                logger.warning("هیچ فایل CSV معتبری در %s پیدا نشد.", news_dir)
 
     logger.warning("هیچ داده خبری (news) پیدا نشد.")
     return None
@@ -444,6 +586,13 @@ def _compute_feature_correlation(
         x = pd.to_numeric(df[feature], errors="coerce")
 
     y = pd.to_numeric(df[target], errors="coerce")
+
+    # جلوگیری از ConstantInputWarning: اگر واریانس صفر باشد، نتیجه nan است
+    valid = x.notna() & y.notna()
+    if valid.sum() < 3:
+        return np.nan, np.nan, int(valid.sum())
+    if x[valid].nunique() <= 1 or y[valid].nunique() <= 1:
+        return np.nan, np.nan, int(valid.sum())
 
     if method == "loo":
         return _loo_spearman(x, y)
