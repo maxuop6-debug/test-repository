@@ -51,3 +51,9 @@ https://github.com/Amir9287171/test-repository/actions/runs/28090559899
 ℹ️ استراتژی جدیدی یکپارچه نشده. ادامه به‌ترتیب اولویت.
 🔁 فراخوانی مجدد loop_analysis.yml...
 https://github.com/Amir9287171/test-repository/actions/runs/28090561543
+📥 دانلود completed_portfolios.json...
+   تعداد signatureهای قبلاً ثبت‌شده: 0
+📥 دانلود golden_scores.parquet.enc...
+   ❌ خطا در دریافت metadata: 
+⚠️ golden_scores.parquet.enc یافت نشد یا دانلود ناموفق بود.
+   (احتمالاً golden هنوز اجرا نشده. بدون خطا خارج می‌شویم.)
