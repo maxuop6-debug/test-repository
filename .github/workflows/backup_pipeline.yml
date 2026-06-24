@@ -1,4 +1,4 @@
-name.    اینو مینویسم تا دیگه مار نکنه از قصد نوشتم: Backup Pipeline
+name: Backup Pipeline
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout now-test-repo
-        uses: actions/checkout@v4
+        uses. : actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -41,7 +41,7 @@ jobs:
           else
             git clone --depth 1 \
               "https://${ACTOR}:${GITHUB_TOKEN}@github.com/${OWNER}/Test-repo.git" \
-              Test-repo \
+              Test-  repo \
               && echo "✅ Test-repo clone شد" \
               || echo "⚠️ Test-repo کلون نشد"
           fi
@@ -58,7 +58,7 @@ jobs:
               || echo "⚠️ test-repository کلون نشد"
             [ -d "test-repository-clone/data/news" ] && \
               mkdir -p data && cp -r test-repository-clone/data/news data/news || true
-            [ -d "test-repository-clone/encrypted_data" ] && \
+            [.  -d "test-repository-clone/encrypted_data" ] && \
               cp -r test-repository-clone/encrypted_data . || true
           fi
 
@@ -103,7 +103,7 @@ jobs:
           END_TIME=$(( $(date +%s) + 5*3600 ))
           echo "🔁 حلقه بک‌آپ تا $(date -d @$END_TIME -u '+%Y-%m-%d %H:%M UTC') ادامه دارد"
 
-          # ─── تابع بک‌آپ (هر ۳۰ دقیقه) ──────────────────────────────
+          # ───.  تابع بک‌آپ (هر ۳۰ دقیقه) ──────────────────────────────
           do_run_and_commit() {
             git pull --rebase origin main 2>/dev/null || true
 
@@ -112,7 +112,7 @@ jobs:
 
             for f in auto_mapping.json backup_ledger.json schedule_times.json \
                      integrity_pass.flag master_structure.json update_offset.json \
-                     startup_test_sent.flag pending_links.json bot_stats.json; do
+                     startup_test_. sent.flag pending_links.json bot_stats.json; do
               if [ -f "$f" ]; then
                 git add "$f"
               fi
