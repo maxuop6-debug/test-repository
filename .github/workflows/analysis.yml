@@ -26,6 +26,99 @@ concurrency:
 
 jobs:
   # ================================================================
+  # generate-reports: تولید گزارش‌های جامع نسخه ۵ و commit به مخزن سوم
+  # ================================================================
+  generate-reports:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout مخزن اصلی
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 2. نصب پایتون و کتابخانه‌ها
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: نصب وابستگی‌ها
+        run: pip install pandas numpy scipy pyarrow
+
+      - name: 3. Clone مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          git clone \
+            --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${THIRD_REPO}.git" \
+            /tmp/third_repo
+
+      - name: 4. اجرای loader.py
+        run: |
+          python modules/loader.py \
+            --news-dir data/news \
+            --results-dir /tmp/third_repo/backtest_results \
+            --output-news /tmp/news.pickle \
+            --output-strategies /tmp/strategies.json
+
+      - name: 5. اجرای calculator_stoploss.py
+        run: |
+          python modules/calculator_stoploss.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/backtest_results \
+            --output /tmp/stoploss.json
+
+      - name: 6. اجرای calculator_returns.py
+        run: |
+          python modules/calculator_returns.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/backtest_results \
+            --output /tmp/returns.json
+
+      - name: 7. اجرای calculator_risk.py
+        run: |
+          python modules/calculator_risk.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/backtest_results \
+            --stoploss-cache /tmp/stoploss.json \
+            --output /tmp/risk.json
+
+      - name: 8. اجرای calculator_inverse.py
+        run: |
+          python modules/calculator_inverse.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/backtest_results \
+            --stoploss-cache /tmp/stoploss.json \
+            --output /tmp/inverse.json
+
+      - name: 9. اجرای complete_reporter.py
+        run: |
+          python modules/complete_reporter.py \
+            --returns-cache /tmp/returns.json \
+            --strategies-json /tmp/strategies.json \
+            --risk-cache /tmp/risk.json \
+            --inverse-cache /tmp/inverse.json \
+            --results-base /tmp/third_repo/backtest_results \
+            --news-pickle /tmp/news.pickle \
+            --output-dir /tmp/reports
+
+      - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          cd /tmp/third_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf reports/
+          mkdir -p reports
+          cp -r /tmp/reports/* reports/
+          git add -f reports/
+          git commit -m "update reports (run ${{ github.run_id }})" || echo "No changes to commit"
+          git push origin main
+
+  # ================================================================
   # generate-matrix: تقسیم all_combinations.json به چانک‌ها
   # ================================================================
   generate-matrix:
