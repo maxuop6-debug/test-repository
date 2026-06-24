@@ -86,8 +86,10 @@ def load_signatures(signatures_dir: str) -> pd.DataFrame:
     return data
 
 
-def load_strategies(strategies_json: str) -> dict:
-    """بارگذاری metadata استراتژی‌ها."""
+def load_strategies(strategies_json: str | None) -> dict:
+    """بارگذاری metadata استراتژی‌ها (اختیاری — این فایل در هیچ‌جا استفاده نمی‌شود)."""
+    if not strategies_json or not Path(strategies_json).exists():
+        return {}
     with open(strategies_json, encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -387,7 +389,7 @@ def write_summary(
 
 def run(
     signatures_dir: str,
-    strategies_json: str,
+    strategies_json: str | None,
     version_schema: str | None,
     ohlc_dir: str | None,
     output_dir: str,
@@ -407,9 +409,6 @@ def run(
     # ── بارگذاری ──────────────────────────────────────────────────────────
     log.info("بارگذاری signatures...")
     sig_df = load_signatures(signatures_dir)
-
-    log.info("بارگذاری strategies_metadata...")
-    _ = load_strategies(strategies_json)
 
     version_id = load_version_schema(version_schema)
     log.info(f"version_id: {version_id}")
@@ -589,7 +588,7 @@ def parse_args() -> argparse.Namespace:
         description="ماژول Golden – امتیازدهی استراتژی‌ها بر اساس شرایط خبری"
     )
     parser.add_argument("--signatures-dir", required=True, help="مسیر پوشه فایل‌های .jsonl signatures")
-    parser.add_argument("--strategies-json", required=True, help="مسیر فایل strategies_metadata.json")
+    parser.add_argument("--strategies-json", required=False, default=None, help="(اختیاری، بی‌استفاده) مسیر فایل strategies_metadata.json")
     parser.add_argument("--version-schema", default=None, help="(اختیاری) مسیر فایل version_schema.json")
     parser.add_argument("--ohlc-dir", default=None, help="(اختیاری) مسیر پوشه داده‌های OHLC")
     parser.add_argument("--output-dir", required=True, help="مسیر پوشه خروجی")
