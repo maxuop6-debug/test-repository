@@ -1094,18 +1094,24 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/golden_chunk_cache
-          # استخراج لیست signatureهای پردازش‌شده از golden_status.json
+
+          # خواندن آرایه‌ی processed_signatures از golden_status.json (اگر وجود دارد)
           if [ -f /tmp/golden_chunk_cache/golden_status.json ]; then
-            jq -r '.processed_signatures[]' /tmp/golden_chunk_cache/golden_status.json > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
+            jq -c '.processed_signatures // []' /tmp/golden_chunk_cache/golden_status.json > /tmp/done_items_from_status.json 2>/dev/null || echo "[]" > /tmp/done_items_from_status.json
           else
-            echo "[]" > /tmp/done_items.json
+            echo "[]" > /tmp/done_items_from_status.json
           fi
-          # همچنین همه signatureهای موجود در چانک را به‌عنوان done در نظر می‌گیریم (چون golden تمام چانک را پردازش می‌کند)
-          jq -r '.[]' /tmp/golden_chunks/chunk_${{ matrix.chunk_index }}.json >> /tmp/done_items.json 2>/dev/null || true
-          jq -s 'add | unique' /tmp/done_items.json > /tmp/done_items_unique.json
+
+          # خواندن آرایه‌ی امضاهای این چانک
+          CHUNK_SIGS=$(cat /tmp/golden_chunks/chunk_${{ matrix.chunk_index }}.json)
+
+          # ترکیب دو آرایه و حذف تکراری‌ها
+          jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" '$arr1[0] + $arr2 | unique' > /tmp/done_items_unique.json
           mv /tmp/done_items_unique.json /tmp/done_items.json
           cp /tmp/done_items.json /tmp/golden_chunk_cache/done_items.json
           touch /tmp/golden_chunk_cache/chunk_completed.flag
+
+          echo "✅ done_items برای chunk ${{ matrix.chunk_index }} ذخیره شد."
 
       - name: 6. ذخیره نتایج در Cache
         if: always()
@@ -1222,7 +1228,7 @@ jobs:
           if [ "$AFTER" -eq 0 ]; then
             echo "✅ all_combinations_golden.json خالی شد. به‌روزرسانی completed_golden.json..."
             echo '["completed"]' > /tmp/completed_golden.json
-            SHA_COMP=$(get_file_sha "$THIRD_REPO" "completed_golden.json" || echo "")
+            SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_golden.json" -q '.sha' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_golden.json > /tmp/completed_base64.txt
             cat > /tmp/payload_completed.json <<EOF
           {
@@ -1231,7 +1237,11 @@ jobs:
             "branch": "main"
           }
           EOF
-            [ -n "$SHA_COMP" ] && echo "\"sha\": \"$SHA_COMP\"," >> /tmp/payload_completed.json
+            if [ -n "$SHA_COMP" ]; then
+              # اضافه کردن sha به payload
+              jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
+              mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
+            fi
             $CURL -s -X PUT -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
               --data-binary @/tmp/payload_completed.json \
@@ -1466,16 +1476,21 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/correlation_chunk_cache
+
           if [ -f /tmp/correlation_chunk_cache/correlation_status.json ]; then
-            jq -r '.processed_signatures[]' /tmp/correlation_chunk_cache/correlation_status.json > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
+            jq -c '.processed_signatures // []' /tmp/correlation_chunk_cache/correlation_status.json > /tmp/done_items_from_status.json 2>/dev/null || echo "[]" > /tmp/done_items_from_status.json
           else
-            echo "[]" > /tmp/done_items.json
+            echo "[]" > /tmp/done_items_from_status.json
           fi
-          jq -r '.[]' /tmp/correlation_chunks/chunk_${{ matrix.chunk_index }}.json >> /tmp/done_items.json 2>/dev/null || true
-          jq -s 'add | unique' /tmp/done_items.json > /tmp/done_items_unique.json
+
+          CHUNK_SIGS=$(cat /tmp/correlation_chunks/chunk_${{ matrix.chunk_index }}.json)
+
+          jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" '$arr1[0] + $arr2 | unique' > /tmp/done_items_unique.json
           mv /tmp/done_items_unique.json /tmp/done_items.json
           cp /tmp/done_items.json /tmp/correlation_chunk_cache/done_items.json
           touch /tmp/correlation_chunk_cache/chunk_completed.flag
+
+          echo "✅ done_items برای chunk ${{ matrix.chunk_index }} ذخیره شد."
 
       - name: 6. ذخیره نتایج در Cache
         if: always()
@@ -1591,7 +1606,7 @@ jobs:
           if [ "$AFTER" -eq 0 ]; then
             echo "✅ all_combinations_correlation.json خالی شد. به‌روزرسانی completed_correlation.json..."
             echo '["completed"]' > /tmp/completed_correlation.json
-            SHA_COMP=$(get_file_sha "$THIRD_REPO" "completed_correlation.json" || echo "")
+            SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_correlation.json" -q '.sha' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_correlation.json > /tmp/completed_base64.txt
             cat > /tmp/payload_completed.json <<EOF
           {
@@ -1600,7 +1615,10 @@ jobs:
             "branch": "main"
           }
           EOF
-            [ -n "$SHA_COMP" ] && echo "\"sha\": \"$SHA_COMP\"," >> /tmp/payload_completed.json
+            if [ -n "$SHA_COMP" ]; then
+              jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
+              mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
+            fi
             $CURL -s -X PUT -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
               --data-binary @/tmp/payload_completed.json \
@@ -1877,16 +1895,21 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/portfolios_chunk_cache
+
           if [ -f /tmp/portfolios_chunk_cache/portfolios_status.json ]; then
-            jq -r '.processed_signatures[]' /tmp/portfolios_chunk_cache/portfolios_status.json > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
+            jq -c '.processed_signatures // []' /tmp/portfolios_chunk_cache/portfolios_status.json > /tmp/done_items_from_status.json 2>/dev/null || echo "[]" > /tmp/done_items_from_status.json
           else
-            echo "[]" > /tmp/done_items.json
+            echo "[]" > /tmp/done_items_from_status.json
           fi
-          jq -r '.[]' /tmp/portfolios_chunks/chunk_${{ matrix.chunk_index }}.json >> /tmp/done_items.json 2>/dev/null || true
-          jq -s 'add | unique' /tmp/done_items.json > /tmp/done_items_unique.json
+
+          CHUNK_SIGS=$(cat /tmp/portfolios_chunks/chunk_${{ matrix.chunk_index }}.json)
+
+          jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" '$arr1[0] + $arr2 | unique' > /tmp/done_items_unique.json
           mv /tmp/done_items_unique.json /tmp/done_items.json
           cp /tmp/done_items.json /tmp/portfolios_chunk_cache/done_items.json
           touch /tmp/portfolios_chunk_cache/chunk_completed.flag
+
+          echo "✅ done_items برای chunk ${{ matrix.chunk_index }} ذخیره شد."
 
       - name: 7. ذخیره نتایج در Cache
         if: always()
@@ -2002,7 +2025,7 @@ jobs:
           if [ "$AFTER" -eq 0 ]; then
             echo "✅ all_combinations_portfolios.json خالی شد. به‌روزرسانی completed_portfolios.json..."
             echo '["completed"]' > /tmp/completed_portfolios.json
-            SHA_COMP=$(get_file_sha "$THIRD_REPO" "completed_portfolios.json" || echo "")
+            SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_portfolios.json > /tmp/completed_base64.txt
             cat > /tmp/payload_completed.json <<EOF
           {
@@ -2011,7 +2034,10 @@ jobs:
             "branch": "main"
           }
           EOF
-            [ -n "$SHA_COMP" ] && echo "\"sha\": \"$SHA_COMP\"," >> /tmp/payload_completed.json
+            if [ -n "$SHA_COMP" ]; then
+              jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
+              mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
+            fi
             $CURL -s -X PUT -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
               --data-binary @/tmp/payload_completed.json \
