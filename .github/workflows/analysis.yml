@@ -1132,21 +1132,6 @@ jobs:
           JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
           echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
 
-      - name: 4. دریافت strategies_metadata.json از مخزن سوم
-        if: steps.cache_check.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          HTTP_CODE=$(curl -s -o /tmp/strategies_metadata.json -w "%{http_code}" \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/strategies_metadata.json")
-          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/strategies_metadata.json ]; then
-            echo "❌ strategies_metadata.json یافت نشد (HTTP $HTTP_CODE)."
-            exit 1
-          fi
-
       # [اصلاح]: حذف --signatures-filter چون این فلگ در golden.py تعریف نشده (باعث کرش argparse می‌شد).
       # فیلتر کردن signature‌های مخصوص این چانک قبلاً در مرحله ۳ با کپی انتخابی به /tmp/signatures انجام شده،
       # و golden.py با rglob تمام JSONL های زیر --signatures-dir را به‌درستی می‌خواند.
@@ -1156,7 +1141,6 @@ jobs:
           mkdir -p /tmp/golden_chunk_cache
           python modules/golden.py \
             --signatures-dir /tmp/signatures \
-            --strategies-json /tmp/strategies_metadata.json \
             --output-dir /tmp/golden_chunk_cache \
             --interrupt-flag ${{ runner.temp }}/interrupt.flag \
             --alpha 0.1
@@ -1809,20 +1793,6 @@ jobs:
           fi
           echo "✅ golden_scores.parquet دریافت و رمزگشایی شد."
 
-      - name: 5. دریافت strategies_metadata.json از مخزن سوم
-        if: steps.cache_check.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          HTTP_CODE=$(curl -s -o /tmp/strategies_metadata.json -w "%{http_code}" \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/strategies_metadata.json")
-          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/strategies_metadata.json ]; then
-            echo "❌ strategies_metadata.json یافت نشد (HTTP $HTTP_CODE)."; exit 1
-          fi
-
       # [تغییر ۲]: اضافه کردن --interrupt-flag و --signatures-filter
       - name: 6. اجرای portfolios.py برای این چانک
         if: steps.cache_check.outputs.cache-hit != 'true'
@@ -1832,7 +1802,6 @@ jobs:
             --signatures-dir /tmp/signatures \
             --signatures-filter /tmp/filter.json \
             --golden-scores /tmp/golden_scores/golden_scores.parquet \
-            --strategies-json /tmp/strategies_metadata.json \
             --output-dir /tmp/portfolios_chunk_cache \
             --interrupt-flag ${{ runner.temp }}/interrupt.flag \
             --top-n 15
