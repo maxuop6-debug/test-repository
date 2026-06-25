@@ -540,10 +540,116 @@ jobs:
           fi
 
   # ============================================================
+  # Job 2.5: تولید گزارش‌های جامع نسخه ۵ از داده‌های یکپارچه
+  # ============================================================
+  generate-reports:
+    needs: aggregate-results
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout مخزن اصلی
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
+
+      - name: نصب پایتون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Clone مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${THIRD_REPO}.git" \
+            /tmp/third_repo
+
+      - name: اجرای loader.py
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          python modules/loader.py \
+            --news-dir data/news \
+            --results-dir /tmp/third_repo/aggregated \
+            --strategies-dir /tmp/third_repo/strategies \
+            --output-news /tmp/news.pickle \
+            --output-strategies /tmp/strategies.json
+
+      - name: اجرای calculator_stoploss.py
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          python modules/calculator_stoploss.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --strategies-dir /tmp/third_repo/strategies \
+            --output /tmp/stoploss.json
+
+      - name: اجرای calculator_returns.py
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          python modules/calculator_returns.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --output /tmp/returns.json
+
+      - name: اجرای calculator_risk.py
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          python modules/calculator_risk.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --stoploss-cache /tmp/stoploss.json \
+            --output /tmp/risk.json
+
+      - name: اجرای calculator_inverse.py
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          python modules/calculator_inverse.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --stoploss-cache /tmp/stoploss.json \
+            --output /tmp/inverse.json
+
+      - name: اجرای complete_reporter.py
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          mkdir -p /tmp/reports
+          python modules/complete_reporter.py \
+            --returns-cache /tmp/returns.json \
+            --strategies-json /tmp/strategies.json \
+            --risk-cache /tmp/risk.json \
+            --inverse-cache /tmp/inverse.json \
+            --results-base /tmp/third_repo/aggregated \
+            --news-pickle /tmp/news.pickle \
+            --output-dir /tmp/reports
+
+      - name: Commit و Push گزارش‌ها به مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          cd /tmp/third_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf reports/
+          mkdir -p reports
+          cp -r /tmp/reports/* reports/
+          git add -f reports/
+          git commit -m "update reports from aggregated data (run ${{ github.run_id }})" || echo "No changes to commit"
+          git push origin main
+
+  # ============================================================
   # Job 3: آماده‌سازی صف کارها (ساخت all_combinations.json) با اصلاح کش
   # ============================================================
   prepare-dispatch:
-    needs: aggregate-results
+    needs: [aggregate-results, generate-reports]
     runs-on: ubuntu-latest
     outputs:
       total_batches: ${{ steps.queue.outputs.total_batches }}
