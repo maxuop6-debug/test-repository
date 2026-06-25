@@ -58,7 +58,8 @@ jobs:
         run: |
           python modules/loader.py \
             --news-dir data/news \
-            --results-dir /tmp/third_repo/backtest_results \
+            --results-dir /tmp/third_repo/aggregated \
+            --strategies-dir /tmp/third_repo/strategies \
             --output-news /tmp/news.pickle \
             --output-strategies /tmp/strategies.json
 
@@ -66,42 +67,56 @@ jobs:
         run: |
           python modules/calculator_stoploss.py \
             --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/backtest_results \
+            --results-base /tmp/third_repo/aggregated \
+            --strategies-dir /tmp/third_repo/strategies \
             --output /tmp/stoploss.json
 
-      - name: 6. اجرای calculator_returns.py
+      - name: 6. اجرای calculators.py returns
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
-          python modules/calculator_returns.py \
+          python modules/calculators.py returns \
             --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/backtest_results \
-            --output /tmp/returns.json
+            --results-base /tmp/third_repo/aggregated \
+            --output /tmp/returns.json \
+            --password "$RESULTS_PASSWORD"
 
-      - name: 7. اجرای calculator_risk.py
+      - name: 7. اجرای calculators.py risk
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
-          python modules/calculator_risk.py \
+          python modules/calculators.py risk \
             --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/backtest_results \
+            --results-base /tmp/third_repo/aggregated \
             --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/risk.json
+            --output /tmp/risk.json \
+            --password "$RESULTS_PASSWORD"
 
-      - name: 8. اجرای calculator_inverse.py
+      - name: 8. اجرای calculators.py inverse
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
-          python modules/calculator_inverse.py \
+          python modules/calculators.py inverse \
             --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/backtest_results \
+            --results-base /tmp/third_repo/aggregated \
             --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/inverse.json
+            --output /tmp/inverse.json \
+            --password "$RESULTS_PASSWORD"
 
-      - name: 9. اجرای complete_reporter.py
+      - name: 9. اجرای calculators.py report
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
-          python modules/complete_reporter.py \
+          mkdir -p /tmp/reports
+          python modules/calculators.py report \
             --returns-cache /tmp/returns.json \
             --strategies-json /tmp/strategies.json \
             --risk-cache /tmp/risk.json \
             --inverse-cache /tmp/inverse.json \
-            --results-base /tmp/third_repo/backtest_results \
+            --results-base /tmp/third_repo/aggregated \
             --news-pickle /tmp/news.pickle \
-            --output-dir /tmp/reports
+            --output-dir /tmp/reports \
+            --password "$RESULTS_PASSWORD"
 
       - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
         env:
