@@ -244,68 +244,6 @@ process.stdout.write(dec);
             all_results.append(inv_record)
     
     return all_results
-                    print(f"⚠️ خطا در خواندن {file_path}: {e}")
-            
-            # رکورد اصلی
-            main_record = {
-                "folder_name": folder,
-                "group": group,
-                "file_name": fname,
-                "period_name": period_name,
-                "total_trades": total_trades,
-                "win_trades": win_trades,
-                "loss_trades": loss_trades,
-                "win_rate": win_rate,
-                "max_consecutive_loss": safe_float(risk_data.get("max_consecutive_loss", 0), 0),
-                "max_drawdown": max_drawdown,
-                "profit_loss_ratio": profit_loss_ratio,
-                "sharpe_ratio": sharpe_ratio,
-                "real_return": safe_float(ret_data.get("real", 0), 0),
-                "special_rounded_return": safe_float(ret_data.get("special", 0), 0),
-                "is_inverse": False,
-                "_raw_distribution": raw_distribution,
-                "_move_percents": move_percents,
-                "_stop_loss": stop_loss,
-                "_max_move": max_move
-            }
-            all_results.append(main_record)
-            
-            # ساخت نسخه معکوس اگر توزیع اصلی موجود باشد یا کش معکوس موجود باشد
-            inv_dist = None
-            inv_key = f"{group}_{folder}_{fname}"
-            if inv_key in inverse_dist_cache:
-                inv_dist = inverse_dist_cache[inv_key]
-            elif raw_distribution:
-                # محاسبه مستقیم توزیع معکوس
-                inv_dist = calculate_inverse_distribution(raw_distribution, stop_loss, max_move)
-            
-            if inv_dist is not None:
-                real_inv = calculate_real_return(inv_dist)
-                special_inv = calculate_special_return(inv_dist, move_percents if move_percents else [])
-                # حداکثر ضرر متوالی معکوس: از روی توزیع معکوس محاسبه نمی‌شود، ساده‌سازی: همان مقدار اصلی را معکوس می‌کنیم؟
-                # در نسخه اصلی max_consecutive_loss برای معکوس None گذاشته می‌شد. ما می‌توانیم همان None بگذاریم.
-                inv_record = {
-                    "folder_name": folder + "_INV",
-                    "group": group,
-                    "file_name": "INV_" + fname,
-                    "period_name": period_name,
-                    "total_trades": total_trades,
-                    "win_trades": loss_trades,   # معکوس: سودده اصلی تبدیل به زیانده و بالعکس
-                    "loss_trades": win_trades,
-                    "win_rate": 100.0 - win_rate if win_rate is not None else 50.0,
-                    "max_consecutive_loss": None,   # محاسبه نمی‌کنیم
-                    "max_drawdown": max_drawdown,
-                    "profit_loss_ratio": 1/profit_loss_ratio if profit_loss_ratio > 0 else 0,
-                    "sharpe_ratio": -sharpe_ratio if sharpe_ratio else 0,
-                    "real_return": real_inv,
-                    "special_rounded_return": special_inv,
-                    "is_inverse": True,
-                    "_original_file": fname,
-                    "_original_folder": folder
-                }
-                all_results.append(inv_record)
-    
-    return all_results
 
 def calculate_inverse_distribution(original_dist, stop_loss_initial, max_gain):
     inv_sl = abs(stop_loss_initial)
