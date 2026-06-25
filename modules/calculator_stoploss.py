@@ -43,7 +43,8 @@ def extract_move_percents_from_config(file_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategies-json", required=True, help="خروجی loader")
-    parser.add_argument("--results-base", required=True, help="مسیر پایه نتایج")
+    parser.add_argument("--results-base", required=True, help="مسیر پوشه aggregated/ یا strategies/")
+    parser.add_argument("--strategies-dir", required=False, default="", help="مسیر پوشه strategies/ برای 1.json (اختیاری، برتری دارد)")
     parser.add_argument("--output", required=True, help="فایل خروجی stoploss_cache.json")
     args = parser.parse_args()
 
@@ -53,8 +54,14 @@ def main():
     cache = {}
     for s in strategies:
         folder = s["folder"]
-        group = s["group"]
-        config_path = os.path.join(args.results_base, group, folder, "1.json")
+        # اولویت ۱: config_file از metadata
+        config_path = s.get("config_file", "")
+        # اولویت ۲: strategies_dir/folder/1.json
+        if (not config_path or not os.path.exists(config_path)) and args.strategies_dir:
+            config_path = os.path.join(args.strategies_dir, folder, "1.json")
+        # اولویت ۳: results_base/folder/1.json
+        if not config_path or not os.path.exists(config_path):
+            config_path = os.path.join(args.results_base, folder, "1.json")
         if os.path.exists(config_path):
             with open(config_path, "r", encoding="utf-8") as cf:
                 config_text = cf.read()
@@ -63,9 +70,9 @@ def main():
         else:
             sl = -2.0
             mp = None
-        key = f"{group}_{folder}"
+        key = folder  # کلید جدید: فقط نام استراتژی
         cache[key] = {"stop_loss": sl, "move_percents": mp}
-    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    os.makedirs(os.path.dirname(args.output) if os.path.dirname(args.output) else ".", exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(cache, f, indent=2)
     print(f"✅ کش حد ضرر برای {len(cache)} استراتژی در {args.output} ذخیره شد.")
