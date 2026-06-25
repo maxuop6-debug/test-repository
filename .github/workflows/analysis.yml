@@ -905,16 +905,19 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            # دریافت محتوای فایل
-            gh api "repos/$THIRD_REPO/contents/all_combinations.json" \
+            # دریافت محتوای فایل — در صورت شکست retry می‌شود
+            $CURL -s -o /tmp/current.json \
+              -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
-              > /tmp/current.json 2>/dev/null
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json" 2>/dev/null
             if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
+              echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
             jq -s '.[0] as $c | .[1] as $d
-              | $c - ($c | map(select(. as $i | $d | any(. == $i))))
+              | ($d | unique) as $done_set
+              | $c | map(select(. as $i | ($done_set | index($i)) == null))
             ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
@@ -1238,7 +1241,7 @@ jobs:
             | while IFS= read -r -d '' f; do
                 jq empty "$f" 2>/dev/null && cat "$f" || echo "[]"
               done \
-            | jq -s 'add | unique' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
+            | jq -s 'add | unique_by(.)' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
           [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
 
           MERGED_COUNT=$(jq length /tmp/merged_done.json)
@@ -1256,15 +1259,20 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            gh api "repos/$THIRD_REPO/contents/all_combinations_golden.json" \
+            # FIX 2: دریافت فایل بزرگ — در صورت شکست retry می‌شود، نه exit فوری
+            $CURL -s -o /tmp/current.json \
+              -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
-              > /tmp/current.json 2>/dev/null
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json" 2>/dev/null
             if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
+              echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
+            # FIX 3: فیلتر صحیح — حذف آیتم‌هایی که signature_path آن‌ها در merged_done هست
             jq -s '.[0] as $c | .[1] as $d
-              | $c - ($c | map(select(. as $i | $d | any(. == $i.signature_path))))
+              | ($d | map(.) | unique) as $done_set
+              | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
             ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
@@ -1625,15 +1633,18 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            gh api "repos/$THIRD_REPO/contents/all_combinations_correlation.json" \
+            $CURL -s -o /tmp/current.json \
+              -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
-              > /tmp/current.json 2>/dev/null
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json" 2>/dev/null
             if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
+              echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
             jq -s '.[0] as $c | .[1] as $d
-              | $c - ($c | map(select(. as $i | $d | any(. == $i.signature_path))))
+              | ($d | map(.) | unique) as $done_set
+              | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
             ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
@@ -2034,15 +2045,18 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" \
+            $CURL -s -o /tmp/current.json \
+              -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
-              > /tmp/current.json 2>/dev/null
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json" 2>/dev/null
             if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
+              echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
             jq -s '.[0] as $c | .[1] as $d
-              | $c - ($c | map(select(. as $i | $d | any(. == $i.signature_path))))
+              | ($d | map(.) | unique) as $done_set
+              | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
             ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
