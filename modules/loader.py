@@ -132,44 +132,62 @@ def extract_move_percents_from_config(file_path):
     except:
         return None
 
-def load_strategies(results_dir):
-    """خواندن تمام استراتژی‌ها از پوشه results_dir (شامل 1 و 2)"""
+def load_strategies(aggregated_dir, strategies_dir=None):
+    """خواندن تمام استراتژی‌ها از پوشه aggregated/ (ساختار یکپارچه جدید)
+    
+    aggregated_dir: مسیر پوشه aggregated/ که زیرپوشه‌های آن نام استراتژی‌ها هستند
+    strategies_dir: مسیر پوشه strategies/ برای خواندن فایل 1.json (اختیاری)
+    """
     strategies = []
-    if not os.path.isdir(results_dir):
-        print(f"❌ مسیر نتایج وجود ندارد: {results_dir}")
+    if not os.path.isdir(aggregated_dir):
+        print(f"❌ مسیر aggregated وجود ندارد: {aggregated_dir}")
         return strategies
-    for group in ["1", "2"]:
-        group_path = os.path.join(results_dir, group)
-        if not os.path.isdir(group_path):
+    for strategy_name in sorted(os.listdir(aggregated_dir)):
+        strategy_path = os.path.join(aggregated_dir, strategy_name)
+        if not os.path.isdir(strategy_path):
             continue
-        for folder in os.listdir(group_path):
-            folder_path = os.path.join(group_path, folder)
-            if not os.path.isdir(folder_path):
-                continue
-            config_file = os.path.join(folder_path, "1.json")
-            result_files = [f for f in os.listdir(folder_path) if f.endswith(".json") and f != "1.json"]
-            move_percents = None
-            stop_loss_initial = -2.0
-            max_move_percent = None
-            if os.path.exists(config_file):
-                try:
-                    with open(config_file, "r", encoding='utf-8') as cf:
-                        config_text = cf.read()
-                    stop_loss_initial = extract_stop_loss_from_config(config_text)
-                    move_percents = extract_move_percents_from_config(config_file)
-                    if move_percents:
-                        max_move_percent = max(move_percents)
-                except:
-                    pass
-            strategies.append({
-                "folder": folder,
-                "group": group,
-                "config_file": config_file,
-                "result_files": result_files,
-                "move_percents": move_percents,
-                "stop_loss_initial": stop_loss_initial,
-                "max_move_percent": max_move_percent
-            })
+        aggregated_file = f"{strategy_name}_trades.enc"
+        aggregated_file_path = os.path.join(strategy_path, aggregated_file)
+        if not os.path.exists(aggregated_file_path):
+            print(f"⚠️ فایل یکپارچه یافت نشد: {aggregated_file_path}")
+            continue
+        # جستجوی فایل 1.json در strategies/ یا aggregated/strategy/
+        config_file = None
+        if strategies_dir:
+            candidate = os.path.join(strategies_dir, strategy_name, "1.json")
+            if os.path.exists(candidate):
+                config_file = candidate
+            else:
+                # بررسی فایل .js به‌عنوان جایگزین
+                candidate_js = os.path.join(strategies_dir, strategy_name, f"{strategy_name}.js")
+                if os.path.exists(candidate_js):
+                    config_file = candidate_js
+        if config_file is None:
+            local_candidate = os.path.join(strategy_path, "1.json")
+            if os.path.exists(local_candidate):
+                config_file = local_candidate
+        move_percents = None
+        stop_loss_initial = -2.0
+        max_move_percent = None
+        if config_file and os.path.exists(config_file):
+            try:
+                with open(config_file, "r", encoding='utf-8') as cf:
+                    config_text = cf.read()
+                stop_loss_initial = extract_stop_loss_from_config(config_text)
+                move_percents = extract_move_percents_from_config(config_file)
+                if move_percents:
+                    max_move_percent = max(move_percents)
+            except:
+                pass
+        strategies.append({
+            "folder": strategy_name,
+            "group": "aggregated",
+            "config_file": config_file or "",
+            "aggregated_file": aggregated_file_path,
+            "move_percents": move_percents,
+            "stop_loss_initial": stop_loss_initial,
+            "max_move_percent": max_move_percent
+        })
     return strategies
 
 # ================================ بخش کش ================================
@@ -189,7 +207,8 @@ def save_strategies_cache(strategies, output_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--news-dir", required=True, help="پوشه حاوی CSV اخبار")
-    parser.add_argument("--results-dir", required=True, help="پوشه ریشه نتایج بکتست (شامل 1 و 2)")
+    parser.add_argument("--results-dir", required=True, help="مسیر پوشه aggregated/ (ساختار یکپارچه)")
+    parser.add_argument("--strategies-dir", required=False, default="", help="مسیر پوشه strategies/ برای خواندن 1.json (اختیاری)")
     parser.add_argument("--output-news", required=True, help="مسیر ذخیره cache اخبار (pickle)")
     parser.add_argument("--output-strategies", required=True, help="مسیر ذخیره cache استراتژی‌ها (json)")
     args = parser.parse_args()
@@ -198,8 +217,9 @@ def main():
     news = load_news_files(args.news_dir)
     save_news_cache(news, args.output_news)
 
-    print("🔄 بارگذاری استراتژی‌ها...")
-    strategies = load_strategies(args.results_dir)
+    print("🔄 بارگذاری استراتژی‌ها از aggregated/...")
+    strategies_dir = args.strategies_dir if args.strategies_dir else None
+    strategies = load_strategies(args.results_dir, strategies_dir)
     save_strategies_cache(strategies, args.output_strategies)
 
     print("✅ ماژول loader با موفقیت پایان یافت.")
