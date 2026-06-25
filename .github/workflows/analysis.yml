@@ -1270,10 +1270,13 @@ jobs:
             fi
 
             # FIX 3: فیلتر صحیح — حذف آیتم‌هایی که signature_path آن‌ها در merged_done هست
+            # normalize: هر آیتم در merged_done ممکن است string یا object باشد
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
+              /tmp/merged_done.json > /tmp/merged_done_normalized.json
             jq -s '.[0] as $c | .[1] as $d
-              | ($d | map(.) | unique) as $done_set
+              | ($d | unique) as $done_set
               | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
-            ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
+            ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
             AFTER=$(jq length /tmp/new_content.json)
@@ -1642,10 +1645,13 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
+            # normalize: هر آیتم در merged_done ممکن است string یا object باشد
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
+              /tmp/merged_done.json > /tmp/merged_done_normalized.json
             jq -s '.[0] as $c | .[1] as $d
-              | ($d | map(.) | unique) as $done_set
+              | ($d | unique) as $done_set
               | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
-            ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
+            ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
             AFTER=$(jq length /tmp/new_content.json)
@@ -2054,10 +2060,13 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
+            # normalize: هر آیتم در merged_done ممکن است string یا object باشد
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
+              /tmp/merged_done.json > /tmp/merged_done_normalized.json
             jq -s '.[0] as $c | .[1] as $d
-              | ($d | map(.) | unique) as $done_set
+              | ($d | unique) as $done_set
               | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
-            ' /tmp/current.json /tmp/merged_done.json > /tmp/new_content.json
+            ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
             AFTER=$(jq length /tmp/new_content.json)
