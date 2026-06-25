@@ -103,24 +103,24 @@ def load_news_pickle(pickle_path):
         return pickle.load(f)
 
 # ------------------ ساخت all_results با استراتژی‌های اصلی و معکوس ------------------
-def build_all_results_with_inverse(returns_cache_path, strategies_json_path, risk_cache_path, inverse_cache_path, results_base):
+def build_all_results_with_inverse(returns_cache_path, strategies_json_path, risk_cache_path, inverse_cache_path, results_base=None):
     with open(returns_cache_path, "r") as f:
-        returns = json.load(f)   # key: group_folder_file -> {"real":, "special":}
+        returns = json.load(f)   # key: strategy_name -> {"real":, "special":}
     with open(strategies_json_path, "r") as f:
         strat_data = json.load(f)
     with open(risk_cache_path, "r") as f:
-        risk = json.load(f)      # key: group_folder_file -> {"max_consecutive_loss": , ...}
+        risk = json.load(f)      # key: strategy_name -> {"max_consecutive_loss": , ...}
     # کش معکوس (توزیع معکوس) - اختیاری
     inverse_dist_cache = {}
-    if os.path.exists(inverse_cache_path):
+    if inverse_cache_path and os.path.exists(inverse_cache_path):
         with open(inverse_cache_path, "r") as f:
-            inverse_dist_cache = json.load(f)   # key: group_folder_file -> list of distribution items
+            inverse_dist_cache = json.load(f)   # key: strategy_name -> list of distribution items
     
     strategies = strat_data["strategies"]
     # دیکشنری کمکی برای move_percents و stop_loss_initial به ازای هر استراتژی
     strategy_params = {}
     for s in strategies:
-        key = f"{s['group']}_{s['folder']}"
+        key = s["folder"]
         strategy_params[key] = {
             "move_percents": s.get("move_percents"),
             "stop_loss_initial": s.get("stop_loss_initial", -2.0),
@@ -131,47 +131,119 @@ def build_all_results_with_inverse(returns_cache_path, strategies_json_path, ris
     
     for s in strategies:
         folder = s["folder"]
-        group = s["group"]
-        params = strategy_params[f"{group}_{folder}"]
+        group = s.get("group", "aggregated")
+        params = strategy_params[folder]
         move_percents = params["move_percents"]
         stop_loss = params["stop_loss_initial"]
         max_move = params["max_move_percent"]
         
-        for fname in s["result_files"]:
-            key = f"{group}_{folder}_{fname}"
-            ret_data = returns.get(key, {"real": 0, "special": 0})
-            risk_data = risk.get(key, {"max_consecutive_loss": 0})
-            
-            # خواندن اطلاعات اضافی از فایل اصلی JSON (برای دوره، معاملات، وین‌ریت، ...)
-            file_path = os.path.join(results_base, group, folder, fname)
-            period_name = ""
-            total_trades = 0
-            win_trades = 0
-            loss_trades = 0
-            win_rate = 0.0
-            max_drawdown = 0.0
-            profit_loss_ratio = 0.0
-            sharpe_ratio = 0.0
-            raw_distribution = []  # برای ساخت معکوس در صورت نبود کش
-            
-            if os.path.exists(file_path):
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+        # کلید جدید: نام استراتژی
+        key = folder
+        ret_data = returns.get(key, {"real": 0, "special": 0})
+        risk_data = risk.get(key, {"max_consecutive_loss": 0})
+        
+        # اطلاعات اضافی: از فایل یکپارچه (در صورت دسترسی) یا مقادیر پیش‌فرض
+        period_name = folder
+        total_trades = 0
+        win_trades = 0
+        loss_trades = 0
+        win_rate = 0.0
+        max_drawdown = 0.0
+        profit_loss_ratio = 0.0
+        sharpe_ratio = 0.0
+        raw_distribution = []
+        
+        # تلاش برای خواندن اطلاعات از فایل یکپارچه رمزگشایی‌شده (اگر موجود باشد)
+        aggregated_file = s.get("aggregated_file", "")
+        if aggregated_file and os.path.exists(aggregated_file):
+            try:
+                import subprocess
+                password = os.environ.get("RESULTS_PASSWORD", os.environ.get("DATA_PASSWORD", ""))
+                script = f"""
+const crypto=require('crypto'),fs=require('fs');
+const pass={json.dumps(password)};
+const data=fs.readFileSync({json.dumps(aggregated_file)});
+const key=crypto.scryptSync(pass,'salt',32);
+const iv=data.slice(0,16),enc=data.slice(16);
+const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+process.stdout.write(dec);
+"""
+                result = subprocess.run(["node", "-e", script], capture_output=True)
+                if result.returncode == 0:
+                    data = json.loads(result.stdout.decode("utf-8"))
                     info = data.get("اطلاعات_فایل", {})
-                    period_name = info.get("نام_فایل", "")
+                    period_name = info.get("نام_فایل", folder)
                     stats = data.get("آمار_کلی_معاملات", {})
                     total_trades = safe_float(stats.get("تعداد_کل_معاملات", 0), 0)
                     win_trades = safe_float(stats.get("معاملات_سودده", 0), 0)
                     loss_trades = safe_float(stats.get("معاملات_زیانده", 0), 0)
                     win_rate_str = stats.get("نرخ_برد", "0%")
-                    win_rate = safe_float(win_rate_str.replace("%", ""), 0)
+                    win_rate = safe_float(str(win_rate_str).replace("%", ""), 0)
                     risk_info = data.get("آنالیز_ریسک", {})
-                    max_drawdown = safe_float(risk_info.get("حداکثر_افت_سرمایه", "0%").replace("%", ""), 0)
+                    max_drawdown = safe_float(str(risk_info.get("حداکثر_افت_سرمایه", "0%")).replace("%", ""), 0)
                     profit_loss_ratio = safe_float(risk_info.get("نسبت_سود_به_ضرر", 0), 0)
                     sharpe_ratio = safe_float(risk_info.get("نسبت_شارپ", 0), 0)
                     raw_distribution = data.get("توزیع_دقیق_سود_ضرر", [])
-                except Exception as e:
+            except Exception as e:
+                print(f"⚠️ خطا در خواندن فایل یکپارچه {aggregated_file}: {e}")
+        
+        # رکورد اصلی
+        main_record = {
+            "folder_name": folder,
+            "group": group,
+            "file_name": folder,
+            "period_name": period_name,
+            "total_trades": total_trades,
+            "win_trades": win_trades,
+            "loss_trades": loss_trades,
+            "win_rate": win_rate,
+            "max_consecutive_loss": safe_float(risk_data.get("max_consecutive_loss", 0), 0),
+            "max_drawdown": max_drawdown,
+            "profit_loss_ratio": profit_loss_ratio,
+            "sharpe_ratio": sharpe_ratio,
+            "real_return": safe_float(ret_data.get("real", 0), 0),
+            "special_rounded_return": safe_float(ret_data.get("special", 0), 0),
+            "is_inverse": False,
+            "_raw_distribution": raw_distribution,
+            "_move_percents": move_percents,
+            "_stop_loss": stop_loss,
+            "_max_move": max_move
+        }
+        all_results.append(main_record)
+        
+        # ساخت نسخه معکوس اگر توزیع موجود باشد یا کش معکوس موجود باشد
+        inv_dist = None
+        if key in inverse_dist_cache:
+            inv_dist = inverse_dist_cache[key]
+        elif raw_distribution:
+            inv_dist = calculate_inverse_distribution(raw_distribution, stop_loss, max_move)
+        
+        if inv_dist is not None:
+            real_inv = calculate_real_return(inv_dist)
+            special_inv = calculate_special_return(inv_dist, move_percents if move_percents else [])
+            inv_record = {
+                "folder_name": folder + "_INV",
+                "group": group,
+                "file_name": "INV_" + folder,
+                "period_name": period_name,
+                "total_trades": total_trades,
+                "win_trades": loss_trades,
+                "loss_trades": win_trades,
+                "win_rate": 100.0 - win_rate if win_rate is not None else 50.0,
+                "max_consecutive_loss": None,
+                "max_drawdown": max_drawdown,
+                "profit_loss_ratio": 1/profit_loss_ratio if profit_loss_ratio > 0 else 0,
+                "sharpe_ratio": -sharpe_ratio if sharpe_ratio else 0,
+                "real_return": real_inv,
+                "special_rounded_return": special_inv,
+                "is_inverse": True,
+                "_original_file": folder,
+                "_original_folder": folder
+            }
+            all_results.append(inv_record)
+    
+    return all_results
                     print(f"⚠️ خطا در خواندن {file_path}: {e}")
             
             # رکورد اصلی
@@ -719,7 +791,7 @@ def main():
     parser.add_argument("--strategies-json", required=True)
     parser.add_argument("--risk-cache", required=True)
     parser.add_argument("--inverse-cache", required=False, default="")
-    parser.add_argument("--results-base", required=True)
+    parser.add_argument("--results-base", required=False, default="", help="مسیر پوشه aggregated/ (اختیاری، برای خواندن فایل‌های .enc)")
     parser.add_argument("--news-pickle", required=True)
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
@@ -728,31 +800,27 @@ def main():
     all_results = build_all_results_with_inverse(
         args.returns_cache, args.strategies_json, args.risk_cache,
         args.inverse_cache if args.inverse_cache else None,
-        args.results_base
+        args.results_base if args.results_base else None
     )
-    print(f"✅ تعداد کل فایل‌های بارگذاری شده (اصلی+معکوس): {len(all_results)}")
+    print(f"✅ تعداد کل استراتژی‌های بارگذاری شده (اصلی+معکوس): {len(all_results)}")
     
-    # 1. خلاصه هر پوشه (در پوشه خود استراتژی)
-    # گروه‌بندی بر اساس folder_name و group (برای استراتژی اصلی و معکوس جداگانه)
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # 1. خلاصه هر پوشه — برای ساختار aggregated پوشه خلاصه در output_dir ذخیره می‌شود
     folders_map = defaultdict(list)
     for r in all_results:
-        # پوشه واقعی (برای ذخیره خلاصه) باید در results_base/group/folder_name باشد
-        # برای پوشه‌های معکوس، name با _INV است اما محل فیزیکی وجود ندارد، پس خلاصه را در همان پوشه اصلی ذخیره می‌کنیم؟
-        # در نسخه اصلی، نسخه معکوس پوشه مجزا نداشت. برای سادگی، فقط برای پوشه‌های غیر معکوس خلاصه می‌سازیم
         if r.get("is_inverse"):
             continue
-        key = (r["folder_name"], r["group"])
+        key = r["folder_name"]
         folders_map[key].append(r)
-    for (folder, group), files in folders_map.items():
-        folder_path = os.path.join(args.results_base, group, folder)
-        if not os.path.exists(folder_path):
-            continue
-        # پارامترهای move_percents و stop_loss از اولین فایل
+    for folder, files in folders_map.items():
+        folder_output_path = os.path.join(args.output_dir, folder)
+        os.makedirs(folder_output_path, exist_ok=True)
         first = files[0]
         move_percents = first.get("_move_percents")
         stop_loss = first.get("_stop_loss", -2.0)
         max_move = first.get("_max_move")
-        create_folder_summary_csv(folder, folder_path, files, move_percents, stop_loss, max_move)
+        create_folder_summary_csv(folder, folder_output_path, files, move_percents, stop_loss, max_move)
     
     # 2. گزارش کلی
     create_global_report(all_results, args.output_dir)
