@@ -898,28 +898,19 @@ jobs:
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
-            $CURL -s -o /tmp/current.json \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$(date +%s)"
-            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت فایل فعلی ناموفق."; exit 1
+            # دریافت SHA با gh api (مثل batch) — با فایل‌های بزرگ هم کار می‌کند
+            SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations.json" -q '.sha' 2>/dev/null || echo "")
+            if [ -z "$SHA" ]; then
+              echo "ERROR: SHA نامعتبر — پاسخ gh api: $(gh api "repos/$THIRD_REPO/contents/all_combinations.json" 2>&1 | head -c 300)"
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            SHA=""
-            for sha_try in 1 2 3 4 5; do
-              SHA_RESP=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$(date +%s)")
-              SHA=$(echo "$SHA_RESP" | jq -r '.sha // empty' 2>/dev/null)
-              [ -n "$SHA" ] && break
-              echo "⚠️ تلاش $sha_try برای گرفتن SHA ناموفق بود — پاسخ: $(echo "$SHA_RESP" | head -c 200)"
-              sleep $(( (RANDOM % 4) + 2 ))
-            done
-            if [ -z "$SHA" ]; then
-              echo "ERROR: SHA نامعتبر پس از چند تلاش."
-              RETRY=$((RETRY+1))
-              if [ $RETRY -ge $MAX ]; then exit 1; fi
-              continue
+            # دریافت محتوای فایل
+            gh api "repos/$THIRD_REPO/contents/all_combinations.json" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              > /tmp/current.json 2>/dev/null
+            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
+              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
             fi
 
             jq -s '.[0] as $c | .[1] as $d
@@ -1259,27 +1250,17 @@ jobs:
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
-            $CURL -s -o /tmp/current.json \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json?t=$(date +%s)"
-            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت فایل فعلی ناموفق."; exit 1
+            SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations_golden.json" -q '.sha' 2>/dev/null || echo "")
+            if [ -z "$SHA" ]; then
+              echo "ERROR: SHA نامعتبر — پاسخ gh api: $(gh api "repos/$THIRD_REPO/contents/all_combinations_golden.json" 2>&1 | head -c 300)"
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            SHA=""
-            for sha_try in 1 2 3 4 5; do
-              SHA_RESP=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json?t=$(date +%s)")
-              SHA=$(echo "$SHA_RESP" | jq -r '.sha // empty' 2>/dev/null)
-              [ -n "$SHA" ] && break
-              sleep $(( (RANDOM % 4) + 2 ))
-            done
-            if [ -z "$SHA" ]; then
-              echo "ERROR: SHA نامعتبر پس از چند تلاش."
-              RETRY=$((RETRY+1))
-              if [ $RETRY -ge $MAX ]; then exit 1; fi
-              continue
+            gh api "repos/$THIRD_REPO/contents/all_combinations_golden.json" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              > /tmp/current.json 2>/dev/null
+            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
+              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
             fi
 
             jq -s '.[0] as $c | .[1] as $d
@@ -1638,27 +1619,17 @@ jobs:
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
-            $CURL -s -o /tmp/current.json \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)"
-            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت فایل فعلی ناموفق."; exit 1
+            SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations_correlation.json" -q '.sha' 2>/dev/null || echo "")
+            if [ -z "$SHA" ]; then
+              echo "ERROR: SHA نامعتبر — پاسخ gh api: $(gh api "repos/$THIRD_REPO/contents/all_combinations_correlation.json" 2>&1 | head -c 300)"
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            SHA=""
-            for sha_try in 1 2 3 4 5; do
-              SHA_RESP=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)")
-              SHA=$(echo "$SHA_RESP" | jq -r '.sha // empty' 2>/dev/null)
-              [ -n "$SHA" ] && break
-              sleep $(( (RANDOM % 4) + 2 ))
-            done
-            if [ -z "$SHA" ]; then
-              echo "ERROR: SHA نامعتبر پس از چند تلاش."
-              RETRY=$((RETRY+1))
-              if [ $RETRY -ge $MAX ]; then exit 1; fi
-              continue
+            gh api "repos/$THIRD_REPO/contents/all_combinations_correlation.json" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              > /tmp/current.json 2>/dev/null
+            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
+              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
             fi
 
             jq -s '.[0] as $c | .[1] as $d
@@ -2057,27 +2028,17 @@ jobs:
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
-            $CURL -s -o /tmp/current.json \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json?t=$(date +%s)"
-            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت فایل فعلی ناموفق."; exit 1
+            SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" -q '.sha' 2>/dev/null || echo "")
+            if [ -z "$SHA" ]; then
+              echo "ERROR: SHA نامعتبر — پاسخ gh api: $(gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" 2>&1 | head -c 300)"
+              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            SHA=""
-            for sha_try in 1 2 3 4 5; do
-              SHA_RESP=$($CURL -s -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json?t=$(date +%s)")
-              SHA=$(echo "$SHA_RESP" | jq -r '.sha // empty' 2>/dev/null)
-              [ -n "$SHA" ] && break
-              sleep $(( (RANDOM % 4) + 2 ))
-            done
-            if [ -z "$SHA" ]; then
-              echo "ERROR: SHA نامعتبر پس از چند تلاش."
-              RETRY=$((RETRY+1))
-              if [ $RETRY -ge $MAX ]; then exit 1; fi
-              continue
+            gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              > /tmp/current.json 2>/dev/null
+            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
+              echo "ERROR: دریافت محتوای فایل ناموفق."; exit 1
             fi
 
             jq -s '.[0] as $c | .[1] as $d
