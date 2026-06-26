@@ -177,7 +177,6 @@ jobs:
           TOTAL_COMBOS=$(jq length /tmp/all_combinations.json)
           echo "[DEBUG] تعداد کل ترکیب‌ها (قبل از cap): $TOTAL_COMBOS"
 
-          # محدود کردن به حداکثر ۱۳۰۰۰ ترکیب در هر اجرا
           MAX_COMBOS_PER_RUN=13000
           if [ "$TOTAL_COMBOS" -gt "$MAX_COMBOS_PER_RUN" ]; then
             echo "[DEBUG] تعداد ترکیب‌ها ($TOTAL_COMBOS) از سقف ($MAX_COMBOS_PER_RUN) بیشتر است — برش اعمال می‌شود."
@@ -444,16 +443,16 @@ jobs:
               const js=fs.readFileSync('/tmp/prep/strat.js','utf8');
               let mp=[];
               let mpSource='none';
-              const sm=js.match(/stopLossStages\s*[:=]\s*\[([\s\S]*?)\]/);
+              const sm=js.match(/stopLossStages\\s*[:=]\\s*\\[([\\s\\S]*?)\\]/);
               if(sm){
-                for(const m of sm[1].matchAll(/movePercent\s*:\s*([\d.]+)/g)) mp.push(parseFloat(m[1]));
+                for(const m of sm[1].matchAll(/movePercent\\s*:\\s*([\\d.]+)/g)) mp.push(parseFloat(m[1]));
                 if(mp.length>0) mpSource='stopLossStages';
               }
               if(mp.length===0){
-                let mm=js.match(/movePercent\s*[:=]\s*\[(.*?)\]/s);
-                if(mm){let n=mm[1].match(/[\d.]+/g);if(n){mp=n.map(Number);mpSource='movePercent_direct';}}
+                let mm=js.match(/movePercent\\s*[:=]\\s*\\[(.*?)\\]/s);
+                if(mm){let n=mm[1].match(/[\\d.]+/g);if(n){mp=n.map(Number);mpSource='movePercent_direct';}}
               }
-              let sl=js.match(/stopLossInitial\s*[:=]\s*(-?[\d.]+)/);
+              let sl=js.match(/stopLossInitial\\s*[:=]\\s*(-?[\\d.]+)/);
               if(!sl){
                 console.error('__NO_STOP_LOSS_INITIAL__');
                 process.exit(1);
@@ -913,14 +912,12 @@ jobs:
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
-            # دریافت SHA با gh api (مثل batch) — با فایل‌های بزرگ هم کار می‌کند
             SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations.json" -q '.sha' 2>/dev/null || echo "")
             if [ -z "$SHA" ]; then
               echo "ERROR: SHA نامعتبر — پاسخ gh api: $(gh api "repos/$THIRD_REPO/contents/all_combinations.json" 2>&1 | head -c 300)"
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            # دریافت محتوای فایل — در صورت شکست retry می‌شود
             $CURL -s -o /tmp/current.json \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
@@ -1048,7 +1045,6 @@ jobs:
             exit 0
           fi
 
-          # محدودیت ۱۳۰۰۰
           if [ "$TOTAL" -gt 13000 ]; then
             echo "$SIG_FILES" | jq '.[:13000]' > /tmp/golden_chunks/signatures_capped.json
             TOTAL=13000
@@ -1197,17 +1193,14 @@ jobs:
         run: |
           mkdir -p /tmp/golden_chunk_cache
 
-          # خواندن آرایه‌ی processed_signatures از golden_status.json (اگر وجود دارد)
           if [ -f /tmp/golden_chunk_cache/golden_status.json ]; then
             jq -c '.processed_signatures // []' /tmp/golden_chunk_cache/golden_status.json > /tmp/done_items_from_status.json 2>/dev/null || echo "[]" > /tmp/done_items_from_status.json
           else
             echo "[]" > /tmp/done_items_from_status.json
           fi
 
-          # خواندن آرایه‌ی امضاهای این چانک
           CHUNK_SIGS=$(cat /tmp/golden_chunks/chunk_${{ matrix.chunk_index }}.json)
 
-          # ترکیب دو آرایه و حذف تکراری‌ها
           jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" '$arr1[0] + $arr2 | unique' > /tmp/done_items_unique.json
           mv /tmp/done_items_unique.json /tmp/done_items.json
           cp /tmp/done_items.json /tmp/golden_chunk_cache/done_items.json
@@ -1274,7 +1267,6 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
             fi
 
-            # FIX 2: دریافت فایل بزرگ — در صورت شکست retry می‌شود، نه exit فوری
             $CURL -s -o /tmp/current.json \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
@@ -1284,8 +1276,6 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
-            # FIX 3: فیلتر صحیح — حذف آیتم‌هایی که signature_path آن‌ها در merged_done هست
-            # normalize: هر آیتم در merged_done ممکن است string یا object باشد
             jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
               /tmp/merged_done.json > /tmp/merged_done_normalized.json
             jq -s '.[0] as $c | .[1] as $d
@@ -1324,7 +1314,6 @@ jobs:
           done
           [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
 
-          # اگر صف خالی شد، completed_golden.json را به‌روز کن
           if [ "$AFTER" -eq 0 ]; then
             echo "✅ all_combinations_golden.json خالی شد. به‌روزرسانی completed_golden.json..."
             echo '["completed"]' > /tmp/completed_golden.json
@@ -1338,7 +1327,6 @@ jobs:
           }
           EOF
             if [ -n "$SHA_COMP" ]; then
-              # اضافه کردن sha به payload
               jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
               mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
             fi
@@ -1418,43 +1406,117 @@ jobs:
           path: /tmp/all_signatures/
           retention-days: 1
 
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰۰ تایی با محدودیت ۱۳۰۰۰
+      - name: نصب پایتون برای تولید چانک‌های signature-based
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: تولید چانک‌های مبتنی بر signature یکتا و فیلتر با all_combinations_correlation.json
         id: gen
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           mkdir -p /tmp/correlation_chunks
-          SIG_FILES=$(find /tmp/all_signatures -name '*.jsonl' | sed 's#^/tmp/all_signatures/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          TOTAL=$(echo "$SIG_FILES" | jq 'length')
 
-          if [ "$TOTAL" -eq 0 ]; then
+          # دانلود all_combinations_correlation.json (صف واقعی)
+          HTTP_CODE=$(curl -s -o /tmp/all_combinations_correlation.json -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json")
+          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/all_combinations_correlation.json ] || ! jq empty /tmp/all_combinations_correlation.json 2>/dev/null; then
+            echo "❌ فایل all_combinations_correlation.json نامعتبر یا یافت نشد (کد $HTTP_CODE)"
             echo "empty=true" >> $GITHUB_OUTPUT
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          if [ "$TOTAL" -gt 13000 ]; then
-            echo "$SIG_FILES" | jq '.[:13000]' > /tmp/correlation_chunks/signatures_capped.json
-            TOTAL=13000
-          else
-            echo "$SIG_FILES" > /tmp/correlation_chunks/signatures_capped.json
-          fi
-          SIG_FILES_CAPPED=$(cat /tmp/correlation_chunks/signatures_capped.json)
-
-          CHUNK_SIZE=500
-          CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-          if [ "$CHUNK_COUNT" -gt 256 ]; then
-            CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
-            CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          QUEUE_COUNT=$(jq length /tmp/all_combinations_correlation.json)
+          echo "[DEBUG] تعداد آیتم‌های صف: $QUEUE_COUNT"
+          if [ "$QUEUE_COUNT" -eq 0 ]; then
+            echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
+          # تولید چانک‌ها با اسکریپت پایتون
+          python3 - <<'PYEOF'
+import json, math, os, pathlib
+
+ALL_SIGS_DIR = "/tmp/all_signatures"
+QUEUE_FILE   = "/tmp/all_combinations_correlation.json"
+OUT_DIR      = "/tmp/correlation_chunks"
+
+# ── ۱. خواندن همه signature یکتا از فایل‌های JSONL
+unique_sigs = {}  # (coin_composition, signature) -> True
+for jf in pathlib.Path(ALL_SIGS_DIR).rglob("*.jsonl"):
+    with open(jf) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            cc  = rec.get("coin_composition") or rec.get("coin") or ""
+            sig = rec.get("signature") or rec.get("strategy") or ""
+            if cc and sig:
+                unique_sigs[(cc, sig)] = True
+
+# ── ۲. خواندن صف و تبدیل به کلید (coin_composition, signature)
+with open(QUEUE_FILE) as f:
+    queue = json.load(f)
+
+def extract_key(item):
+    if "coin_composition" in item and "signature" in item:
+        return (item["coin_composition"], item["signature"])
+    sp = item.get("signature_path", "")
+    # مثال: signatures/module/strategy/coin.jsonl
+    parts = sp.replace("\\", "/").split("/")
+    # coin_composition = نام فایل (بدون پسوند)
+    # signature = نام استراتژی (پوشه والد)
+    if len(parts) >= 3:
+        return (parts[-1].replace(".jsonl", ""), parts[-2])
+    return (sp, sp)
+
+# ── ۳. فیلتر: فقط آیتم‌هایی که در unique_sigs وجود دارند
+filtered = [item for item in queue if extract_key(item) in unique_sigs]
+total = len(filtered)
+print(f"[DEBUG] کل صف: {len(queue)}  بعد از فیلتر: {total}")
+
+if total == 0:
+    pathlib.Path(f"{OUT_DIR}/empty.flag").touch()
+else:
+    num_chunks = max(1, min(18, math.ceil(total / 111)))
+    chunk_size  = math.ceil(total / num_chunks)
+    for i in range(num_chunks):
+        chunk = filtered[i*chunk_size:(i+1)*chunk_size]
+        out = []
+        for item in chunk:
+            k = extract_key(item)
+            out.append({"coin_composition": k[0], "signature": k[1]})
+        with open(f"{OUT_DIR}/chunk_{i}.json", "w") as f:
+            json.dump(out, f)
+    with open(f"{OUT_DIR}/num_chunks.txt", "w") as f:
+        f.write(str(num_chunks))
+    print(f"[DEBUG] num_chunks={num_chunks}  chunk_size≈{chunk_size}")
+PYEOF
+
+          if [ -f /tmp/correlation_chunks/empty.flag ]; then
+            echo "empty=true" >> $GITHUB_OUTPUT
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          NUM_CHUNKS=$(cat /tmp/correlation_chunks/num_chunks.txt)
           INDICES="["
-          for ((i=0; i<CHUNK_COUNT; i++)); do
-            START=$((i * CHUNK_SIZE))
-            END=$((START + CHUNK_SIZE))
-            echo "$SIG_FILES_CAPPED" | jq ".[$START:$END]" > /tmp/correlation_chunks/chunk_${i}.json
-            if [ $i -gt 0 ]; then INDICES+=", "; fi
+          for ((i=0; i<NUM_CHUNKS; i++)); do
+            [ $i -gt 0 ] && INDICES+=", "
             INDICES+="$i"
           done
           INDICES+="]"
+          echo "[DEBUG] INDICES=$INDICES"
           echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
           echo "empty=false" >> $GITHUB_OUTPUT
 
@@ -1539,26 +1601,12 @@ jobs:
           name: all-signatures-${{ github.run_id }}
           path: /tmp/all_signatures
 
-      - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
+      - name: 3. آماده‌سازی signatures برای این چانک
         if: steps.prev_check.outputs.already_done != 'true'
         run: |
           mkdir -p /tmp/signatures
-          CHUNK_INDEX=${{ matrix.chunk_index }}
-          SIG_PATHS=$(jq -r '.[]' /tmp/correlation_chunks/chunk_${CHUNK_INDEX}.json)
-
-          COPIED=0
-          while IFS= read -r REL_PATH; do
-            SRC="/tmp/all_signatures/$REL_PATH"
-            DEST="/tmp/signatures/$REL_PATH"
-            mkdir -p "$(dirname "$DEST")"
-            if [ -f "$SRC" ]; then
-              cp "$SRC" "$DEST"
-              COPIED=$((COPIED+1))
-            fi
-          done <<< "$SIG_PATHS"
-
-          JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
+          cp -r /tmp/all_signatures/. /tmp/signatures/
+          echo "✅ همه signatureها کپی شدند (فیلتر توسط --signatures-filter انجام می‌شود)"
 
       - name: 5. اجرای correlation.py برای این چانک
         if: steps.prev_check.outputs.already_done != 'true'
@@ -1569,6 +1617,7 @@ jobs:
             --news-dir data/news \
             --output-dir /tmp/correlation_chunk_cache \
             --interrupt-flag ${{ runner.temp }}/interrupt.flag \
+            --signatures-filter /tmp/correlation_chunks/chunk_${{ matrix.chunk_index }}.json \
             --resume
           echo "✅ correlation chunk ${{ matrix.chunk_index }} پردازش شد."
 
@@ -1585,7 +1634,9 @@ jobs:
 
           CHUNK_SIGS=$(cat /tmp/correlation_chunks/chunk_${{ matrix.chunk_index }}.json)
 
-          jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" '$arr1[0] + $arr2 | unique' > /tmp/done_items_unique.json
+          jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" \
+            '$arr1[0] + $arr2 | unique_by(.coin_composition + "|||" + .signature)' \
+            > /tmp/done_items_unique.json
           mv /tmp/done_items_unique.json /tmp/done_items.json
           cp /tmp/done_items.json /tmp/correlation_chunk_cache/done_items.json
           touch /tmp/correlation_chunk_cache/chunk_completed.flag
@@ -1633,7 +1684,8 @@ jobs:
             | while IFS= read -r -d '' f; do
                 jq empty "$f" 2>/dev/null && cat "$f" || echo "[]"
               done \
-            | jq -s 'add | unique' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
+            | jq -s 'add // [] | unique_by(.coin_composition + "|||" + .signature)' \
+            > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
           [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
 
           MERGED_COUNT=$(jq length /tmp/merged_done.json)
@@ -1642,6 +1694,10 @@ jobs:
             echo "ℹ️ هیچ signature موفقی برای حذف وجود ندارد."
             exit 0
           fi
+
+          # تبدیل done_items به set کلیدهای (coin_composition|||signature)
+          jq '[.[] | .coin_composition + "|||" + .signature] | unique' \
+            /tmp/merged_done.json > /tmp/done_keys.json
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
@@ -1660,13 +1716,23 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
-            # normalize: هر آیتم در merged_done ممکن است string یا object باشد
-            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
-              /tmp/merged_done.json > /tmp/merged_done_normalized.json
-            jq -s '.[0] as $c | .[1] as $d
-              | ($d | unique) as $done_set
-              | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
-            ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
+            # حذف آیتم‌هایی که کلید (coin_composition, signature) آن‌ها در done_keys هست
+            jq -s '
+              .[0] as $c | .[1] as $done_keys |
+              ($done_keys | unique) as $dk |
+              $c | map(
+                if .coin_composition and .signature then
+                  (.coin_composition + "|||" + .signature) as $k | select(($dk | index($k)) == null)
+                else
+                  (.signature_path // "") as $sp |
+                  ($sp | split("/")) as $parts |
+                  (if ($parts | length) >= 3 then
+                    (($parts[-1] | sub("\\.jsonl$"; "")) + "|||" + $parts[-2])
+                  else $sp + "|||" + $sp end) as $k |
+                  select(($dk | index($k)) == null)
+                end
+              )
+            ' /tmp/current.json /tmp/done_keys.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
             AFTER=$(jq length /tmp/new_content.json)
@@ -2065,7 +2131,6 @@ jobs:
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
-            # normalize: هر آیتم در merged_done ممکن است string یا object باشد
             jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
               /tmp/merged_done.json > /tmp/merged_done_normalized.json
             jq -s '.[0] as $c | .[1] as $d
