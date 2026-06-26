@@ -13,7 +13,7 @@ import pickle
 import argparse
 import logging
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from collections import defaultdict
 
@@ -72,9 +72,10 @@ def apply_special_rounding(percent, move_percents):
     try:
         if percent > 0:
             result = round_to_nearest(percent + 0.05, move_percents) - 0.05
+            return result - 0.1
         else:
-            result = -(round_to_nearest(abs(percent) + 0.05, move_percents) - 0.05)
-        return result - 0.1
+            result = round_to_nearest(abs(percent) + 0.05, move_percents) - 0.05
+            return -(result + 0.1)
     except Exception:
         return percent
 
@@ -157,17 +158,21 @@ def max_consecutive_count(trades):
     return best
 
 def consecutive_loss_value(count, stop_loss):
+    """مجموع ضررهای متوالی بر اساس درصد stop_loss."""
     count = int(count or 0)
-    return count * float(stop_loss) + count * -0.1
+    return count * float(stop_loss)  # stop_loss باید منفی باشد مثلاً -2.0
 
 def max_drawdown(trades):
-    peak = cum = dd = 0.0
+    peak = cum = 0.0
+    dd = 0.0
     for t in trades:
         cum += safe_percentage(t.get("profitPercent", 0))
         if cum > peak:
             peak = cum
-        dd = max(dd, peak - cum)
-    return dd
+        drawdown = peak - cum
+        if drawdown > dd:
+            dd = drawdown
+    return -dd  # منفی — افت سرمایه
 
 def sharpe_ratio(trades):
     profits = [safe_percentage(t.get("profitPercent", 0)) for t in trades]
@@ -214,6 +219,7 @@ def build_inverse_dist(trades, stop_loss, max_gain):
 def process_file(enc_path, move_percents_override=None, stop_loss_override=None, password=None):
     """
     خروجی: {
+        "_meta": {"move_percents": [...], "stop_loss": float, "max_move_percent": float|None},
         symbol: {
             "trades": [...],
             "real": float, "special": float,
@@ -228,21 +234,21 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
     trades = data["trades"]
     meta = data["metadata"]
 
-    mp = move_percents_override or meta.get("move_percents") or []
+    mp = move_percents_override if move_percents_override is not None else (meta.get("move_percents") or [])
     sl = stop_loss_override if stop_loss_override is not None else meta.get("stop_loss_initial", -2.0)
     max_g = meta.get("max_move_percent") or (max(mp) if mp else None)
 
     if not trades:
         log.warning("%s: هیچ معامله‌ای وجود ندارد.", enc_path)
-        return {}
+        return {"_meta": {"move_percents": mp, "stop_loss": sl, "max_move_percent": max_g}}
 
     groups = group_by_symbol(trades)
     log.info("%s: %d symbol یافت شد: %s", enc_path, len(groups), list(groups.keys()))
 
-    result = {}
+    result = {"_meta": {"move_percents": mp, "stop_loss": sl, "max_move_percent": max_g}}
     for sym, sym_trades in groups.items():
         wins = sum(1 for t in sym_trades if safe_percentage(t.get("profitPercent", 0)) > 0)
-        losses = len(sym_trades) - wins
+        losses = sum(1 for t in sym_trades if safe_percentage(t.get("profitPercent", 0)) < 0)
         wr = (wins / len(sym_trades) * 100) if sym_trades else 0.0
         mc = max_consecutive_count(sym_trades)
         r = {
@@ -286,6 +292,8 @@ def cmd_returns(args):
         try:
             per_sym = process_file(enc, mp, password=password)
             for sym, r in per_sym.items():
+                if sym == "_meta":
+                    continue
                 key = f"{folder}_{sym}"
                 cache[key] = {"real": r["real"], "special": r["special"]}
                 log.info("  کش: %s → real=%.4f special=%.4f", key, r["real"], r["special"])
@@ -318,6 +326,8 @@ def cmd_risk(args):
         try:
             per_sym = process_file(enc, stop_loss_override=sl, password=password)
             for sym, r in per_sym.items():
+                if sym == "_meta":
+                    continue
                 key = f"{folder}_{sym}"
                 cache[key] = {"max_consecutive_loss": r["max_cons_loss"], "max_consecutive_count": r["max_cons_count"]}
                 log.info("  کش: %s → count=%d loss=%.4f", key, r["max_cons_count"], r["max_cons_loss"])
@@ -353,6 +363,8 @@ def cmd_inverse(args):
         try:
             per_sym = process_file(enc, mp, sl, password=password)
             for sym, r in per_sym.items():
+                if sym == "_meta":
+                    continue
                 key = f"{folder}_{sym}"
                 cache[key] = r["inv_dist"]
                 log.info("  کش: %s → %d سطح", key, len(r["inv_dist"]))
@@ -411,7 +423,6 @@ def cmd_report(args):
     # 5. تحلیل تکمیلی
     if news_events:
         _complementary(all_results, news_events, args.output_dir)
-        _lag_correlation(all_results, news_events, args.output_dir)
 
     log.info("✅ همه گزارش‌ها تولید شدند.")
 
@@ -437,25 +448,27 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
         if enc and os.path.exists(enc):
             try:
                 per_sym = process_file(enc, mp, sl, password=password)
+                meta_from_file = per_sym.pop("_meta", {})
                 trades_by_sym = per_sym
-                # به‌روزرسانی mp/sl از metadata اگر خالی بود
-                data = load_aggregated_data(enc, password)
-                meta = data["metadata"]
+                # به‌روزرسانی mp/sl از metadata فایل اگر خالی بود (بدون decrypt مجدد)
                 if not mp:
-                    mp = meta.get("move_percents") or []
+                    mp = meta_from_file.get("move_percents") or []
                 if sl == -2.0:
-                    sl = meta.get("stop_loss_initial", -2.0)
+                    sl = meta_from_file.get("stop_loss", -2.0)
                 if max_move is None:
-                    max_move = meta.get("max_move_percent")
+                    max_move = meta_from_file.get("max_move_percent")
             except Exception as e:
                 log.error("خطا بارگذاری %s برای report: %s", enc, e, exc_info=True)
         else:
             log.warning("استراتژی %s: فایل %s موجود نیست – فقط کش.", folder, enc)
 
-        # symbols از trades یا کش
-        symbols = set(trades_by_sym.keys()) or {
-            k.split("_", 1)[1] for k in returns_cache if k.startswith(f"{folder}_")
-        } or {"unknown"}
+        # symbols از trades یا کش — پویا برای هر تعداد کوین
+        if trades_by_sym:
+            symbols = set(trades_by_sym.keys())
+        else:
+            symbols = {k[len(folder)+1:] for k in returns_cache if k.startswith(f"{folder}_")}
+        if not symbols:
+            symbols = {"unknown"}
 
         for sym in symbols:
             ck = f"{folder}_{sym}"
@@ -503,21 +516,54 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
             all_results.append(main_rec)
 
             if inv_d is not None:
+                # محاسبه ریسک برای حالت معکوس بر اساس trades معکوس
+                if rd:
+                    inv_trades = []
+                    inv_sl = abs(sl)
+                    max_g = max_move if max_move is not None else (max(mp) if mp else None)
+                    for t in rd["trades"]:
+                        p = safe_percentage(t.get("profitPercent", 0))
+                        if p > 0:
+                            inv_p = -inv_sl
+                        elif p < 0:
+                            g = abs(p)
+                            inv_p = min(g, max_g) if max_g is not None else g
+                        else:
+                            inv_p = 0.0
+                        inv_trades.append({"profitPercent": inv_p})
+                    inv_mc_count = max_consecutive_count(inv_trades)
+                    inv_mc_loss = consecutive_loss_value(inv_mc_count, -inv_sl)
+                    inv_dd = max_drawdown(inv_trades)
+                    inv_sh = sharpe_ratio(inv_trades)
+                    inv_pl = profit_loss_ratio(inv_trades)
+                    inv_wins = sum(1 for t in inv_trades if t["profitPercent"] > 0)
+                    inv_losses = sum(1 for t in inv_trades if t["profitPercent"] < 0)
+                    inv_wr = (inv_wins / len(inv_trades) * 100) if inv_trades else 100.0 - wr
+                else:
+                    inv_mc_count = 0
+                    inv_mc_loss = None
+                    inv_dd = dd
+                    inv_sh = -sh
+                    inv_pl = (1 / pl) if pl > 0 else 0
+                    inv_wins = losses
+                    inv_losses = wins
+                    inv_wr = 100.0 - wr
+
                 inv_rec = {
                     "folder_name": folder + "_INV", "group": group,
                     "file_name": f"INV_{folder}_{sym}", "period_name": folder, "symbol": sym,
-                    "total_trades": total, "win_trades": losses, "loss_trades": wins,
-                    "win_rate": 100.0 - wr,
-                    "max_consecutive_loss": None, "max_consecutive_count": 0,
-                    "max_drawdown": dd,
-                    "profit_loss_ratio": (1 / pl) if pl > 0 else 0,
-                    "sharpe_ratio": -sh,
+                    "total_trades": total, "win_trades": inv_wins, "loss_trades": inv_losses,
+                    "win_rate": inv_wr,
+                    "max_consecutive_loss": inv_mc_loss, "max_consecutive_count": inv_mc_count,
+                    "max_drawdown": inv_dd,
+                    "profit_loss_ratio": inv_pl,
+                    "sharpe_ratio": inv_sh,
                     "real_return": inv_real, "special_rounded_return": inv_spec,
                     "is_inverse": True,
                     "_move_percents": mp, "_stop_loss": sl, "_max_move": max_move,
                 }
                 all_results.append(inv_rec)
-                log.info("  ✓ INV %s | real=%.4f | special=%.4f", ck, inv_real, inv_spec)
+                log.info("  ✓ INV %s | real=%.4f | special=%.4f | cons=%d", ck, inv_real, inv_spec, inv_mc_count)
 
     return all_results
 
@@ -558,7 +604,7 @@ def _folder_summary(folder_name, folder_path, recs):
             ml = f"{r['max_consecutive_loss']:.2f}" if r.get("max_consecutive_loss") is not None else "-"
             sh = f"{r['sharpe_ratio']:.3f}" if r.get("sharpe_ratio") is not None else "-"
             w.writerow([i, r["symbol"], r["total_trades"], r["win_trades"], r["loss_trades"],
-                        f"{r['win_rate']:.2f}", f"{r['real_return']:.4f}", f"{sp:.4f}",
+                        f"{r.get('win_rate', 0):.2f}", f"{r['real_return']:.4f}", f"{sp:.4f}",
                         ml, r.get("max_consecutive_count", 0),
                         f"{r.get('max_drawdown', 0):.2f}", f"{r.get('profit_loss_ratio', 0):.3f}",
                         sh, status])
@@ -619,7 +665,7 @@ def _comparison_tables(all_results, out_dir):
         sc, rt = _score(a["ge1"], a["gt0"], avg_loss, n)
         rows.append({
             "folder": folder, "group": group,
-            "n": n, "is_inv": folder.endswith("_INV"),
+            "n": n, "is_inv": any(r.get("is_inverse") for r in all_results if r["folder_name"] == folder),
             "avg_win": statistics.mean(a["win_rates"]) if a["win_rates"] else 0,
             "avg_sh": statistics.mean(a["sharpes"]) if a["sharpes"] else 0,
             "avg_loss": avg_loss,
@@ -683,7 +729,7 @@ def _monthly_records(recs, group):
         if len(sel) != 3:
             continue
         total_ret = sum(f["special_rounded_return"] for f in sel) if group == "1" else sum(f["real_return"] for f in sel)
-        max_l = max((f["max_consecutive_loss"] for f in sel if f.get("max_consecutive_loss") is not None), default=0)
+        max_l = min((f["max_consecutive_loss"] for f in sel if f.get("max_consecutive_loss") is not None), default=0)
         out.append({"year_month": ym, "total_return": total_ret, "max_loss": max_l,
                     "files": [f["file_name"] for f in sel], "file_objects": sel})
     out.sort(key=lambda x: x["year_month"])
@@ -779,61 +825,6 @@ def _complementary(all_results, news_events, out_dir):
                     f.write(f"\n📌 {ind} | ماه‌های {label}: تعداد={len(evs)}  avg_diff={avg}\n")
         log.info("تحلیل تکمیلی %s → %s", folder, path)
 
-
-def _lag_correlation(all_results, news_events, out_dir):
-    INDICATORS = ['CPI m/m', 'Core CPI m/m', 'PPI m/m', 'Core PPI m/m', 'CPI y/y']
-    non_inv = [r for r in all_results if not r.get("is_inverse")]
-    strat_map = defaultdict(list)
-    for r in non_inv:
-        strat_map[(r["folder_name"], r["group"])].append(r)
-
-    rows = []
-    for (folder, group), files in strat_map.items():
-        if len(files) < 3:
-            continue
-        X, Y = [], []
-        for f in files:
-            start = _extract_start(f.get("period_name", ""))
-            end = _extract_end(f.get("period_name", ""))
-            if not start or not end:
-                continue
-            Y.append(f["special_rounded_return"] if group == "1" else f["real_return"])
-            sd = datetime.strptime(start, "%Y-%m-%d").date()
-            feats = {}
-            for ind in INDICATORS:
-                evs = [e for e in _events_in_range(news_events, start, end) if e["indicator"] == ind]
-                diffs = [e["actual"] - e["forecast"] for e in evs if e.get("actual") is not None and e.get("forecast") is not None]
-                feats[f"{ind}_lag0"] = statistics.mean(diffs) if diffs else 0.0
-                for lag, name in [(10, "lag1"), (20, "lag2")]:
-                    ls = (sd - timedelta(days=lag)).strftime("%Y-%m-%d")
-                    le = (sd - timedelta(days=lag - 9)).strftime("%Y-%m-%d")
-                    ld = [e["actual"] - e["forecast"] for e in _events_in_range(news_events, ls, le)
-                          if e["indicator"] == ind and e.get("actual") is not None and e.get("forecast") is not None]
-                    feats[f"{ind}_{name}"] = statistics.mean(ld) if ld else 0.0
-            X.append(feats)
-        if len(X) < 3:
-            continue
-        for feat in list(X[0].keys()):
-            xv = [xf[feat] for xf in X]
-            if len(set(xv)) <= 1:
-                continue
-            n = len(xv)
-            mx, my = sum(xv)/n, sum(Y)/n
-            cov = sum((xv[i]-mx)*(Y[i]-my) for i in range(n))
-            sx = sum((xi-mx)**2 for xi in xv)**0.5
-            sy = sum((yi-my)**2 for yi in Y)**0.5
-            corr = cov/(sx*sy) if sx and sy else 0.0
-            if abs(corr) > 0.05:
-                rows.append({"استراتژی": f"{folder} (گروه {group})", "ویژگی": feat,
-                             "همبستگی": round(corr, 3), "جهت": "مستقیم" if corr > 0 else "معکوس", "n": n})
-
-    path = os.path.join(out_dir, "تحلیل_همبستگی_خبری.csv")
-    with open(path, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["استراتژی", "ویژگی", "همبستگی", "جهت", "تعداد_نمونه"])
-        for row in sorted(rows, key=lambda x: -abs(x["همبستگی"])):
-            w.writerow([row["استراتژی"], row["ویژگی"], row["همبستگی"], row["جهت"], row["n"]])
-    log.info("همبستگی خبری → %s", path)
 
 # ══════════════════════════════════════════════════════════════
 # کمکی
