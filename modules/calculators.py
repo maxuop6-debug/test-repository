@@ -16,6 +16,7 @@ import statistics
 from datetime import datetime
 from decimal import Decimal
 from collections import defaultdict
+from itertools import combinations
 
 # ══════════════════════════════════════════════════════════════
 # لاگ
@@ -120,6 +121,23 @@ def load_aggregated_data(enc_path, password=None):
 # ══════════════════════════════════════════════════════════════
 # گروه‌بندی trades بر اساس symbol
 # ══════════════════════════════════════════════════════════════
+
+def get_symbol_combinations(symbols):
+    """همه ترکیب‌های ممکن از ۱ تا n کوین را برمی‌گرداند."""
+    syms = sorted(symbols)
+    combos = []
+    for r in range(1, len(syms) + 1):
+        for combo in combinations(syms, r):
+            combos.append(combo)
+    return combos
+
+def combo_key(folder, combo):
+    """کلید ترکیب: folder_SYM1_SYM2_..."""
+    return f"{folder}_{'_'.join(combo)}"
+
+def combo_label(combo):
+    """برچسب نمایشی ترکیب."""
+    return "_".join(combo)
 
 def get_symbol(trade):
     return trade.get("symbol") or trade.get("pair") or trade.get("coin") or "unknown"
@@ -269,6 +287,38 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
         log.info("  symbol=%s | total=%d | win_rate=%.1f%% | real=%.4f | special=%.4f | cons=%d",
                  sym, r["total"], r["win_rate"], r["real"], r["special"], r["max_cons_count"])
         result[sym] = r
+
+    # ترکیب‌های چندتایی
+    all_syms = list(groups.keys())
+    for combo in get_symbol_combinations(all_syms):
+        if len(combo) == 1:
+            continue  # تک‌نمادها قبلاً ثبت شدند
+        label = combo_label(combo)
+        merged = []
+        for s in combo:
+            merged.extend(groups[s])
+        wins = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) > 0)
+        losses = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) < 0)
+        wr = (wins / len(merged) * 100) if merged else 0.0
+        mc = max_consecutive_count(merged)
+        r = {
+            "trades": merged,
+            "real":            real_return(merged),
+            "special":         special_return(merged, mp),
+            "max_cons_count":  mc,
+            "max_cons_loss":   consecutive_loss_value(mc, sl),
+            "max_drawdown":    max_drawdown(merged),
+            "sharpe":          sharpe_ratio(merged),
+            "pl_ratio":        profit_loss_ratio(merged),
+            "win":   wins,
+            "loss":  losses,
+            "total": len(merged),
+            "win_rate": wr,
+            "inv_dist": build_inverse_dist(merged, sl, max_g),
+        }
+        log.info("  combo=%s | total=%d | win_rate=%.1f%% | real=%.4f | special=%.4f",
+                 label, r["total"], r["win_rate"], r["real"], r["special"])
+        result[label] = r
     return result
 
 # ══════════════════════════════════════════════════════════════
@@ -401,15 +451,16 @@ def cmd_report(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 1. خلاصه هر پوشه
-    folders_map = defaultdict(list)
+    # 1. خلاصه هر پوشه (به ازای هر استراتژی پایه، همه ترکیب‌ها در یک فایل)
+    base_strategy_map = defaultdict(list)
     for r in all_results:
         if not r.get("is_inverse"):
-            folders_map[r["folder_name"]].append(r)
-    for folder, recs in folders_map.items():
-        fp = os.path.join(args.output_dir, folder)
+            # استراتژی پایه = period_name که همان folder اصلی است
+            base_strategy_map[r["period_name"]].append(r)
+    for base_folder, recs in base_strategy_map.items():
+        fp = os.path.join(args.output_dir, base_folder)
         os.makedirs(fp, exist_ok=True)
-        _folder_summary(folder, fp, recs)
+        _folder_summary(base_folder, fp, recs)
 
     # 2. گزارش کلی
     _global_report(all_results, args.output_dir)
@@ -464,15 +515,30 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
 
         # symbols از trades یا کش — پویا برای هر تعداد کوین
         if trades_by_sym:
-            symbols = set(trades_by_sym.keys())
+            raw_symbols = set(k for k in trades_by_sym.keys() if "_" not in k or k in trades_by_sym)
+            # فقط کلیدهای تک‌نماد (بدون _ یا همان نام کوین‌ها مثل BTCUSDT)
+            # trades_by_sym حاوی هم تک‌نمادها هم ترکیب‌ها است؛ تک‌نمادها را جدا می‌کنیم
+            single_syms = set()
+            for k in trades_by_sym.keys():
+                parts = k.split("_")
+                # اگر همه اجزاء به USDT ختم می‌شوند، ترکیب است؛ وگرنه تک‌نماد
+                # راه ساده: اگر k دقیقاً یک نماد است (در groups اصلی موجود بوده)
+                single_syms.add(k)
+            # بازسازی: process_file کلیدهای تک‌نماد و ترکیب را هر دو ذخیره می‌کند
+            # تک‌نمادها: کوین‌هایی که combo_label آن‌ها فقط یک عنصر دارد
+            # ترکیب‌ها: بقیه
+            # برای تشخیص: اگر کلید در trades_by_sym موجود باشد و ترکیب آن در trades_by_sym هم باشد
+            # ساده‌ترین رویکرد: همه کلیدها را به عنوان "combo" بپذیریم
+            combos_in_file = list(trades_by_sym.keys())
         else:
-            symbols = {k[len(folder)+1:] for k in returns_cache if k.startswith(f"{folder}_")}
-        if not symbols:
-            symbols = {"unknown"}
+            # از کش: پیدا کردن همه کلیدهایی که با folder_ شروع می‌شوند
+            combos_in_file = [k[len(folder)+1:] for k in returns_cache if k.startswith(f"{folder}_")]
+        if not combos_in_file:
+            combos_in_file = ["unknown"]
 
-        for sym in symbols:
-            ck = f"{folder}_{sym}"
-            rd = trades_by_sym.get(sym)
+        for combo_lbl in combos_in_file:
+            ck = f"{folder}_{combo_lbl}"
+            rd = trades_by_sym.get(combo_lbl)
 
             if rd:
                 total, wins, losses = rd["total"], rd["win"], rd["loss"]
@@ -504,8 +570,8 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                 )
 
             main_rec = {
-                "folder_name": folder, "group": group,
-                "file_name": f"{folder}_{sym}", "period_name": folder, "symbol": sym,
+                "folder_name": f"{folder}_{combo_lbl}", "group": group,
+                "file_name": f"{folder}_{combo_lbl}", "period_name": folder, "symbol": combo_lbl,
                 "total_trades": total, "win_trades": wins, "loss_trades": losses,
                 "win_rate": wr, "max_consecutive_loss": mc_loss, "max_consecutive_count": mc_count,
                 "max_drawdown": dd, "profit_loss_ratio": pl, "sharpe_ratio": sh,
@@ -550,8 +616,8 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                     inv_wr = 100.0 - wr
 
                 inv_rec = {
-                    "folder_name": folder + "_INV", "group": group,
-                    "file_name": f"INV_{folder}_{sym}", "period_name": folder, "symbol": sym,
+                    "folder_name": f"{folder}_{combo_lbl}_INV", "group": group,
+                    "file_name": f"INV_{folder}_{combo_lbl}", "period_name": folder, "symbol": combo_lbl,
                     "total_trades": total, "win_trades": inv_wins, "loss_trades": inv_losses,
                     "win_rate": inv_wr,
                     "max_consecutive_loss": inv_mc_loss, "max_consecutive_count": inv_mc_count,
@@ -595,7 +661,7 @@ def _folder_summary(folder_name, folder_path, recs):
         w.writerow([f"📊 خلاصه پوشه: {folder_name}"])
         w.writerow(["تاریخ تولید", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
         w.writerow([])
-        w.writerow(["ردیف", "symbol", "معاملات", "سودده", "زیانده", "وین‌ریت(%)",
+        w.writerow(["ردیف", "ترکیب کوین‌ها", "معاملات", "سودده", "زیانده", "وین‌ریت(%)",
                     "بازده واقعی(%)", "بازده ویژه(%)", "حداکثر ضرر متوالی(%)",
                     "تعداد ضررهای متوالی", "افت سرمایه(%)", "P/L ratio", "شارپ", "وضعیت"])
         for i, r in enumerate(recs, 1):
@@ -603,7 +669,8 @@ def _folder_summary(folder_name, folder_path, recs):
             status = "✅ عالی (≥۱%)" if sp >= 1 else ("👍 مثبت" if sp > 0 else "⚠️ منفی")
             ml = f"{r['max_consecutive_loss']:.2f}" if r.get("max_consecutive_loss") is not None else "-"
             sh = f"{r['sharpe_ratio']:.3f}" if r.get("sharpe_ratio") is not None else "-"
-            w.writerow([i, r["symbol"], r["total_trades"], r["win_trades"], r["loss_trades"],
+            combo_display = r.get("symbol", r["folder_name"])
+            w.writerow([i, combo_display, r["total_trades"], r["win_trades"], r["loss_trades"],
                         f"{r.get('win_rate', 0):.2f}", f"{r['real_return']:.4f}", f"{sp:.4f}",
                         ml, r.get("max_consecutive_count", 0),
                         f"{r.get('max_drawdown', 0):.2f}", f"{r.get('profit_loss_ratio', 0):.3f}",
@@ -613,8 +680,8 @@ def _folder_summary(folder_name, folder_path, recs):
         ge1 = sum(1 for r in recs if r["special_rounded_return"] >= 1)
         n = len(recs)
         avg_sp = statistics.mean([r["special_rounded_return"] for r in recs])
-        w.writerow(["نمادهای با بازدهی مثبت", f"{pos}/{n}"])
-        w.writerow(["نمادهای با بازدهی ≥۱٪", f"{ge1}/{n}"])
+        w.writerow(["ترکیب‌های با بازدهی مثبت", f"{pos}/{n}"])
+        w.writerow(["ترکیب‌های با بازدهی ≥۱٪", f"{ge1}/{n}"])
         w.writerow(["میانگین بازدهی ویژه", f"{avg_sp:.4f}%"])
     log.info("خلاصه پوشه %s → %s", folder_name, path)
 
@@ -665,7 +732,7 @@ def _comparison_tables(all_results, out_dir):
         sc, rt = _score(a["ge1"], a["gt0"], avg_loss, n)
         rows.append({
             "folder": folder, "group": group,
-            "n": n, "is_inv": any(r.get("is_inverse") for r in all_results if r["folder_name"] == folder),
+            "n": n, "is_inv": folder.endswith("_INV"),
             "avg_win": statistics.mean(a["win_rates"]) if a["win_rates"] else 0,
             "avg_sh": statistics.mean(a["sharpes"]) if a["sharpes"] else 0,
             "avg_loss": avg_loss,
