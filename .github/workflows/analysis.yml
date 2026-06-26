@@ -937,14 +937,14 @@ jobs:
             echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
             base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-            cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed combinations (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "remove $((BEFORE-AFTER)) processed combinations (run ${{ github.run_id }})" \
+              --rawfile content /tmp/new_content_base64.txt \
+              --arg sha "$SHA" \
+              '{message: $message, content: $content, sha: $sha, branch: "main"}' \
+              > /tmp/payload.json
+
             HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
@@ -1288,14 +1288,14 @@ jobs:
             echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
             base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-            cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
+              --rawfile content /tmp/new_content_base64.txt \
+              --arg sha "$SHA" \
+              '{message: $message, content: $content, sha: $sha, branch: "main"}' \
+              > /tmp/payload.json
+
             HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
@@ -1319,13 +1319,13 @@ jobs:
             echo '["completed"]' > /tmp/completed_golden.json
             SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_golden.json" -q '.sha' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_golden.json > /tmp/completed_base64.txt
-            cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "golden completed",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "golden completed" \
+              --rawfile content /tmp/completed_base64.txt \
+              '{message: $message, content: $content, branch: "main"}' \
+              > /tmp/payload_completed.json
+
             if [ -n "$SHA_COMP" ]; then
               jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
               mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
@@ -1419,7 +1419,6 @@ jobs:
         run: |
           mkdir -p /tmp/correlation_chunks
 
-          # دانلود all_combinations_correlation.json (صف واقعی)
           HTTP_CODE=$(curl -s -o /tmp/all_combinations_correlation.json -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3.raw" \
@@ -1439,7 +1438,6 @@ jobs:
             exit 0
           fi
 
-          # تولید چانک‌ها با اسکریپت پایتون
           python3 - <<'PYEOF'
 import json, math, os, pathlib
 
@@ -1447,8 +1445,7 @@ ALL_SIGS_DIR = "/tmp/all_signatures"
 QUEUE_FILE   = "/tmp/all_combinations_correlation.json"
 OUT_DIR      = "/tmp/correlation_chunks"
 
-# ── ۱. خواندن همه signature یکتا از فایل‌های JSONL
-unique_sigs = {}  # (coin_composition, signature) -> True
+unique_sigs = {}
 for jf in pathlib.Path(ALL_SIGS_DIR).rglob("*.jsonl"):
     with open(jf) as f:
         for line in f:
@@ -1464,7 +1461,6 @@ for jf in pathlib.Path(ALL_SIGS_DIR).rglob("*.jsonl"):
             if cc and sig:
                 unique_sigs[(cc, sig)] = True
 
-# ── ۲. خواندن صف و تبدیل به کلید (coin_composition, signature)
 with open(QUEUE_FILE) as f:
     queue = json.load(f)
 
@@ -1472,15 +1468,11 @@ def extract_key(item):
     if "coin_composition" in item and "signature" in item:
         return (item["coin_composition"], item["signature"])
     sp = item.get("signature_path", "")
-    # مثال: signatures/module/strategy/coin.jsonl
     parts = sp.replace("\\", "/").split("/")
-    # coin_composition = نام فایل (بدون پسوند)
-    # signature = نام استراتژی (پوشه والد)
     if len(parts) >= 3:
         return (parts[-1].replace(".jsonl", ""), parts[-2])
     return (sp, sp)
 
-# ── ۳. فیلتر: فقط آیتم‌هایی که در unique_sigs وجود دارند
 filtered = [item for item in queue if extract_key(item) in unique_sigs]
 total = len(filtered)
 print(f"[DEBUG] کل صف: {len(queue)}  بعد از فیلتر: {total}")
@@ -1695,7 +1687,6 @@ PYEOF
             exit 0
           fi
 
-          # تبدیل done_items به set کلیدهای (coin_composition|||signature)
           jq '[.[] | .coin_composition + "|||" + .signature] | unique' \
             /tmp/merged_done.json > /tmp/done_keys.json
 
@@ -1716,7 +1707,6 @@ PYEOF
               RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
             fi
 
-            # حذف آیتم‌هایی که کلید (coin_composition, signature) آن‌ها در done_keys هست
             jq -s '
               .[0] as $c | .[1] as $done_keys |
               ($done_keys | unique) as $dk |
@@ -1739,14 +1729,14 @@ PYEOF
             echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
             base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-            cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
+              --rawfile content /tmp/new_content_base64.txt \
+              --arg sha "$SHA" \
+              '{message: $message, content: $content, sha: $sha, branch: "main"}' \
+              > /tmp/payload.json
+
             HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
@@ -1770,13 +1760,13 @@ PYEOF
             echo '["completed"]' > /tmp/completed_correlation.json
             SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_correlation.json" -q '.sha' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_correlation.json > /tmp/completed_base64.txt
-            cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "correlation completed",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "correlation completed" \
+              --rawfile content /tmp/completed_base64.txt \
+              '{message: $message, content: $content, branch: "main"}' \
+              > /tmp/payload_completed.json
+
             if [ -n "$SHA_COMP" ]; then
               jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
               mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
@@ -2143,14 +2133,14 @@ PYEOF
             echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
             base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-            cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
+              --rawfile content /tmp/new_content_base64.txt \
+              --arg sha "$SHA" \
+              '{message: $message, content: $content, sha: $sha, branch: "main"}' \
+              > /tmp/payload.json
+
             HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
@@ -2174,13 +2164,13 @@ PYEOF
             echo '["completed"]' > /tmp/completed_portfolios.json
             SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_portfolios.json > /tmp/completed_base64.txt
-            cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "portfolios completed",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
+
+            jq -n \
+              --arg message "portfolios completed" \
+              --rawfile content /tmp/completed_base64.txt \
+              '{message: $message, content: $content, branch: "main"}' \
+              > /tmp/payload_completed.json
+
             if [ -n "$SHA_COMP" ]; then
               jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
               mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
