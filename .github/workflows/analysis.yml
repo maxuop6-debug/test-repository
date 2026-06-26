@@ -1723,22 +1723,12 @@ jobs:
 
           rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
 
-      - name: فراخوانی مجدد loop_analysis.yml (در صورت ناقص بودن صف)
+      - name: فراخوانی مجدد loop_analysis.yml
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          # بررسی خالی بودن صف correlation
-          EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)" \
-            -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
-          if [ "$EMPTY" != "true" ]; then
-            echo "صف correlation هنوز کامل نشده. فراخوانی مجدد loop_analysis.yml..."
-            gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
-              -X POST -f ref="main"
-          else
-            echo "✅ صف correlation خالی است. متوقف می‌شویم."
-          fi
+          gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
+            -X POST -f ref="main"
 
   # ================================================================
   # portfolios-generate-matrix: تولید صف کار برای ماژول portfolios
