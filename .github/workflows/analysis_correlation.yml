@@ -210,7 +210,7 @@ jobs:
             -H "Accept: application/vnd.github.v3.raw" \
             "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json")
           if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/all_combinations_correlation.json ] || ! jq empty /tmp/all_combinations_correlation.json 2>/dev/null; then
-            echo "❌ فایل all_combinations_correlation.json نامعتبر یا یافت نشد (کد $HTTP_CODE) — empty=true"
+            echo "ℹ️ فایل all_combinations_correlation.json یافت نشد یا نامعتبر است (کد $HTTP_CODE) — empty=true، ادامه بدون پردازش"
             echo "empty=true" >> $GITHUB_OUTPUT
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
             exit 0
