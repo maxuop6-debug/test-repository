@@ -48,3 +48,7 @@ https://github.com/Amir9287171/test-repository/actions/runs/28235377977
    ماژول‌های یافت‌شده: ['Dtsv_signatures_chunk_0_20260623T204211Z.tar.gz.enc', 'Dtsv_signatures_chunk_1_20260623T210133Z.tar.gz.enc', 'Dtsv_signatures_chunk_2_20260623T210313Z.tar.gz.enc', 'Dtsv_signatures_chunk_3_20260623T204337Z.tar.gz.enc', 'Dtsv_signatures_chunk_4_20260623T210214Z.tar.gz.enc', 'Dtsv_signatures_chunk_5_20260623T210157Z.tar.gz.enc', 'Dtsv_signatures_chunk_6_20260623T210251Z.tar.gz.enc', 'Ttt3_signatures_chunk_0_20260623T111445Z.tar.gz.enc', 'Ttt3_signatures_chunk_10_20260623T110714Z.tar.gz.enc', 'Ttt3_signatures_chunk_11_20260623T110923Z.tar.gz.enc', 'Ttt3_signatures_chunk_12_20260623T103151Z.tar.gz.enc', 'Ttt3_signatures_chunk_1_20260623T110754Z.tar.gz.enc', 'Ttt3_signatures_chunk_2_20260623T112015Z.tar.gz.enc', 'Ttt3_signatures_chunk_3_20260623T112422Z.tar.gz.enc', 'Ttt3_signatures_chunk_4_20260623T112219Z.tar.gz.enc', 'Ttt3_signatures_chunk_5_20260623T112525Z.tar.gz.enc', 'Ttt3_signatures_chunk_6_20260623T111157Z.tar.gz.enc', 'Ttt3_signatures_chunk_7_20260623T110705Z.tar.gz.enc', 'Ttt3_signatures_chunk_8_20260623T110342Z.tar.gz.enc', 'Ttt3_signatures_chunk_9_20260623T110549Z.tar.gz.enc']
    📊 تعداد کل signatureهای یافت‌شده: 0
 ✅ هیچ signature‌ای در آرشیوها یافت نشد. کاری انجام نمی‌شود.
+🔍 بررسی پرچم وقفه...
+🔄 فراخوانی analysis.yml برای correlation...
+https://github.com/Amir9287171/test-repository/actions/runs/28235397255
+✅ فراخوانی correlation موفق بود (تلاش 1).
