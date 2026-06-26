@@ -754,11 +754,6 @@ jobs:
               fi
             done
           } >> logs/run.log 2>&1
-      - name: فراخوانی مجدد loop_analysis.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
       - name: Save logs after job
         if: always()
         run: |
@@ -880,13 +875,6 @@ jobs:
               fi
             done
           } >> logs/run.log 2>&1
-
-      - name: فراخوانی مجدد loop_analysis.yml
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
 
       - name: Save logs after job
         if: always()
@@ -1013,13 +1001,6 @@ jobs:
             done
           } >> logs/run.log 2>&1
 
-      - name: فراخوانی مجدد loop_analysis.yml
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
-
       - name: Save logs after job
         if: always()
         run: |
@@ -1140,23 +1121,6 @@ jobs:
               fi
             done
           } >> logs/run.log 2>&1
-
-      - name: فراخوانی مجدد loop_analysis.yml (در صورت ناقص بودن صف correlation)
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          # بررسی خالی بودن صف correlation
-          EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)" \
-            -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
-          if [ "$EMPTY" != "true" ]; then
-            echo "صف correlation هنوز کامل نشده. فراخوانی مجدد loop_analysis.yml..."
-            gh workflow run loop_analysis.yml --ref main 2>&1 || echo "⚠️ فراخوانی مجدد loop_analysis.yml ناموفق بود."
-          else
-            echo "✅ صف correlation خالی است. متوقف می‌شویم."
-          fi
 
       - name: Save logs after job
         if: always()
