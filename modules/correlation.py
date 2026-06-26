@@ -63,11 +63,28 @@ PARTIAL_RESULTS_FILENAME = "correlation_partial_results.json"
 # گام ۱: بارگذاری داده‌ها
 # ==========================================================================
 
+def _extract_coin_signature_from_path(path_str: str) -> Tuple[str, str]:
+    """سازگاری با نسخه‌های قبلی فایل signatures-filter.
+
+    در نسخه‌های قبلی، فیلتر بر اساس یک رشته "path" (مثلاً
+    "module/strategy/coin_interval_model.jsonl") اعمال می‌شد و این رشته
+    مستقیماً با ستون signature مقایسه می‌گردید. برای حفظ همان رفتار:
+      - signature همان رشته‌ی کامل path در نظر گرفته می‌شود (دقیقاً مثل قبل).
+      - coin_composition از اولین بخش نام فایل (قبل از اولین "_") استخراج می‌شود.
+    """
+    filename_stem = Path(path_str).stem  # حذف پسوند .jsonl در صورت وجود
+    coin_composition = filename_stem.split("_")[0] if filename_stem else "unknown"
+    return coin_composition, path_str
+
+
 def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None) -> pd.DataFrame:
     """تمام فایل‌های .jsonl را از دایرکتوری signatures بخوان و یکپارچه کن.
 
-    در صورتی که signatures_filter داده شده باشد، فقط رکوردهایی که فیلد
-    signature آنها در لیست موجود در فایل JSON فیلتر قرار دارد نگه داشته می‌شوند.
+    در صورتی که signatures_filter داده شده باشد، فقط رکوردهایی که ترکیب
+    (coin_composition, signature) آنها در لیست موجود در فایل JSON فیلتر
+    قرار دارد نگه داشته می‌شوند. فایل فیلتر باید آرایه‌ای از اشیاء با کلیدهای
+    coin_composition و signature باشد. برای سازگاری با نسخه‌های قبلی، آیتم‌هایی
+    با کلید path (یا رشته‌های خام) نیز پشتیبانی می‌شوند.
     """
     signatures_path = Path(signatures_dir)
     if not signatures_path.exists():
@@ -107,20 +124,40 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
     if signatures_filter and os.path.exists(signatures_filter):
         with open(signatures_filter, "r", encoding="utf-8") as f:
             _filter_data = json.load(f)
-        # filter.json ممکن است آرایه‌ای از dict (با کلید path) یا آرایه‌ای از string باشد
-        if _filter_data and isinstance(_filter_data[0], dict):
-            allowed_signatures = set(item["path"] for item in _filter_data)
-        else:
-            allowed_signatures = set(_filter_data)
-        if "signature" in df.columns:
+
+        # ساخت یک set از تاپل‌های (coin_composition, signature) مجاز
+        allowed_pairs: set = set()
+        for item in _filter_data:
+            if isinstance(item, dict):
+                if "coin_composition" in item and "signature" in item:
+                    allowed_pairs.add((item["coin_composition"], item["signature"]))
+                elif "path" in item:
+                    # سازگاری با نسخه‌های قبلی (کلید path به‌جای coin_composition/signature)
+                    allowed_pairs.add(_extract_coin_signature_from_path(item["path"]))
+                else:
+                    logger.warning(
+                        "آیتم نامعتبر در signatures-filter (فاقد coin_composition/signature/path) نادیده گرفته شد: %s",
+                        item,
+                    )
+            else:
+                # رشته‌ی خام؛ برای سازگاری با نسخه‌های قدیمی‌تر همانند path در نظر گرفته می‌شود
+                allowed_pairs.add(_extract_coin_signature_from_path(str(item)))
+
+        if {"coin_composition", "signature"}.issubset(df.columns):
             before = len(df)
-            df = df[df["signature"].isin(allowed_signatures)].copy()
+            df = df[
+                df.apply(
+                    lambda r: (r["coin_composition"], r["signature"]) in allowed_pairs, axis=1
+                )
+            ].copy()
             logger.info(
-                "اعمال signatures-filter: %d -> %d رکورد (%d امضای مجاز).",
-                before, len(df), len(allowed_signatures),
+                "اعمال signatures-filter بر اساس (coin_composition, signature): %d -> %d رکورد (%d ترکیب مجاز).",
+                before, len(df), len(allowed_pairs),
             )
         else:
-            logger.warning("ستون signature در داده‌ها وجود ندارد؛ signatures-filter نادیده گرفته شد.")
+            logger.warning(
+                "ستون coin_composition و/یا signature در داده‌ها وجود ندارد؛ signatures-filter نادیده گرفته شد."
+            )
     elif signatures_filter:
         logger.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
 
