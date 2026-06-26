@@ -444,7 +444,10 @@ jobs:
               /tmp/merged_done.json > /tmp/merged_done_normalized.json
             jq -s '.[0] as $c | .[1] as $d
               | ($d | unique) as $done_set
-              | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
+              | $c | map(
+                  (if type == "object" then .signature_path else . end) as $key
+                  | select(($done_set | index($key)) == null)
+                )
             ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
 
             BEFORE=$(jq length /tmp/current.json)
