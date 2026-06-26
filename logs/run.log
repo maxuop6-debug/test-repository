@@ -80,3 +80,16 @@ find: ‘backtest_results’: No such file or directory
 🔄 فراخوانی analysis.yml برای golden...
 https://github.com/Amir9287171/test-repository/actions/runs/28230364595
 ✅ فراخوانی golden موفق بود (تلاش 1).
+📥 دانلود completed_portfolios.json...
+   تعداد signatureهای قبلاً ثبت‌شده: 26
+📥 دانلود golden_scores.parquet.enc...
+   📦 اندازه فایل: 10000 bytes
+   ✅ فایل دانلود شد (10000 bytes)
+🔓 رمزگشایی golden_scores.parquet.enc...
+   ✅ رمزگشایی موفق (9981 bytes)
+📊 فیلتر signatureها با score >= 45.0...
+   ستون‌های parquet: ['strategy_id', 'coin_composition', 'signature', 'win_rate', 'profit_factor', 'max_loss_ratio', 'avg_daily_return', 'sample_count', 'total_return_sum', 'created_at', 'score', 'version_id', 'calculated_at']
+   تعداد کل سطرها: 92
+   📊 signatureها با score >= 45.0: 26
+   signatureهای جدید: 0
+✅ هیچ signature جدیدی برای اضافه کردن وجود ندارد.
