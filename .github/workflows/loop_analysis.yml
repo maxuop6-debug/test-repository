@@ -736,17 +736,16 @@ jobs:
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           ref: main
-      - name: فراخوانی analysis.yml (با retry)
+      - name: فراخوانی analysis_fixed_batch.yml (با retry)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p logs
           {
-            echo "🔄 فراخوانی analysis.yml (حالت fixed_batch)..."
+            echo "🔄 فراخوانی analysis_fixed_batch.yml..."
             for attempt in 1 2 3; do
-              if gh workflow run analysis.yml --ref main \
-                -f analysis_module="fixed_batch" 2>&1; then
-                echo "✅ فراخوانی analysis.yml موفق بود (تلاش $attempt)."
+              if gh workflow run analysis_fixed_batch.yml --ref main 2>&1; then
+                echo "✅ فراخوانی analysis_fixed_batch.yml موفق بود (تلاش $attempt)."
                 break
               else
                 echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
@@ -856,17 +855,16 @@ jobs:
             echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
 
-      - name: فراخوانی analysis.yml برای golden
+      - name: فراخوانی analysis_golden.yml
         if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p logs
           {
-            echo "🔄 فراخوانی analysis.yml برای golden..."
+            echo "🔄 فراخوانی analysis_golden.yml..."
             for attempt in 1 2 3; do
-              if gh workflow run analysis.yml --ref main \
-                -f analysis_module="golden" 2>&1; then
+              if gh workflow run analysis_golden.yml --ref main 2>&1; then
                 echo "✅ فراخوانی golden موفق بود (تلاش $attempt)."
                 break
               else
@@ -981,17 +979,16 @@ jobs:
             echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
 
-      - name: فراخوانی analysis.yml برای portfolios
+      - name: فراخوانی analysis_portfolios.yml
         if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p logs
           {
-            echo "🔄 فراخوانی analysis.yml برای portfolios..."
+            echo "🔄 فراخوانی analysis_portfolios.yml..."
             for attempt in 1 2 3; do
-              if gh workflow run analysis.yml --ref main \
-                -f analysis_module="portfolios" 2>&1; then
+              if gh workflow run analysis_portfolios.yml --ref main 2>&1; then
                 echo "✅ فراخوانی portfolios موفق بود (تلاش $attempt)."
                 break
               else
@@ -1102,17 +1099,16 @@ jobs:
             echo "should_run=true" >> $GITHUB_OUTPUT
           } >> logs/run.log 2>&1
 
-      - name: فراخوانی analysis.yml برای correlation
+      - name: فراخوانی analysis_correlation.yml
         if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p logs
           {
-            echo "🔄 فراخوانی analysis.yml برای correlation..."
+            echo "🔄 فراخوانی analysis_correlation.yml..."
             for attempt in 1 2 3; do
-              if gh workflow run analysis.yml --ref main \
-                -f analysis_module="correlation" 2>&1; then
+              if gh workflow run analysis_correlation.yml --ref main 2>&1; then
                 echo "✅ فراخوانی correlation موفق بود (تلاش $attempt)."
                 break
               else
