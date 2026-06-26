@@ -118,7 +118,8 @@ def get_all_signatures_from_archives(repo):
                     if fname.endswith('.tar.gz.enc'):
                         base_name = fname[:-len('.tar.gz.enc')]
                         sig_path = f"{module}/{strategy}/{coin}/{base_name}"
-                        all_signatures.append({"signature_path": sig_path})
+                        # ✅ تغییر کلید از signature_path به path
+                        all_signatures.append({"path": sig_path})
 
     print(f"   📊 تعداد کل signatureهای یافت‌شده: {len(all_signatures)}")
     return all_signatures
@@ -162,9 +163,10 @@ def main():
         sys.exit(0)
 
     # ========== 3. فیلتر: فقط signatureهای جدید ==========
+    # ✅ استفاده از کلید path
     new_signatures = [
         s for s in all_signatures
-        if s["signature_path"] not in completed_set
+        if s["path"] not in completed_set
     ]
     print(f"   signatureهای جدید (نه در completed_correlation): {len(new_signatures)}")
 
@@ -204,7 +206,8 @@ def main():
         sys.exit(1)
 
     # ========== 7. آپدیت completed_correlation.json ==========
-    new_sig_paths = [s["signature_path"] for s in new_signatures]
+    # ✅ استفاده از کلید path
+    new_sig_paths = [s["path"] for s in new_signatures]
     updated_completed = completed_correlation + new_sig_paths
 
     print(f"📤 آپدیت completed_correlation.json با {len(new_sig_paths)} signature جدید...")
