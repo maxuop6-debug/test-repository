@@ -8,8 +8,8 @@ permissions:
   actions: write
 
 concurrency:
-  group: loop-runner
-  cancel-in-progress: false
+  group: analysis-runner
+  cancel-in-progress: true
 
 jobs:
   # ============================================================
@@ -114,6 +114,17 @@ jobs:
           git config user.email "actions@github.com"
           echo "✅ مخزن سوم با موفقیت clone شد."
 
+      - name: Clone مخزن OHLC (برای شمارش فایل‌های CSV)
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          OHLC_REPO: ${{ secrets.OHLC_REPO }}
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            "https://x-access-token:${GH_TOKEN}@github.com/${OHLC_REPO}.git" /tmp/ohlc_repo
+          cd /tmp/ohlc_repo
+          git sparse-checkout set data/All_Coins_Combined
+          echo "✅ مخزن OHLC با موفقیت clone شد."
+
       - name: یکپارچه‌سازی نتایج بک‌تست (با خواندن محلی فایل‌ها)
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
@@ -204,8 +215,9 @@ jobs:
               FILE_COUNT=$(echo "$FILES" | wc -l)
               echo "   📊 تعداد فایل‌های یافت‌شده: $FILE_COUNT"
               echo ""
-              echo "3.5- بررسی شرط تعداد فایل‌ها (باید دقیقاً ۱۱۰۶ باشد)..."
-              REQUIRED_FILE_COUNT=1106
+              echo "3.5- بررسی شرط تعداد فایل‌ها (بر اساس تعداد واقعی CSV در OHLC_REPO)..."
+              REQUIRED_FILE_COUNT=$(find /tmp/ohlc_repo/data/All_Coins_Combined -maxdepth 1 -name "*.csv" | wc -l)
+              echo "   📊 تعداد فایل‌های مورد انتظار (از OHLC_REPO): $REQUIRED_FILE_COUNT عدد"
               if [ "$FILE_COUNT" -ne "$REQUIRED_FILE_COUNT" ]; then
                 echo "   ⚠️ تعداد فایل‌ها ($FILE_COUNT) برابر با $REQUIRED_FILE_COUNT نیست. یکپارچه‌سازی $STRAT انجام نمی‌شود."
                 mkdir -p "/tmp/third_repo/aggregated/${STRAT}"
@@ -634,6 +646,31 @@ jobs:
             --output-dir /tmp/reports \
             --password "$RESULTS_PASSWORD"
 
+      - name: فشرده‌سازی و رمزنگاری پوشه reports
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          echo "📦 فشرده‌سازی پوشه /tmp/reports به reports.tar.gz ..."
+          tar -czf /tmp/reports.tar.gz -C /tmp reports
+          echo "✅ فشرده‌سازی کامل شد."
+
+          echo "🔒 رمزنگاری reports.tar.gz ..."
+          node -e "
+            const crypto = require('crypto'), fs = require('fs');
+            const pass = process.env.RESULTS_PASSWORD;
+            const data = fs.readFileSync('/tmp/reports.tar.gz');
+            const key = crypto.scryptSync(pass, 'salt', 32);
+            const iv = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+            const enc = Buffer.concat([cipher.update(data), cipher.final()]);
+            fs.writeFileSync('/tmp/reports.tar.gz.enc', Buffer.concat([iv, enc]));
+          "
+          echo "✅ رمزنگاری کامل شد: /tmp/reports.tar.gz.enc"
+
+          echo "🗑️ حذف پوشه /tmp/reports و فایل موقت..."
+          rm -rf /tmp/reports /tmp/reports.tar.gz
+          echo "✅ پاکسازی انجام شد."
+
       - name: Commit و Push گزارش‌ها به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -643,10 +680,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -rf reports/
-          mkdir -p reports
-          cp -r /tmp/reports/* reports/
-          git add -f reports/
-          git commit -m "update reports from aggregated data (run ${{ github.run_id }})" || echo "No changes to commit"
+          cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
+          git add -f reports.tar.gz.enc
+          git commit -m "update reports.tar.gz.enc from aggregated data (run ${{ github.run_id }})" || echo "No changes to commit"
           git push origin main
 
   # ============================================================
@@ -681,16 +717,18 @@ jobs:
         run: |
           mkdir -p logs
           {
-            python scripts/build_work_queue.py \
+            echo "🚀 اجرای build_all_queues.py برای ساخت صف کارها..."
+            python scripts/build_all_queues.py \
               --progress /tmp/dummy \
               --strategies /tmp/strategies.txt \
               --output-dir /tmp/dummy \
               --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ اسکریپت با خطا مواجه شد (کد $EXIT_CODE)"
+              echo "❌ build_all_queues.py با خطا مواجه شد (کد $EXIT_CODE)"
               exit $EXIT_CODE
             fi
+            echo "✅ build_all_queues.py با موفقیت اجرا شد."
           } >> logs/run.log 2>&1
 
           echo "🔄 دریافت all_combinations.json با retry..." | tee -a logs/run.log
@@ -790,15 +828,17 @@ jobs:
         run: |
           mkdir -p logs
           {
-            python scripts/build_golden_queue.py \
+            echo "🚀 اجرای build_all_queues.py برای ساخت صف golden..."
+            python scripts/build_all_queues.py \
               --progress /tmp/dummy \
               --output-dir /tmp/dummy \
               --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ build_golden_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
+              echo "❌ build_all_queues.py (golden queue) با خطا مواجه شد (کد $EXIT_CODE)"
               exit $EXIT_CODE
             fi
+            echo "✅ build_all_queues.py (golden queue) با موفقیت اجرا شد."
           } >> logs/run.log 2>&1
       - name: Save logs after job
         if: always()
@@ -888,12 +928,12 @@ jobs:
   # Job 5c: ساخت صف portfolios (قبل از dispatch-portfolios)
   # ============================================================
   prepare-portfolios-queue:
-    needs: [prepare-dispatch, dispatch-golden]
+    needs: [prepare-dispatch, dispatch-correlation]
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
       needs.prepare-dispatch.outputs.total_batches == '0' &&
-      needs.dispatch-golden.result == 'success'
+      needs.dispatch-correlation.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -914,16 +954,18 @@ jobs:
           {
             pip install pandas pyarrow --quiet --break-system-packages 2>&1 || \
               pip install pandas pyarrow --quiet 2>&1
-            python scripts/build_portfolios_queue.py \
+            echo "🚀 اجرای build_all_queues.py برای ساخت صف portfolios..."
+            python scripts/build_all_queues.py \
               --progress /tmp/dummy \
               --output-dir /tmp/dummy \
               --batch-size 500 \
               --min-score 45 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ build_portfolios_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
+              echo "❌ build_all_queues.py (portfolios queue) با خطا مواجه شد (کد $EXIT_CODE)"
               exit $EXIT_CODE
             fi
+            echo "✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد."
           } >> logs/run.log 2>&1
       - name: Save logs after job
         if: always()
@@ -1012,12 +1054,12 @@ jobs:
   # Job 6b: ساخت صف correlation (قبل از dispatch-correlation)
   # ============================================================
   prepare-correlation-queue:
-    needs: [prepare-dispatch, dispatch-portfolios]
+    needs: [prepare-dispatch, dispatch-golden]
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
       needs.prepare-dispatch.outputs.total_batches == '0' &&
-      needs.dispatch-portfolios.result == 'success'
+      needs.dispatch-golden.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -1035,15 +1077,17 @@ jobs:
         run: |
           mkdir -p logs
           {
-            python scripts/build_correlation_queue.py \
+            echo "🚀 اجرای build_all_queues.py برای ساخت صف correlation..."
+            python scripts/build_all_queues.py \
               --progress /tmp/dummy \
               --output-dir /tmp/dummy \
               --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ build_correlation_queue.py با خطا مواجه شد (کد $EXIT_CODE)"
+              echo "❌ build_all_queues.py (correlation queue) با خطا مواجه شد (کد $EXIT_CODE)"
               exit $EXIT_CODE
             fi
+            echo "✅ build_all_queues.py (correlation queue) با موفقیت اجرا شد."
           } >> logs/run.log 2>&1
       - name: Save logs after job
         if: always()
