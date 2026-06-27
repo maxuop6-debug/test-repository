@@ -152,6 +152,13 @@ jobs:
               echo "=============================================="
               echo "   📊 پردازش استراتژی: $STRAT"
               echo "=============================================="
+              # استخراج BASE_STRAT با حذف پسوندهای تایم‌فریم
+              BASE_STRAT=$(echo "$STRAT" | sed 's/_5m$//;s/_15m$//;s/_30m$//;s/_1h$//')
+              if [ "$BASE_STRAT" = "$STRAT" ]; then
+                echo "   ℹ️ پسوند تایم‌فریم یافت نشد. BASE_STRAT = STRAT = $STRAT"
+              else
+                echo "   ℹ️ BASE_STRAT: $BASE_STRAT (پسوند تایم‌فریم از $STRAT حذف شد)"
+              fi
               AGG_FILE="aggregated/${STRAT}/${STRAT}_trades.enc"
               STATUS_FILE="aggregated/${STRAT}/aggregation_status.json"
               mkdir -p "/tmp/agg_${STRAT}"
@@ -325,13 +332,13 @@ jobs:
                 echo "   ✅ ادغام نهایی کامل شد."
 
                 # ========== مرحله: ساخت یا بارگذاری متادیتا با اولویت .js سپس 1.json ==========
-                echo "   📥 بررسی متادیتا برای $STRAT (اولویت ۱: .js، اولویت ۲: 1.json)..."
+                echo "   📥 بررسی متادیتا برای $STRAT (BASE_STRAT=$BASE_STRAT) (اولویت ۱: .js، اولویت ۲: 1.json)..."
                 METADATA_SUCCESS=false
                 META_SOURCE=""
-                META_FILE="/tmp/third_repo/strategies/${STRAT}/1.json"
-                META_DONE_FLAG="/tmp/third_repo/strategies/${STRAT}/.metadata_generated"
-                JS_FILE="/tmp/third_repo/strategies/${STRAT}.js"
-                STRAT_DIR="/tmp/third_repo/strategies/${STRAT}/"
+                META_FILE="/tmp/third_repo/strategies/${BASE_STRAT}/1.json"
+                META_DONE_FLAG="/tmp/third_repo/strategies/${BASE_STRAT}/.metadata_generated"
+                JS_FILE="/tmp/third_repo/strategies/${BASE_STRAT}.js"
+                STRAT_DIR="/tmp/third_repo/strategies/${BASE_STRAT}/"
                 mkdir -p "$STRAT_DIR"
 
                 if [ -f "$JS_FILE" ]; then
