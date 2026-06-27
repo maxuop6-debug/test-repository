@@ -8,8 +8,8 @@ permissions:
   actions: write
 
 concurrency:
-  group: analysis-runner
-  cancel-in-progress: true
+  group: loop-analysis-runner
+  cancel-in-progress: false
 
 jobs:
   # ============================================================
@@ -65,8 +65,11 @@ jobs:
           } >> logs/run.log 2>&1
       - name: Save logs after job
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd $GITHUB_WORKSPACE
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git config user.name "github-actions[bot]"
           git config user.email "actions@github.com"
           git add -f logs/run.log
@@ -129,7 +132,6 @@ jobs:
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          set +e
           {
             echo "=============================================="
             echo "   🔄 شروع یکپارچه‌سازی نتایج بک‌تست (با clone محلی)"
@@ -144,7 +146,7 @@ jobs:
             STRATEGIES_LIST=$(find backtest_results -maxdepth 1 -type d -printf '%f\n' | tail -n +2 | sort -u)
             if [ -z "$STRATEGIES_LIST" ]; then
               echo "⚠️ هیچ استراتژی در backtest_results یافت نشد."
-              exit 0
+              exit 1
             fi
             echo "   استراتژی‌های یافت شده: $STRATEGIES_LIST"
             echo ""
@@ -202,7 +204,9 @@ jobs:
                   const iv=data.slice(0,16),enc=data.slice(16);
                   const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
                   const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-                  fs.writeFileSync('$EXISTING_TRADES_FILE',dec);
+                  const parsed=JSON.parse(dec);
+                  const trades=parsed.trades !== undefined ? parsed.trades : parsed;
+                  fs.writeFileSync('$EXISTING_TRADES_FILE', JSON.stringify(trades));
                 "
                 if [ $? -eq 0 ] && [ -f "$EXISTING_TRADES_FILE" ]; then
                   echo "   ✅ فایل یکپارچه قبلی با موفقیت بارگذاری شد."
@@ -285,7 +289,7 @@ jobs:
                 TRADE_FILE="$EXTRACTED_DIR/trades_summary.json"
                 if [ -f "$TRADE_FILE" ]; then
                   echo "      ⏳ خواندن معاملات..."
-                  COIN_NAME=$(basename "$FOLDER" | cut -d'-' -f1)
+                  COIN_NAME=$(basename "$FOLDER" | cut -d'-' -f1-2)
                   jq -c --arg sym "$COIN_NAME" '[.trades[] | . + {symbol: $sym}]' "$TRADE_FILE" > "/tmp/agg_${STRAT}/current_trades.json" 2>/dev/null
                   if [ ! -s "/tmp/agg_${STRAT}/current_trades.json" ]; then
                     echo "      ⚠️ آرایه trades خالی یا null است. نادیده گرفته می‌شود."
@@ -526,7 +530,6 @@ jobs:
             done
             echo "✅ یکپارچه‌سازی کامل شد."
           } >> logs/run.log 2>&1
-          exit 0
 
       - name: Commit and push changes back to third repo
         run: |
@@ -536,8 +539,22 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Aggregate results and clean up processed files"
-            git pull --rebase
-            git push
+            PUSH_SUCCESS=false
+            for attempt in $(seq 1 10); do
+              git pull --rebase || true
+              if git push; then
+                echo "✅ push موفق بود (تلاش $attempt)."
+                PUSH_SUCCESS=true
+                break
+              fi
+              WAIT=$((RANDOM % 10 + 3))
+              echo "⚠️ تلاش $attempt ناموفق (non-fast-forward یا conflict). ${WAIT} ثانیه صبر می‌کنم..."
+              sleep $WAIT
+            done
+            if [ "$PUSH_SUCCESS" = "false" ]; then
+              echo "❌ push پس از ۱۰ تلاش ناموفق بود."
+              exit 1
+            fi
           fi
 
       - name: Save logs after job
@@ -715,7 +732,19 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           mkdir -p logs
-          gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' > /tmp/strategies.txt
+          STRATEGIES=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null || true)
+          if [ -z "$STRATEGIES" ]; then
+            echo "❌ دریافت لیست استراتژی‌ها از aggregated ناموفق بود یا خالی برگشت." | tee -a logs/run.log
+            # تلاش با منبع پشتیبان: backtest_results
+            STRATEGIES=$(gh api "repos/$THIRD_REPO/contents/backtest_results" -q '.[].name' 2>/dev/null || true)
+            if [ -z "$STRATEGIES" ]; then
+              echo "❌ منبع پشتیبان (backtest_results) نیز خالی است. job متوقف می‌شود." | tee -a logs/run.log
+              exit 1
+            fi
+            echo "⚠️ از منبع پشتیبان backtest_results استفاده شد." | tee -a logs/run.log
+          fi
+          echo "$STRATEGIES" > /tmp/strategies.txt
+          echo "✅ لیست استراتژی‌ها دریافت شد ($(wc -l < /tmp/strategies.txt) مورد)." | tee -a logs/run.log
       - name: ساخت و به‌روزرسانی all_combinations.json (با اسکریپت پایتون اصلاح شده)
         id: queue
         env:
@@ -745,7 +774,13 @@ jobs:
               "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$TIMESTAMP" \
               -H "Accept: application/vnd.github.v3.raw" 2>/dev/null)
             if [ -n "$ALL_COMBOS_CONTENT" ] && [ "$ALL_COMBOS_CONTENT" != "null" ]; then
-              TOTAL_COMBOS=$(echo "$ALL_COMBOS_CONTENT" | jq 'length')
+              TOTAL_COMBOS=$(echo "$ALL_COMBOS_CONTENT" | jq 'length' 2>/dev/null)
+              if [ -z "$TOTAL_COMBOS" ] || ! [[ "$TOTAL_COMBOS" =~ ^[0-9]+$ ]]; then
+                echo "❌ jq نتوانست طول آرایه را محاسبه کند. پاسخ نامعتبر است." | tee -a logs/run.log
+                TOTAL_BATCHES=0
+                echo "total_batches=0" >> $GITHUB_OUTPUT
+                break
+              fi
               TOTAL_BATCHES=$(( (TOTAL_COMBOS + 499) / 500 ))
               echo "total_batches=$TOTAL_BATCHES" >> $GITHUB_OUTPUT
               echo "✅ تعداد بسته‌ها: $TOTAL_BATCHES" | tee -a logs/run.log
@@ -788,15 +823,21 @@ jobs:
           mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_fixed_batch.yml..."
+            SUCCESS=false
             for attempt in 1 2 3; do
               if gh workflow run analysis_fixed_batch.yml --ref main 2>&1; then
                 echo "✅ فراخوانی analysis_fixed_batch.yml موفق بود (تلاش $attempt)."
+                SUCCESS=true
                 break
               else
                 echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
                 sleep 5
               fi
             done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ هر سه تلاش برای dispatch-fixed ناموفق بود."
+              exit 1
+            fi
           } >> logs/run.log 2>&1
       - name: Save logs after job
         if: always()
@@ -816,7 +857,6 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-dispatch.outputs.total_batches == '0' &&
       (needs.dispatch-fixed.result == 'success' || needs.dispatch-fixed.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
@@ -824,11 +864,36 @@ jobs:
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           ref: main
+      - name: بررسی خالی بودن واقعی all_combinations.json
+        id: check_queue_done
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$(date +%s)" \
+            -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
+          if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+            echo "✅ all_combinations.json وجود ندارد یا خالی است. golden اجرا می‌شود." | tee -a logs/run.log
+            echo "can_run=true" >> $GITHUB_OUTPUT
+          else
+            LEN=$(echo "$CONTENT" | jq 'length' 2>/dev/null || echo "-1")
+            if [ "$LEN" = "0" ]; then
+              echo "✅ all_combinations.json طول صفر دارد. batch‌ها کامل شدند. golden اجرا می‌شود." | tee -a logs/run.log
+              echo "can_run=true" >> $GITHUB_OUTPUT
+            else
+              echo "⏳ all_combinations.json هنوز $LEN ترکیب دارد. golden اجرا نمی‌شود." | tee -a logs/run.log
+              echo "can_run=false" >> $GITHUB_OUTPUT
+            fi
+          fi
       - name: راه‌اندازی پایتون
+        if: steps.check_queue_done.outputs.can_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: ساخت و به‌روزرسانی all_combinations_golden.json
+        if: steps.check_queue_done.outputs.can_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -865,7 +930,6 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.prepare-golden-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -910,15 +974,21 @@ jobs:
           mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_golden.yml..."
+            SUCCESS=false
             for attempt in 1 2 3; do
               if gh workflow run analysis_golden.yml --ref main 2>&1; then
                 echo "✅ فراخوانی golden موفق بود (تلاش $attempt)."
+                SUCCESS=true
                 break
               else
                 echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
                 sleep 5
               fi
             done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ هر سه تلاش برای dispatch-golden ناموفق بود."
+              exit 1
+            fi
           } >> logs/run.log 2>&1
 
       - name: Save logs after job
@@ -939,7 +1009,6 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.dispatch-correlation.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -992,7 +1061,6 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.prepare-portfolios-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -1036,15 +1104,21 @@ jobs:
           mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_portfolios.yml..."
+            SUCCESS=false
             for attempt in 1 2 3; do
               if gh workflow run analysis_portfolios.yml --ref main 2>&1; then
                 echo "✅ فراخوانی portfolios موفق بود (تلاش $attempt)."
+                SUCCESS=true
                 break
               else
                 echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
                 sleep 5
               fi
             done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ هر سه تلاش برای dispatch-portfolios ناموفق بود."
+              exit 1
+            fi
           } >> logs/run.log 2>&1
 
       - name: Save logs after job
@@ -1065,7 +1139,6 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.dispatch-golden.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -1114,7 +1187,6 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-dispatch.outputs.total_batches == '0' &&
       needs.prepare-correlation-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -1158,15 +1230,21 @@ jobs:
           mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_correlation.yml..."
+            SUCCESS=false
             for attempt in 1 2 3; do
               if gh workflow run analysis_correlation.yml --ref main 2>&1; then
                 echo "✅ فراخوانی correlation موفق بود (تلاش $attempt)."
+                SUCCESS=true
                 break
               else
                 echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
                 sleep 5
               fi
             done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ هر سه تلاش برای dispatch-correlation ناموفق بود."
+              exit 1
+            fi
           } >> logs/run.log 2>&1
 
       - name: Save logs after job
