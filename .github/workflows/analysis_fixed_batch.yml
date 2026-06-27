@@ -156,7 +156,7 @@ jobs:
           echo "========== [DEBUG] شروع generate-matrix =========="
           mkdir -p /tmp/chunks
 
-          TIMESTAMP=${{ github.run_id }}
+          TIMESTAMP=$(date +%s%N)
           HTTP_CODE=$($CURL -s -o /tmp/all_combinations.json -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3.raw" \
@@ -639,20 +639,34 @@ jobs:
               continue
             fi
 
-            OUTPUT_FILE="${STRAT}_${COIN}_${INTERVAL}_${MODEL}.csv"
-            if [ -f "$OUTPUT_FILE" ]; then
-              DEST_DIR="/tmp/results/${MODULE}/${STRAT}/${SAFE_COIN}"
-              mkdir -p "$DEST_DIR"
-              mv "$OUTPUT_FILE" "$DEST_DIR/${INTERVAL}_${MODEL}.csv"
-
-              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
-                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
-                /tmp/done_items.json > /tmp/done_items.json.tmp && mv /tmp/done_items.json.tmp /tmp/done_items.json
+            if [[ "$MODULE" == "combo_10day" || "$MODULE" == "combo_monthly" ]]; then
+              # این ماژول‌ها CSV نمی‌دهند — معیار موفقیت وجود و پر بودن JSONL است
+              if [ -f "$SIG_OUT" ] && [ -s "$SIG_OUT" ]; then
+                jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                  '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                  /tmp/done_items.json > /tmp/done_items.json.tmp && mv /tmp/done_items.json.tmp /tmp/done_items.json
+              else
+                echo "   ⚠️ فایل JSONL خروجی $SIG_OUT یافت نشد یا خالی است."
+                jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                  '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                  /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
+              fi
             else
-              echo "   ⚠️ فایل خروجی $OUTPUT_FILE یافت نشد."
-              jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
-                '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
-                /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
+              OUTPUT_FILE="${STRAT}_${COIN}_${INTERVAL}_${MODEL}.csv"
+              if [ -f "$OUTPUT_FILE" ]; then
+                DEST_DIR="/tmp/results/${MODULE}/${STRAT}/${SAFE_COIN}"
+                mkdir -p "$DEST_DIR"
+                mv "$OUTPUT_FILE" "$DEST_DIR/${INTERVAL}_${MODEL}.csv"
+
+                jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                  '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                  /tmp/done_items.json > /tmp/done_items.json.tmp && mv /tmp/done_items.json.tmp /tmp/done_items.json
+              else
+                echo "   ⚠️ فایل خروجی $OUTPUT_FILE یافت نشد."
+                jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
+                  '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
+                  /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
+              fi
             fi
           done
 
@@ -785,7 +799,7 @@ jobs:
             fi
 
             LOCAL_SIZE=$(stat -c%s "$ENC")
-            DEST_BASE="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}.tar.gz.enc"
+            DEST_BASE="signature_archives/${MODULE_NAME}/${STRAT_NAME_RAW}/${SAFE_STRAT}_chunk_${CHUNK_IDX}.tar.gz.enc"
             echo "$DEST_BASE" > /tmp/current_dest_${CHUNK_IDX}.txt
 
             upload_once() {
@@ -794,7 +808,7 @@ jobs:
               EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
               if [ -n "$EXISTING_SHA" ]; then
                 echo "⚠️ فایل $DEST از قبل موجود است — برای جلوگیری از overwrite، نام با timestamp یکتا می‌شود." | tee -a "$LOGFILE"
-                DEST="signature_archives/${SAFE_STRAT}_signatures_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
+                DEST="signature_archives/${MODULE_NAME}/${STRAT_NAME_RAW}/${SAFE_STRAT}_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
                 echo "$DEST" > /tmp/current_dest_${CHUNK_IDX}.txt
               fi
               base64 -w0 "$ENC" > /tmp/enc_b64_${CHUNK_IDX}.txt
@@ -985,7 +999,7 @@ jobs:
 
       - name: فراخوانی مجدد loop_analysis.yml
         env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
             -X POST -f ref="main"
