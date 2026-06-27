@@ -84,3 +84,6 @@ Best_5m
 ✅ هیچ استراتژی جدیدی برای ترکیب‌سازی وجود ندارد.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 51
+🔄 فراخوانی analysis_fixed_batch.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28289248605
+✅ فراخوانی analysis_fixed_batch.yml موفق بود (تلاش 1).
