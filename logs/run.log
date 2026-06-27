@@ -93,3 +93,16 @@ https://github.com/Amir9287171/test-repository/actions/runs/28294904123
 🔄 فراخوانی analysis_golden.yml...
 https://github.com/Amir9287171/test-repository/actions/runs/28294911157
 ✅ فراخوانی golden موفق بود (تلاش 1).
+🚀 اجرای build_all_queues.py برای ساخت صف correlation...
+[2026-06-27 16:24:24] [INFO] ============================================================
+[2026-06-27 16:24:24] [INFO] 🚀 شروع build_all_queues.py
+[2026-06-27 16:24:24] [INFO] ============================================================
+[2026-06-27 16:24:24] [INFO]   THIRD_REPO: ✅ Amir9287171/now-test-repo
+[2026-06-27 16:24:24] [INFO]   GH_TOKEN: ✅ تنظیم شده
+[2026-06-27 16:24:24] [INFO]   RESULTS_PASSWORD: ⚠️ تنظیم نشده (portfolios نیاز دارد)
+[2026-06-27 16:24:24] [INFO] ============================================================
+[2026-06-27 16:24:24] [INFO] 🔄 مرحله ۱: ساخت صف کاری (work queue)
+[2026-06-27 16:24:24] [INFO] ============================================================
+[2026-06-27 16:24:24] [INFO]   خواندن استراتژی‌ها از: /tmp/strategies.txt
+[2026-06-27 16:24:24] [ERROR]   فایل /tmp/strategies.txt یافت نشد
+[2026-06-27 16:24:24] [ERROR] ❌ مرحله ۱ (work) با خطا مواجه شد: strategies file not found: /tmp/strategies.txt
