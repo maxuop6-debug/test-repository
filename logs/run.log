@@ -89,3 +89,7 @@ Mem:            15Gi       894Mi        13Gi        43Mi       1.9Gi        14Gi
 https://github.com/Amir9287171/test-repository/actions/runs/28294904123
 ✅ فراخوانی analysis_fixed_batch.yml موفق بود (تلاش 1).
 ⏳ all_combinations.json هنوز 14862 ترکیب دارد. golden اجرا نمی‌شود.
+🔍 بررسی پرچم وقفه...
+🔄 فراخوانی analysis_golden.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28294911157
+✅ فراخوانی golden موفق بود (تلاش 1).
