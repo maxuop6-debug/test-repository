@@ -597,7 +597,7 @@ jobs:
             if [[ "$MODULE" == "combo_10day" || "$MODULE" == "combo_monthly" ]]; then
               SIG_OUT="/tmp/results/signatures/${MODULE}/${STRAT}/${SAFE_COIN}/${INTERVAL}_${MODEL}.jsonl"
               mkdir -p "$(dirname $SIG_OUT)"
-              JSONL_OUT_ARG="--jsonl-out $SIG_OUT --min-sample-count 5"
+              JSONL_OUT_ARG="--jsonl-out $SIG_OUT --min-sample-count 2"
             fi
 
             OHLC_ARG=""
