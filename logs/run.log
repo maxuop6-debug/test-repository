@@ -47466,3 +47466,105 @@ stop_loss_initial از .js خوانده شد: -0.5
 5.5- به‌روزرسانی پرچم وضعیت به completed...
 
 ✅ یکپارچه‌سازی کامل شد.
+🚀 اجرای build_all_queues.py برای ساخت صف کارها...
+[2026-06-27 14:02:11] [INFO] ============================================================
+[2026-06-27 14:02:11] [INFO] 🚀 شروع build_all_queues.py
+[2026-06-27 14:02:11] [INFO] ============================================================
+[2026-06-27 14:02:11] [INFO]   THIRD_REPO: ✅ Amir9287171/now-test-repo
+[2026-06-27 14:02:11] [INFO]   GH_TOKEN: ✅ تنظیم شده
+[2026-06-27 14:02:11] [INFO]   RESULTS_PASSWORD: ⚠️ تنظیم نشده (portfolios نیاز دارد)
+[2026-06-27 14:02:11] [INFO] ============================================================
+[2026-06-27 14:02:11] [INFO] 🔄 مرحله ۱: ساخت صف کاری (work queue)
+[2026-06-27 14:02:11] [INFO] ============================================================
+[2026-06-27 14:02:11] [INFO]   خواندن استراتژی‌ها از: /tmp/strategies.txt
+[2026-06-27 14:02:11] [INFO]   تعداد استراتژی‌های خوانده‌شده از strategies.txt: 6
+[2026-06-27 14:02:11] [INFO]   دانلود completed_strategies.json...
+[2026-06-27 14:02:11] [INFO]   [API GET] Amir9287171/now-test-repo/completed_strategies.json
+[2026-06-27 14:02:11] [INFO]   [API GET] نتیجه: دریافت شد (76 کاراکتر)
+[2026-06-27 14:02:11] [INFO]   تعداد استراتژی‌های قبلاً پردازش‌شده: 6
+[2026-06-27 14:02:11] [INFO]   دانلود all_combinations.json...
+[2026-06-27 14:02:11] [INFO]   [API GET] Amir9287171/now-test-repo/all_combinations.json
+[2026-06-27 14:02:11] [WARNING]   [API GET] نتیجه: یافت نشد (returncode=0)
+[2026-06-27 14:02:11] [INFO]   تعداد ترکیب‌های موجود در صف: 0
+[2026-06-27 14:02:11] [INFO]   تعداد استراتژی‌های جدید (نه در completed): 0
+[2026-06-27 14:02:11] [INFO]   هیچ استراتژی جدیدی برای پردازش وجود ندارد ✅
+[2026-06-27 14:02:11] [INFO] ✅ مرحله ۱ (work) با موفقیت تمام شد — 0 ترکیب جدید
+[2026-06-27 14:02:11] [INFO] ============================================================
+[2026-06-27 14:02:11] [INFO] 🔄 مرحله ۲: ساخت صف golden
+[2026-06-27 14:02:11] [INFO] ============================================================
+[2026-06-27 14:02:11] [INFO]   دانلود completed_golden.json...
+[2026-06-27 14:02:11] [INFO]   [API GET] Amir9287171/now-test-repo/completed_golden.json
+[2026-06-27 14:02:11] [WARNING]   [API GET] نتیجه: یافت نشد (returncode=1)
+[2026-06-27 14:02:11] [INFO]   تعداد signatureهایی که قبلاً در completed_golden.json ثبت شده‌اند: 0
+[2026-06-27 14:02:11] [INFO]   [ARCHIVES] دریافت لیست modules از signature_archives/...
+[2026-06-27 14:02:11] [INFO]   [ARCHIVES] ماژول‌های یافت‌شده: ['Dtsv_signatures_chunk_0_20260623T204211Z.tar.gz.enc', 'Dtsv_signatures_chunk_1_20260623T210133Z.tar.gz.enc', 'Dtsv_signatures_chunk_2_20260623T210313Z.tar.gz.enc', 'Dtsv_signatures_chunk_3_20260623T204337Z.tar.gz.enc', 'Dtsv_signatures_chunk_4_20260623T210214Z.tar.gz.enc', 'Dtsv_signatures_chunk_5_20260623T210157Z.tar.gz.enc', 'Dtsv_signatures_chunk_6_20260623T210251Z.tar.gz.enc', 'Ttt3_signatures_chunk_0_20260623T111445Z.tar.gz.enc', 'Ttt3_signatures_chunk_10_20260623T110714Z.tar.gz.enc', 'Ttt3_signatures_chunk_11_20260623T110923Z.tar.gz.enc', 'Ttt3_signatures_chunk_12_20260623T103151Z.tar.gz.enc', 'Ttt3_signatures_chunk_1_20260623T110754Z.tar.gz.enc', 'Ttt3_signatures_chunk_2_20260623T112015Z.tar.gz.enc', 'Ttt3_signatures_chunk_3_20260623T112422Z.tar.gz.enc', 'Ttt3_signatures_chunk_4_20260623T112219Z.tar.gz.enc', 'Ttt3_signatures_chunk_5_20260623T112525Z.tar.gz.enc', 'Ttt3_signatures_chunk_6_20260623T111157Z.tar.gz.enc', 'Ttt3_signatures_chunk_7_20260623T110705Z.tar.gz.enc', 'Ttt3_signatures_chunk_8_20260623T110342Z.tar.gz.enc', 'Ttt3_signatures_chunk_9_20260623T110549Z.tar.gz.enc']
+[2026-06-27 14:02:11] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_0_20260623T204211Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:12] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_1_20260623T210133Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:12] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_2_20260623T210313Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:12] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_3_20260623T204337Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:12] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_4_20260623T210214Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:12] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_5_20260623T210157Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:12] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_6_20260623T210251Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:13] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_0_20260623T111445Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:13] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_10_20260623T110714Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:13] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_11_20260623T110923Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:13] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_12_20260623T103151Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:13] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_1_20260623T110754Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:13] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_2_20260623T112015Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:14] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_3_20260623T112422Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:14] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_4_20260623T112219Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:14] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_5_20260623T112525Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:14] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_6_20260623T111157Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:14] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_7_20260623T110705Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:14] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_8_20260623T110342Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:15] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_9_20260623T110549Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:15] [INFO]   [ARCHIVES] تعداد کل signatureهای یافت‌شده: 0
+[2026-06-27 14:02:15] [INFO]   تعداد signatureهای پیدا شده در signature_archives/: 0
+[2026-06-27 14:02:15] [INFO]   هیچ signature‌ای در آرشیوها یافت نشد ✅
+[2026-06-27 14:02:15] [INFO] ✅ مرحله ۲ (golden) با موفقیت تمام شد — 0 signature جدید
+[2026-06-27 14:02:15] [INFO] ============================================================
+[2026-06-27 14:02:15] [INFO] 🔄 مرحله ۳: ساخت صف correlation
+[2026-06-27 14:02:15] [INFO] ============================================================
+[2026-06-27 14:02:15] [INFO]   دانلود completed_correlation.json...
+[2026-06-27 14:02:15] [INFO]   [API GET] Amir9287171/now-test-repo/completed_correlation.json
+[2026-06-27 14:02:15] [WARNING]   [API GET] نتیجه: یافت نشد (returncode=1)
+[2026-06-27 14:02:15] [INFO]   تعداد signatureهایی که قبلاً در completed_correlation.json ثبت شده‌اند: 0
+[2026-06-27 14:02:15] [INFO]   [ARCHIVES] دریافت لیست modules از signature_archives/...
+[2026-06-27 14:02:15] [INFO]   [ARCHIVES] ماژول‌های یافت‌شده: ['Dtsv_signatures_chunk_0_20260623T204211Z.tar.gz.enc', 'Dtsv_signatures_chunk_1_20260623T210133Z.tar.gz.enc', 'Dtsv_signatures_chunk_2_20260623T210313Z.tar.gz.enc', 'Dtsv_signatures_chunk_3_20260623T204337Z.tar.gz.enc', 'Dtsv_signatures_chunk_4_20260623T210214Z.tar.gz.enc', 'Dtsv_signatures_chunk_5_20260623T210157Z.tar.gz.enc', 'Dtsv_signatures_chunk_6_20260623T210251Z.tar.gz.enc', 'Ttt3_signatures_chunk_0_20260623T111445Z.tar.gz.enc', 'Ttt3_signatures_chunk_10_20260623T110714Z.tar.gz.enc', 'Ttt3_signatures_chunk_11_20260623T110923Z.tar.gz.enc', 'Ttt3_signatures_chunk_12_20260623T103151Z.tar.gz.enc', 'Ttt3_signatures_chunk_1_20260623T110754Z.tar.gz.enc', 'Ttt3_signatures_chunk_2_20260623T112015Z.tar.gz.enc', 'Ttt3_signatures_chunk_3_20260623T112422Z.tar.gz.enc', 'Ttt3_signatures_chunk_4_20260623T112219Z.tar.gz.enc', 'Ttt3_signatures_chunk_5_20260623T112525Z.tar.gz.enc', 'Ttt3_signatures_chunk_6_20260623T111157Z.tar.gz.enc', 'Ttt3_signatures_chunk_7_20260623T110705Z.tar.gz.enc', 'Ttt3_signatures_chunk_8_20260623T110342Z.tar.gz.enc', 'Ttt3_signatures_chunk_9_20260623T110549Z.tar.gz.enc']
+[2026-06-27 14:02:15] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_0_20260623T204211Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:15] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_1_20260623T210133Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:15] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_2_20260623T210313Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:15] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_3_20260623T204337Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:15] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_4_20260623T210214Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:16] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_5_20260623T210157Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:16] [WARNING]   [ARCHIVES] ماژول Dtsv_signatures_chunk_6_20260623T210251Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:16] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_0_20260623T111445Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:16] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_10_20260623T110714Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:16] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_11_20260623T110923Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:16] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_12_20260623T103151Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:17] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_1_20260623T110754Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:17] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_2_20260623T112015Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:17] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_3_20260623T112422Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:17] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_4_20260623T112219Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:17] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_5_20260623T112525Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:17] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_6_20260623T111157Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:18] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_7_20260623T110705Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:18] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_8_20260623T110342Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:18] [WARNING]   [ARCHIVES] ماژول Ttt3_signatures_chunk_9_20260623T110549Z.tar.gz.enc: استراتژی‌ای یافت نشد
+[2026-06-27 14:02:18] [INFO]   [ARCHIVES] تعداد کل signatureهای یافت‌شده: 0
+[2026-06-27 14:02:18] [INFO]   تعداد signatureهای پیدا شده در signature_archives/: 0
+[2026-06-27 14:02:18] [INFO]   هیچ signature‌ای در آرشیوها یافت نشد ✅
+[2026-06-27 14:02:18] [INFO] ✅ مرحله ۳ (correlation) با موفقیت تمام شد — 0 signature جدید
+[2026-06-27 14:02:18] [WARNING] ⚠️ RESULTS_PASSWORD تنظیم نشده — مرحله portfolios رد می‌شود
+[2026-06-27 14:02:18] [INFO] ============================================================
+[2026-06-27 14:02:18] [INFO] 📊 خلاصه کل عملیات:
+[2026-06-27 14:02:18] [INFO]    work        → 0 ترکیب جدید
+[2026-06-27 14:02:18] [INFO]    golden      → 0 signature جدید
+[2026-06-27 14:02:18] [INFO]    correlation → 0 signature جدید
+[2026-06-27 14:02:18] [INFO]    portfolios  → 0 signature جدید
+[2026-06-27 14:02:18] [INFO] ✅ همه‌ی صف‌ها با موفقیت ساخته شدند
+[2026-06-27 14:02:18] [INFO] 📄 فایل لاگ: logs/queue_builder.log
+[2026-06-27 14:02:18] [INFO] ============================================================
+✅ build_all_queues.py با موفقیت اجرا شد.
+🔄 دریافت all_combinations.json با retry...
+✅ تعداد بسته‌ها: 51
