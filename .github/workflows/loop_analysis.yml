@@ -1017,10 +1017,8 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      (needs.dispatch-correlation.result == 'success' || needs.dispatch-correlation.result == 'skipped')
+      needs.dispatch-correlation.result == 'success'
     runs-on: ubuntu-latest
-    outputs:
-      can_run: ${{ steps.status_check.outputs.should_run }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -1071,8 +1069,7 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-portfolios-queue.result == 'success' &&
-      needs.prepare-portfolios-queue.outputs.can_run == 'true'
+      needs.prepare-portfolios-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -1150,10 +1147,8 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      (needs.dispatch-golden.result == 'success' || needs.dispatch-golden.result == 'skipped')
+      needs.dispatch-golden.result == 'success'
     runs-on: ubuntu-latest
-    outputs:
-      can_run: ${{ steps.status_check.outputs.should_run }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -1200,8 +1195,7 @@ jobs:
     if: |
       always() &&
       needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-correlation-queue.result == 'success' &&
-      needs.prepare-correlation-queue.outputs.can_run == 'true'
+      needs.prepare-correlation-queue.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
