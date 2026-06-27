@@ -800,51 +800,62 @@ jobs:
 
             LOCAL_SIZE=$(stat -c%s "$ENC")
             DEST_BASE="signature_archives/${MODULE_NAME}/${STRAT_NAME_RAW}/${SAFE_STRAT}_chunk_${CHUNK_IDX}.tar.gz.enc"
-            echo "$DEST_BASE" > /tmp/current_dest_${CHUNK_IDX}.txt
 
-            upload_once() {
-              local DEST
-              DEST=$(cat /tmp/current_dest_${CHUNK_IDX}.txt)
-              EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
-              if [ -n "$EXISTING_SHA" ]; then
-                echo "⚠️ فایل $DEST از قبل موجود است — برای جلوگیری از overwrite، نام با timestamp یکتا می‌شود." | tee -a "$LOGFILE"
-                DEST="signature_archives/${MODULE_NAME}/${STRAT_NAME_RAW}/${SAFE_STRAT}_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
-                echo "$DEST" > /tmp/current_dest_${CHUNK_IDX}.txt
-              fi
+            # یک‌بار قبل از loop تعیین مسیر نهایی (ثابت برای همه تلاش‌ها)
+            EXISTING_SHA=$(gh api "repos/$THIRD_REPO/contents/$DEST_BASE" -q '.sha' 2>/dev/null || echo "")
+            if [ -n "$EXISTING_SHA" ]; then
+              echo "⚠️ فایل $DEST_BASE از قبل موجود است — نام با timestamp یکتا می‌شود." | tee -a "$LOGFILE"
+              FINAL_DEST="signature_archives/${MODULE_NAME}/${STRAT_NAME_RAW}/${SAFE_STRAT}_chunk_${CHUNK_IDX}_${RUN_TS}.tar.gz.enc"
+              # فایل timestamp دار نباید موجود باشد — SHA ندارد
+              UPLOAD_SHA=""
+            else
+              FINAL_DEST="$DEST_BASE"
+              UPLOAD_SHA=""
+            fi
+
+            SUCCESS=0
+            for attempt in 1 2 3; do
+              echo "  🔄 تلاش $attempt آپلود → $FINAL_DEST" | tee -a "$LOGFILE"
+
+              # ساخت payload (بدون SHA = create جدید)
               base64 -w0 "$ENC" > /tmp/enc_b64_${CHUNK_IDX}.txt
               jq -n \
-                --arg msg "signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} (run ${{ github.run_id }})" \
+                --arg msg "signatures chunk ${CHUNK_IDX} strat=${SAFE_STRAT} attempt=${attempt} (run ${{ github.run_id }})" \
                 --rawfile content /tmp/enc_b64_${CHUNK_IDX}.txt \
                 --arg branch "main" \
                 '{message: $msg, content: $content, branch: $branch}' \
                 > /tmp/payload_upload_${CHUNK_IDX}.json
-              gh api "repos/$THIRD_REPO/contents/$DEST" -X PUT \
-                --input /tmp/payload_upload_${CHUNK_IDX}.json
-              local exit_code=$?
-              rm -f /tmp/enc_b64_${CHUNK_IDX}.txt /tmp/payload_upload_${CHUNK_IDX}.json
-              return $exit_code
-            }
+              rm -f /tmp/enc_b64_${CHUNK_IDX}.txt
 
-            verify_once() {
-              local DEST
-              DEST=$(cat /tmp/current_dest_${CHUNK_IDX}.txt)
-              REMOTE_SIZE=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.size' 2>/dev/null || echo 0)
-              [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]
-            }
+              UPLOAD_HTTP=$(curl -s -o /tmp/upload_resp_${CHUNK_IDX}.json -w "%{http_code}" \
+                -X PUT \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-binary @/tmp/payload_upload_${CHUNK_IDX}.json \
+                "https://api.github.com/repos/$THIRD_REPO/contents/$FINAL_DEST")
+              rm -f /tmp/payload_upload_${CHUNK_IDX}.json
 
-            SUCCESS=0
-            for attempt in 1 2 3; do
-              if upload_once >>"$LOGFILE" 2>&1 && verify_once; then
-                FINAL_DEST=$(cat /tmp/current_dest_${CHUNK_IDX}.txt)
-                SUCCESS=1
-                echo "✅ آپلود و تأیید موفق در تلاش $attempt → $FINAL_DEST (strategy=$STRAT_NAME_RAW, chunk ${CHUNK_IDX})."
-                break
+              if [ "$UPLOAD_HTTP" = "200" ] || [ "$UPLOAD_HTTP" = "201" ]; then
+                # تأیید سایز
+                REMOTE_SIZE=$(gh api "repos/$THIRD_REPO/contents/$FINAL_DEST" -q '.size' 2>/dev/null || echo 0)
+                if [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]; then
+                  SUCCESS=1
+                  echo "✅ آپلود و تأیید موفق در تلاش $attempt → $FINAL_DEST (strategy=$STRAT_NAME_RAW, chunk ${CHUNK_IDX})."
+                  break
+                else
+                  echo "⚠️ تلاش $attempt: آپلود شد اما سایز مطابقت ندارد (local=$LOCAL_SIZE remote=$REMOTE_SIZE) — تلاش دوباره..." | tee -a "$LOGFILE"
+                fi
+              elif [ "$UPLOAD_HTTP" = "409" ] || [ "$UPLOAD_HTTP" = "422" ]; then
+                # فایل در این‌بین توسط run موازی آپلود شده — نام جدید با attempt
+                echo "⚠️ تلاش $attempt: تداخل ($UPLOAD_HTTP) — نام جدید با attempt می‌گیرد." | tee -a "$LOGFILE"
+                FINAL_DEST="signature_archives/${MODULE_NAME}/${STRAT_NAME_RAW}/${SAFE_STRAT}_chunk_${CHUNK_IDX}_${RUN_TS}_a${attempt}.tar.gz.enc"
+              else
+                echo "⚠️ تلاش $attempt: HTTP $UPLOAD_HTTP — $(cat /tmp/upload_resp_${CHUNK_IDX}.json | head -c 200)" | tee -a "$LOGFILE"
               fi
-              echo "⚠️ تلاش $attempt ناموفق بود یا سایز مطابقت نداشت (strategy=$STRAT_NAME_RAW) — تلاش دوباره..."
+
+              rm -f /tmp/upload_resp_${CHUNK_IDX}.json
               sleep $((attempt * 5))
             done
-
-            rm -f /tmp/current_dest_${CHUNK_IDX}.txt
 
             if [ "$SUCCESS" -ne 1 ]; then
               echo "❌ آپلود پس از ۳ تلاش ناموفق ماند برای strategy=$STRAT_NAME_RAW (chunk ${CHUNK_IDX})." | tee -a "$LOGFILE"
