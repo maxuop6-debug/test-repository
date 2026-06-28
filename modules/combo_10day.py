@@ -90,7 +90,7 @@ def detect_indicator_from_filename(filename_no_ext):
         return 'Core CPI m/m'
     if 'core_ppi' in name or 'core ppi' in name:
         return 'Core PPI m/m'
-    if 'cpi_y_y' in name or 'cpi y/y' in name:
+    if 'cpi_y_y' in name or 'cpi y/y' in name or 'cpi y_y' in name:
         return 'CPI y/y'
     if 'cpi' in name:
         return 'CPI m/m'
