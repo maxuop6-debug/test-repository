@@ -263,7 +263,7 @@ jobs:
           path: /tmp/all_signatures/
           retention-days: 1
 
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰۰ تایی با محدودیت ۱۳۰۰۰
+      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰۰۰۰۰ تایی با محدودیت ۵۰۰۰۰۰
         id: gen
         run: |
           mkdir -p /tmp/golden_chunks
@@ -276,16 +276,16 @@ jobs:
             exit 0
           fi
 
-          # محدودیت ۱۳۰۰۰
-          if [ "$TOTAL" -gt 13000 ]; then
-            echo "$SIG_FILES" | jq '.[:13000]' > /tmp/golden_chunks/signatures_capped.json
-            TOTAL=13000
+          # محدودیت کل امضاها (حداکثر در هر اجرا)
+          if [ "$TOTAL" -gt 500000 ]; then
+            echo "$SIG_FILES" | jq '.[:500000]' > /tmp/golden_chunks/signatures_capped.json
+            TOTAL=500000
           else
             echo "$SIG_FILES" > /tmp/golden_chunks/signatures_capped.json
           fi
           SIG_FILES_CAPPED=$(cat /tmp/golden_chunks/signatures_capped.json)
 
-          CHUNK_SIZE=500
+          CHUNK_SIZE=500000
           CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           if [ "$CHUNK_COUNT" -gt 256 ]; then
             CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
@@ -502,9 +502,14 @@ jobs:
         run: |
           mkdir -p /tmp/golden_chunk_cache
 
-          # باگ E+F fix: فقط processed_signatures واقعی از golden_status.json
+          # باگ dedup ریشه‌ای fix: done_items باید مسیرهای فایل JSONL باشه
+          # (همان فرمتی که completed_golden.json / all_combinations_golden.json استفاده می‌کنن)
+          # نه «امضای خبری» سطح ردیف (processed_signatures) که از محتوای داده ساخته می‌شه.
+          # این دو قبلاً اشتباهاً یکی فرض شده بودن و در نتیجه dedup هیچ‌وقت match نمی‌کرد
+          # و صف (all_combinations_golden.json) هیچ‌وقت کوچیک نمی‌شد.
+          # golden.py حالا processed_files را در golden_status.json ذخیره می‌کند.
           if [ -f /tmp/golden_chunk_cache/golden_status.json ]; then
-            jq -c '.processed_signatures // []' /tmp/golden_chunk_cache/golden_status.json \
+            jq -c '.processed_files // []' /tmp/golden_chunk_cache/golden_status.json \
               > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
           else
             if [ ! -f /tmp/done_items.json ]; then
@@ -528,7 +533,7 @@ jobs:
             touch /tmp/golden_chunk_cache/chunk_completed.flag
           fi
 
-          echo "✅ done_items برای chunk ${{ matrix.chunk_index }}: $DONE_COUNT signature واقعاً پردازش‌شده."
+          echo "✅ done_items برای chunk ${{ matrix.chunk_index }}: $DONE_COUNT فایل JSONL واقعاً پردازش‌شده."
 
       - name: 6. ذخیره نتایج در Cache
         if: always()
