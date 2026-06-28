@@ -956,10 +956,72 @@ jobs:
             done
             [ $COMP_RETRY -ge $COMP_MAX ] && echo "ERROR: پس از $COMP_MAX تلاش، completed_golden.json به‌روز نشد."
 
+            # ── گزینه A fix: push تجمعی completed_golden_archives.json (سطح archive) ──
+            # build_all_queues.py برای تصمیم‌گیری «آیا این archive قبلاً پردازش شده»
+            # از completed_golden_archives.json استفاده می‌کند (نه completed_golden.json
+            # که در سطح .jsonl است). بنابراین باید این فایل را هم اینجا به‌روز کنیم.
+            echo "✅ به‌روزرسانی completed_golden_archives.json با archiveهای کامل‌شده این run..."
+
+            # دریافت completed_golden_archives.json فعلی از مخزن سوم
+            curl -s \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden_archives.json" \
+              2>/dev/null > /tmp/current_arch_raw.json
+            if ! jq -e 'type == "array"' /tmp/current_arch_raw.json > /dev/null 2>&1; then
+              echo "[]" > /tmp/current_arch_raw.json
+            fi
+
+            # ادغام با fully_done_archives (همان archive path‌هایی که این run کامل شدند)
+            jq -s '.[0] + .[1] | unique' \
+              /tmp/current_arch_raw.json /tmp/fully_done_archives.json \
+              > /tmp/completed_golden_archives.json 2>/dev/null \
+              || cat /tmp/current_arch_raw.json > /tmp/completed_golden_archives.json
+
+            NEW_ARCH_COUNT=$(jq length /tmp/completed_golden_archives.json)
+            echo "[DEBUG] تعداد کل archiveهای ثبت‌شده در completed_golden_archives (تجمعی): $NEW_ARCH_COUNT"
+
+            ARCH_RETRY=0; ARCH_MAX=10000
+            while [ $ARCH_RETRY -lt $ARCH_MAX ]; do
+              SHA_ARCH=$(gh api "repos/$THIRD_REPO/contents/completed_golden_archives.json" -q '.sha' 2>/dev/null || echo "")
+              base64 -w0 /tmp/completed_golden_archives.json > /tmp/arch_base64.txt
+              if [ -n "$SHA_ARCH" ]; then
+                jq -n \
+                  --arg msg "update completed_golden_archives ($NEW_ARCH_COUNT archives, run ${{ github.run_id }})" \
+                  --rawfile content /tmp/arch_base64.txt \
+                  --arg sha "$SHA_ARCH" \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
+                  > /tmp/payload_arch.json
+              else
+                jq -n \
+                  --arg msg "update completed_golden_archives ($NEW_ARCH_COUNT archives, run ${{ github.run_id }})" \
+                  --rawfile content /tmp/arch_base64.txt \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                  > /tmp/payload_arch.json
+              fi
+              ARCH_HTTP=$(curl -s -o /tmp/arch_upload_resp.txt -w "%{http_code}" -X PUT \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-binary @/tmp/payload_arch.json \
+                "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden_archives.json")
+              if [ "$ARCH_HTTP" = "200" ] || [ "$ARCH_HTTP" = "201" ]; then
+                echo "✅ completed_golden_archives.json با $NEW_ARCH_COUNT archive به‌روز شد."
+                break
+              elif [ "$ARCH_HTTP" = "409" ] || [ "$ARCH_HTTP" = "422" ]; then
+                echo "⚠️ تداخل SHA در completed_golden_archives (HTTP $ARCH_HTTP) — تلاش مجدد..."
+                ARCH_RETRY=$((ARCH_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+              else
+                echo "⚠️ به‌روزرسانی completed_golden_archives.json ناموفق (HTTP $ARCH_HTTP): $(cat /tmp/arch_upload_resp.txt | head -c 200)"
+                break
+              fi
+            done
+            [ $ARCH_RETRY -ge $ARCH_MAX ] && echo "ERROR: پس از $ARCH_MAX تلاش، completed_golden_archives.json به‌روز نشد."
+
             rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt \
               /tmp/payload.json /tmp/payload_comp.json /tmp/upload_response.txt \
               /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json \
-              /tmp/fully_done_archives.json
+              /tmp/fully_done_archives.json /tmp/current_arch_raw.json \
+              /tmp/arch_base64.txt /tmp/payload_arch.json /tmp/arch_upload_resp.txt
 
           fi  # پایان بلوک MERGED_COUNT -gt 0
 
