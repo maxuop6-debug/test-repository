@@ -588,14 +588,22 @@ jobs:
                 echo '["completed"]' > /tmp/completed_portfolios_empty.json
                 SHA_COMP_E=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
                 B64_E=$(base64 -w0 /tmp/completed_portfolios_empty.json)
-                PAYLOAD_E=$(jq -n --arg c "$B64_E" --arg s "$SHA_COMP_E" \
-                  'if $s != "" then {message:"portfolios completed (queue empty)",content:$c,branch:"main",sha:$s}
-                   else {message:"portfolios completed (queue empty)",content:$c,branch:"main"} end')
+                # fix: ساخت payload به فایل و آپلود با --data-binary
+                if [ -n "$SHA_COMP_E" ]; then
+                  jq -n --arg c "$B64_E" --arg s "$SHA_COMP_E" \
+                    '{message:"portfolios completed (queue empty)",content:$c,branch:"main",sha:$s}' \
+                    > /tmp/payload_empty.json
+                else
+                  jq -n --arg c "$B64_E" \
+                    '{message:"portfolios completed (queue empty)",content:$c,branch:"main"}' \
+                    > /tmp/payload_empty.json
+                fi
                 curl -s -X PUT -o /dev/null \
                   -H "Authorization: token $GH_TOKEN" \
                   -H "Content-Type: application/json" \
-                  -d "$PAYLOAD_E" \
+                  --data-binary @/tmp/payload_empty.json \
                   "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json"
+                rm -f /tmp/payload_empty.json
               else
                 echo "[DEBUG] صف هنوز $QUEUE_LEN آیتم دارد — ادامه loop."
               fi
@@ -639,11 +647,12 @@ jobs:
               echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
               base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
+              # fix ARG_MAX: --rawfile به جای --arg content "$(cat ...)"
               jq -n \
                 --arg msg "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
-                --arg content "$(cat /tmp/new_content_base64.txt)" \
+                --rawfile content /tmp/new_content_base64.txt \
                 --arg sha "$SHA" \
-                '{message: $msg, content: $content, sha: $sha, branch: "main"}' \
+                '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
                 > /tmp/payload.json
               HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
                 -H "Authorization: token $GH_TOKEN" \
@@ -663,27 +672,31 @@ jobs:
             done
             [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
 
-            # به‌روزرسانی تجمعی completed_portfolios.json
-            CURRENT_COMPLETED=$(curl -s \
+            # fix ARG_MAX: همه عملیات merge روی فایل انجام میشه نه shell variable
+            curl -s \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json" 2>/dev/null || echo "[]")
-            CURRENT_NORMALIZED=$(echo "$CURRENT_COMPLETED" | jq -c \
-              '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
-              2>/dev/null || echo "[]")
+              "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json" \
+              2>/dev/null > /tmp/current_completed_raw.json
+            if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
+              echo "[]" > /tmp/current_completed_raw.json
+            fi
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+              /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
+              || echo "[]" > /tmp/current_normalized.json
 
-            NEW_SIGS=$(jq -c \
-              '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
-              /tmp/merged_done.json 2>/dev/null || echo "[]")
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
+              /tmp/merged_done.json > /tmp/new_sigs.json 2>/dev/null \
+              || echo "[]" > /tmp/new_sigs.json
 
-            MERGED_COMPLETED=$(jq -n \
-              --argjson old "$CURRENT_NORMALIZED" \
-              --argjson new "$NEW_SIGS" \
-              '$old + $new | unique')
+            jq -s '.[0] + .[1] | unique' \
+              /tmp/current_normalized.json /tmp/new_sigs.json > /tmp/completed_portfolios.json 2>/dev/null \
+              || echo "[]" > /tmp/completed_portfolios.json
 
-            MERGED_COMP_COUNT=$(echo "$MERGED_COMPLETED" | jq 'length')
+            MERGED_COMP_COUNT=$(jq 'length' /tmp/completed_portfolios.json)
             echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_portfolios: $MERGED_COMP_COUNT"
-            echo "$MERGED_COMPLETED" > /tmp/completed_portfolios.json
+
+            rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json /tmp/new_sigs.json
 
             if [ "$AFTER" -eq 0 ]; then
               echo "✅ صف خالی شد — completed_portfolios.json به [\"completed\"] تنظیم می‌شود."
@@ -694,16 +707,25 @@ jobs:
             while [ $COMP_RETRY -lt $COMP_MAX ]; do
               SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
               base64 -w0 /tmp/completed_portfolios.json > /tmp/completed_base64.txt
-              PAYLOAD_COMP=$(jq -n \
-                --arg msg "update completed_portfolios ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
-                --arg content "$(cat /tmp/completed_base64.txt)" \
-                --arg sha "$SHA_COMP" \
-                'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
-                 else {message: $msg, content: $content, branch: "main"} end')
+              # fix ARG_MAX: --rawfile به جای --arg content "$(cat ...)"
+              if [ -n "$SHA_COMP" ]; then
+                jq -n \
+                  --arg msg "update completed_portfolios ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
+                  --rawfile content /tmp/completed_base64.txt \
+                  --arg sha "$SHA_COMP" \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
+                  > /tmp/payload_comp.json
+              else
+                jq -n \
+                  --arg msg "update completed_portfolios ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
+                  --rawfile content /tmp/completed_base64.txt \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                  > /tmp/payload_comp.json
+              fi
               COMP_HTTP=$(curl -s -o /tmp/comp_upload_resp.txt -w "%{http_code}" -X PUT \
                 -H "Authorization: token $GH_TOKEN" \
                 -H "Content-Type: application/json" \
-                -d "$PAYLOAD_COMP" \
+                --data-binary @/tmp/payload_comp.json \
                 "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json")
               if [ "$COMP_HTTP" = "200" ] || [ "$COMP_HTTP" = "201" ]; then
                 echo "✅ completed_portfolios.json به‌روز شد."
@@ -792,7 +814,8 @@ jobs:
           echo "✅ رمزنگاری portfolios_scores.tar.gz.enc انجام شد"
 
           DEST="analysis_results/portfolios_scores.parquet.enc"
-          CONTENT_B64=$(base64 -w0 /tmp/portfolios_scores.tar.gz.enc)
+          # fix ARG_MAX: به جای CONTENT_B64=$(base64 ...) در shell، به فایل می‌ریزیم
+          base64 -w0 /tmp/portfolios_scores.tar.gz.enc > /tmp/portfolios_scores_b64.txt
           PS_RETRY=0; PS_MAX=10
           while [ $PS_RETRY -lt $PS_MAX ]; do
             SHA_PS=$(curl -s \
@@ -800,16 +823,24 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" \
               | jq -r '.sha // empty' 2>/dev/null || echo "")
-            PAYLOAD_PS=$(jq -n \
-              --arg msg "update portfolios_scores merged (run ${{ github.run_id }})" \
-              --arg content "$CONTENT_B64" \
-              --arg sha "$SHA_PS" \
-              'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
-               else {message: $msg, content: $content, branch: "main"} end')
+            if [ -n "$SHA_PS" ]; then
+              jq -n \
+                --arg msg "update portfolios_scores merged (run ${{ github.run_id }})" \
+                --rawfile content /tmp/portfolios_scores_b64.txt \
+                --arg sha "$SHA_PS" \
+                '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
+                > /tmp/payload_ps.json
+            else
+              jq -n \
+                --arg msg "update portfolios_scores merged (run ${{ github.run_id }})" \
+                --rawfile content /tmp/portfolios_scores_b64.txt \
+                '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                > /tmp/payload_ps.json
+            fi
             PS_HTTP=$(curl -s -o /tmp/ps_resp.txt -w "%{http_code}" -X PUT \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD_PS" \
+              --data-binary @/tmp/payload_ps.json \
               "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
             if [ "$PS_HTTP" = "200" ] || [ "$PS_HTTP" = "201" ]; then
               echo "✅ portfolios_scores.parquet.enc در مخزن سوم آپلود شد → $DEST"
