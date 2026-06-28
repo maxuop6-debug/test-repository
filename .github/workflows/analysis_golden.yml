@@ -810,27 +810,35 @@ jobs:
             # به‌روزرسانی تجمعی completed_golden.json
             echo "✅ به‌روزرسانی completed_golden.json با signatureهای جدید این run..."
 
-            CURRENT_COMPLETED=$(curl -s \
+            # fix ARG_MAX: همه عملیات merge روی فایل انجام میشه نه shell variable
+            curl -s \
               -H "Authorization: token $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" 2>/dev/null || echo "[]")
-            CURRENT_NORMALIZED=$(echo "$CURRENT_COMPLETED" | jq -c \
-              '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
-              2>/dev/null || echo "[]")
+              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" \
+              2>/dev/null > /tmp/current_completed_raw.json
+            # اگر خالی یا invalid بود، [] جایگزین کن
+            if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
+              echo "[]" > /tmp/current_completed_raw.json
+            fi
+            # normalize به فایل
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+              /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
+              || echo "[]" > /tmp/current_normalized.json
 
-            NEW_SIGS=$(jq -c \
-              '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
-              /tmp/merged_done.json 2>/dev/null || echo "[]")
+            # new sigs به فایل
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
+              /tmp/merged_done.json > /tmp/new_sigs.json 2>/dev/null \
+              || echo "[]" > /tmp/new_sigs.json
 
-            MERGED_COMPLETED=$(jq -n \
-              --argjson old "$CURRENT_NORMALIZED" \
-              --argjson new "$NEW_SIGS" \
-              '$old + $new | unique')
+            # merge دو فایل JSON با jq -s (نه --argjson با var بزرگ)
+            jq -s '.[0] + .[1] | unique' \
+              /tmp/current_normalized.json /tmp/new_sigs.json > /tmp/completed_golden.json 2>/dev/null \
+              || echo "[]" > /tmp/completed_golden.json
 
-            MERGED_COMP_COUNT=$(echo "$MERGED_COMPLETED" | jq 'length')
+            MERGED_COMP_COUNT=$(jq 'length' /tmp/completed_golden.json)
             echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_golden: $MERGED_COMP_COUNT"
 
-            echo "$MERGED_COMPLETED" > /tmp/completed_golden.json
+            rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json /tmp/new_sigs.json
 
             COMP_RETRY=0; COMP_MAX=10000
             while [ $COMP_RETRY -lt $COMP_MAX ]; do
