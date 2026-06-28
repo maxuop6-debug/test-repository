@@ -772,10 +772,14 @@ jobs:
                 RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
               fi
               # بررسی: پاسخ باید array از objects باشد نه error string از GitHub
-              if ! jq -e 'type == "array" and (length == 0 or (.[0] | type == "object" and has("signature_path")))' /tmp/current.json > /dev/null 2>&1; then
-                echo "ERROR: محتوای دریافتی معتبر نیست: $(head -c 200 /tmp/current.json)"
+              if ! jq -e 'type == "array"' /tmp/current.json > /dev/null 2>&1; then
+                echo "ERROR: محتوای دریافتی array نیست — تلاش مجدد..."
                 RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
               fi
+              # فیلتر string‌های خطا (Not Found، URL، کد HTTP) از صف
+              jq '[.[] | select(type == "object" and has("signature_path"))]' \
+                /tmp/current.json > /tmp/current_clean.json
+              mv /tmp/current_clean.json /tmp/current.json
 
               # normalize done_items:
               # golden.py مسیر را به شکل "signatures/combo_10day/.../file.jsonl" ذخیره می‌کند
@@ -790,8 +794,9 @@ jobs:
                        | if endswith(".jsonl") then .[:-6] else . end
                   ] | unique' \
                 /tmp/merged_done.json > /tmp/merged_done_normalized.json
-              echo "[DEBUG] نمونه merged_done_normalized: $(jq '.[0:2]' /tmp/merged_done_normalized.json)"
-              echo "[DEBUG] نمونه صف: $(jq '[.[0:2][] | .signature_path]' /tmp/current.json)"
+              NORM_COUNT=$(jq length /tmp/merged_done_normalized.json)
+              QUEUE_COUNT=$(jq length /tmp/current.json)
+              echo "[DEBUG] normalized done: $NORM_COUNT | صف: $QUEUE_COUNT"
               jq -s '.[0] as $c | .[1] as $d
                 | ($d | unique) as $done_set
                 | $c | map(
