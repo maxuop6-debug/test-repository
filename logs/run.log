@@ -458,3 +458,7 @@ https://github.com/Amir9287171/test-repository/actions/runs/28324536460
 [2026-06-28 13:57:41] [INFO] 📄 فایل لاگ: logs/queue_builder.log
 [2026-06-28 13:57:41] [INFO] ============================================================
 ✅ build_all_queues.py (correlation queue) با موفقیت اجرا شد.
+🔍 بررسی پرچم وقفه...
+🔄 فراخوانی analysis_correlation.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28324557315
+✅ فراخوانی correlation موفق بود (تلاش 1).
