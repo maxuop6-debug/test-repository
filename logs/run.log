@@ -156,3 +156,81 @@ https://github.com/Amir9287171/test-repository/actions/runs/28323754521
 🔄 فراخوانی analysis_correlation.yml...
 https://github.com/Amir9287171/test-repository/actions/runs/28323794319
 ✅ فراخوانی correlation موفق بود (تلاش 1).
+🚀 اجرای build_all_queues.py برای ساخت صف portfolios...
+[2026-06-28 13:29:25] [INFO] ============================================================
+[2026-06-28 13:29:25] [INFO] 🚀 شروع build_all_queues.py
+[2026-06-28 13:29:25] [INFO] ============================================================
+[2026-06-28 13:29:25] [INFO]   THIRD_REPO: ✅ Amir9287171/now-test-repo
+[2026-06-28 13:29:25] [INFO]   GH_TOKEN: ✅ تنظیم شده
+[2026-06-28 13:29:25] [INFO]   RESULTS_PASSWORD: ✅ تنظیم شده
+[2026-06-28 13:29:25] [INFO] ============================================================
+[2026-06-28 13:29:25] [INFO] 🔄 مرحله ۱: ساخت صف کاری (work queue)
+[2026-06-28 13:29:25] [INFO] ============================================================
+[2026-06-28 13:29:25] [INFO]   خواندن استراتژی‌ها از: /tmp/strategies.txt
+[2026-06-28 13:29:25] [WARNING]   فایل /tmp/strategies.txt یافت نشد — تلاش برای دریافت از API مخزن سوم...
+[2026-06-28 13:29:25] [INFO]   تعداد استراتژی‌های دریافت‌شده از API (aggregated/): 6
+[2026-06-28 13:29:25] [INFO]   دانلود completed_strategies.json...
+[2026-06-28 13:29:25] [INFO]   [API GET] Amir9287171/now-test-repo/completed_strategies.json
+[2026-06-28 13:29:25] [INFO]   [API GET] نتیجه: دریافت شد (76 کاراکتر)
+[2026-06-28 13:29:25] [INFO]   تعداد استراتژی‌های قبلاً پردازش‌شده: 6
+[2026-06-28 13:29:25] [INFO]   دانلود all_combinations.json...
+[2026-06-28 13:29:25] [INFO]   [API GET] Amir9287171/now-test-repo/all_combinations.json
+[2026-06-28 13:29:26] [INFO]   [API GET] نتیجه: دریافت شد (3 کاراکتر)
+[2026-06-28 13:29:26] [INFO]   تعداد ترکیب‌های موجود در صف: 0
+[2026-06-28 13:29:26] [INFO]   تعداد استراتژی‌های جدید (نه در completed): 0
+[2026-06-28 13:29:26] [INFO]   هیچ استراتژی جدیدی برای پردازش وجود ندارد ✅
+[2026-06-28 13:29:26] [INFO] ✅ مرحله ۱ (work) با موفقیت تمام شد — 0 ترکیب جدید
+[2026-06-28 13:29:26] [INFO] ============================================================
+[2026-06-28 13:29:26] [INFO] 🔄 مرحله ۲: ساخت صف golden
+[2026-06-28 13:29:26] [INFO] ============================================================
+[2026-06-28 13:29:26] [INFO]   دانلود completed_golden.json...
+[2026-06-28 13:29:26] [INFO]   [API GET] Amir9287171/now-test-repo/completed_golden.json
+[2026-06-28 13:29:26] [WARNING]   [API GET] نتیجه: یافت نشد (returncode=1)
+[2026-06-28 13:29:26] [INFO]   تعداد signatureهایی که قبلاً در completed_golden.json ثبت شده‌اند: 0
+[2026-06-28 13:29:26] [INFO]   [ARCHIVES] دریافت لیست محتوای signature_archives/...
+[2026-06-28 13:29:26] [INFO]   [ARCHIVES] محتوای سطح اول: ['combo_10day', 'combo_monthly']
+[2026-06-28 13:29:26] [INFO]   [ARCHIVES] ساختار استاندارد شناسایی شد — ماژول‌ها: ['combo_10day', 'combo_monthly']
+[2026-06-28 13:29:26] [INFO]   [ARCHIVES] combo_10day: 2 استراتژی
+[2026-06-28 13:29:45] [INFO]   [ARCHIVES] combo_monthly: 3 استراتژی
+[2026-06-28 13:30:01] [INFO]   [ARCHIVES] تعداد کل signatureهای یافت‌شده: 0
+[2026-06-28 13:30:01] [INFO]   تعداد signatureهای پیدا شده در signature_archives/: 0
+[2026-06-28 13:30:01] [INFO]   هیچ signature‌ای در آرشیوها یافت نشد ✅
+[2026-06-28 13:30:01] [INFO] ✅ مرحله ۲ (golden) با موفقیت تمام شد — 0 signature جدید
+[2026-06-28 13:30:01] [INFO] ============================================================
+[2026-06-28 13:30:01] [INFO] 🔄 مرحله ۳: ساخت صف correlation
+[2026-06-28 13:30:01] [INFO] ============================================================
+[2026-06-28 13:30:01] [INFO]   دانلود completed_correlation.json...
+[2026-06-28 13:30:01] [INFO]   [API GET] Amir9287171/now-test-repo/completed_correlation.json
+[2026-06-28 13:30:01] [WARNING]   [API GET] نتیجه: یافت نشد (returncode=1)
+[2026-06-28 13:30:01] [INFO]   تعداد signatureهایی که قبلاً در completed_correlation.json ثبت شده‌اند: 0
+[2026-06-28 13:30:01] [INFO]   [ARCHIVES] دریافت لیست محتوای signature_archives/...
+[2026-06-28 13:30:02] [INFO]   [ARCHIVES] محتوای سطح اول: ['combo_10day', 'combo_monthly']
+[2026-06-28 13:30:02] [INFO]   [ARCHIVES] ساختار استاندارد شناسایی شد — ماژول‌ها: ['combo_10day', 'combo_monthly']
+[2026-06-28 13:30:02] [WARNING]   [ARCHIVES] ماژول combo_10day: استراتژی‌ای یافت نشد
+[2026-06-28 13:30:02] [INFO]   [ARCHIVES] combo_monthly: 3 استراتژی
+[2026-06-28 13:30:19] [INFO]   [ARCHIVES] تعداد کل signatureهای یافت‌شده: 0
+[2026-06-28 13:30:19] [INFO]   تعداد signatureهای پیدا شده در signature_archives/: 0
+[2026-06-28 13:30:19] [INFO]   هیچ signature‌ای در آرشیوها یافت نشد ✅
+[2026-06-28 13:30:19] [INFO] ✅ مرحله ۳ (correlation) با موفقیت تمام شد — 0 signature جدید
+[2026-06-28 13:30:19] [INFO] ============================================================
+[2026-06-28 13:30:19] [INFO] 🔄 مرحله ۴: ساخت صف portfolios
+[2026-06-28 13:30:19] [INFO] ============================================================
+[2026-06-28 13:30:19] [INFO]   دانلود completed_portfolios.json...
+[2026-06-28 13:30:19] [INFO]   [API GET] Amir9287171/now-test-repo/completed_portfolios.json
+[2026-06-28 13:30:19] [INFO]   [API GET] نتیجه: دریافت شد (1238 کاراکتر)
+[2026-06-28 13:30:19] [INFO]   تعداد signatureهای قبلاً ثبت‌شده: 26
+[2026-06-28 13:30:19] [INFO]   دانلود golden_scores.parquet.enc...
+[2026-06-28 13:30:19] [INFO]   [API GET BINARY] Amir9287171/now-test-repo/analysis_results/golden_scores.parquet.enc → /tmp/golden_scores.parquet.enc
+[2026-06-28 13:30:19] [ERROR]   [API GET BINARY] خطا در دریافت metadata (returncode=1)
+[2026-06-28 13:30:19] [WARNING]   golden_scores.parquet.enc یافت نشد — احتمالاً golden هنوز اجرا نشده. رد می‌شویم.
+[2026-06-28 13:30:19] [INFO] ✅ مرحله ۴ (portfolios) با موفقیت تمام شد — 0 signature جدید
+[2026-06-28 13:30:19] [INFO] ============================================================
+[2026-06-28 13:30:19] [INFO] 📊 خلاصه کل عملیات:
+[2026-06-28 13:30:19] [INFO]    work        → 0 ترکیب جدید
+[2026-06-28 13:30:19] [INFO]    golden      → 0 signature جدید
+[2026-06-28 13:30:19] [INFO]    correlation → 0 signature جدید
+[2026-06-28 13:30:19] [INFO]    portfolios  → 0 signature جدید
+[2026-06-28 13:30:19] [INFO] ✅ همه‌ی صف‌ها با موفقیت ساخته شدند
+[2026-06-28 13:30:19] [INFO] 📄 فایل لاگ: logs/queue_builder.log
+[2026-06-28 13:30:19] [INFO] ============================================================
+✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد.
