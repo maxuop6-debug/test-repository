@@ -623,7 +623,8 @@ jobs:
 
               # باگ U fix: retry loop برای آپلود golden_scores (مثل all_combinations_golden)
               DEST="analysis_results/golden_scores.parquet.enc"
-              CONTENT_B64=$(base64 -w0 /tmp/golden_scores.tar.gz.enc)
+              # fix ARG_MAX: به جای CONTENT_B64=$(base64 ...) در shell، فایل رو به‌صورت مستقیم پاس می‌دیم
+              base64 -w0 /tmp/golden_scores.tar.gz.enc > /tmp/golden_scores_b64.txt
               GS_RETRY=0; GS_MAX=10
               while [ $GS_RETRY -lt $GS_MAX ]; do
                 SHA_GS=$(curl -s \
@@ -631,16 +632,24 @@ jobs:
                   -H "Accept: application/vnd.github.v3+json" \
                   "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" \
                   | jq -r '.sha // empty' 2>/dev/null || echo "")
-                PAYLOAD_GS=$(jq -n \
-                  --arg msg "update golden_scores merged (run ${{ github.run_id }})" \
-                  --arg content "$CONTENT_B64" \
-                  --arg sha "$SHA_GS" \
-                  'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
-                   else {message: $msg, content: $content, branch: "main"} end')
+                if [ -n "$SHA_GS" ]; then
+                  jq -n \
+                    --arg msg "update golden_scores merged (run ${{ github.run_id }})" \
+                    --rawfile content /tmp/golden_scores_b64.txt \
+                    --arg sha "$SHA_GS" \
+                    '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
+                    > /tmp/payload_gs.json
+                else
+                  jq -n \
+                    --arg msg "update golden_scores merged (run ${{ github.run_id }})" \
+                    --rawfile content /tmp/golden_scores_b64.txt \
+                    '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                    > /tmp/payload_gs.json
+                fi
                 GS_HTTP=$(curl -s -o /tmp/gs_resp.txt -w "%{http_code}" -X PUT \
                   -H "Authorization: token $CROSS_REPO_TOKEN" \
                   -H "Content-Type: application/json" \
-                  -d "$PAYLOAD_GS" \
+                  --data-binary @/tmp/payload_gs.json \
                   "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
                 if [ "$GS_HTTP" = "200" ] || [ "$GS_HTTP" = "201" ]; then
                   echo "✅ golden_scores.parquet.enc در مخزن سوم آپلود شد → $DEST"
@@ -773,11 +782,12 @@ jobs:
               echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
               base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
+              # fix ARG_MAX: به جای --arg content "$(cat ...)" از --rawfile استفاده می‌کنیم
               jq -n \
                 --arg msg "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
-                --arg content "$(cat /tmp/new_content_base64.txt)" \
+                --rawfile content /tmp/new_content_base64.txt \
                 --arg sha "$SHA" \
-                '{message: $msg, content: $content, sha: $sha, branch: "main"}' \
+                '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
                 > /tmp/payload.json
               HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
                 -H "Authorization: token $GH_TOKEN" \
@@ -826,16 +836,25 @@ jobs:
             while [ $COMP_RETRY -lt $COMP_MAX ]; do
               SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_golden.json" -q '.sha' 2>/dev/null || echo "")
               base64 -w0 /tmp/completed_golden.json > /tmp/completed_base64.txt
-              PAYLOAD_COMP=$(jq -n \
-                --arg msg "update completed_golden ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
-                --arg content "$(cat /tmp/completed_base64.txt)" \
-                --arg sha "$SHA_COMP" \
-                'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
-                 else {message: $msg, content: $content, branch: "main"} end')
+              # fix ARG_MAX: --rawfile به جای --arg content "$(cat ...)" برای فایل‌های بزرگ
+              if [ -n "$SHA_COMP" ]; then
+                jq -n \
+                  --arg msg "update completed_golden ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
+                  --rawfile content /tmp/completed_base64.txt \
+                  --arg sha "$SHA_COMP" \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
+                  > /tmp/payload_comp.json
+              else
+                jq -n \
+                  --arg msg "update completed_golden ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
+                  --rawfile content /tmp/completed_base64.txt \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                  > /tmp/payload_comp.json
+              fi
               COMP_HTTP=$(curl -s -o /tmp/comp_upload_resp.txt -w "%{http_code}" -X PUT \
                 -H "Authorization: token $GH_TOKEN" \
                 -H "Content-Type: application/json" \
-                -d "$PAYLOAD_COMP" \
+                --data-binary @/tmp/payload_comp.json \
                 "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json")
               if [ "$COMP_HTTP" = "200" ] || [ "$COMP_HTTP" = "201" ]; then
                 echo "✅ completed_golden.json با $MERGED_COMP_COUNT signature به‌روز شد."
@@ -851,8 +870,8 @@ jobs:
             [ $COMP_RETRY -ge $COMP_MAX ] && echo "ERROR: پس از $COMP_MAX تلاش، completed_golden.json به‌روز نشد."
 
             rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt \
-              /tmp/payload.json /tmp/upload_response.txt /tmp/completed_*.json \
-              /tmp/completed_base64.txt /tmp/payload_completed.json
+              /tmp/payload.json /tmp/payload_comp.json /tmp/upload_response.txt \
+              /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
 
           fi  # پایان بلوک MERGED_COUNT -gt 0
 
