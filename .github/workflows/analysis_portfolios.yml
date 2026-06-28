@@ -17,7 +17,7 @@ on:
         default: ''
 
 concurrency:
-  group: analysis-runner
+  group: analysis-runner-portfolios
   cancel-in-progress: false
 
 jobs:
@@ -114,7 +114,26 @@ jobs:
             --output-dir /tmp/reports \
             --password "$RESULTS_PASSWORD"
 
-      - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
+      - name: 10. رمزنگاری reports و آماده‌سازی برای commit
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          tar -czf /tmp/reports.tar.gz -C /tmp reports
+          echo "✅ فشرده‌سازی reports انجام شد ($(du -sh /tmp/reports.tar.gz | cut -f1))"
+          node -e "
+            const crypto = require('crypto'), fs = require('fs');
+            const pass = process.env.RESULTS_PASSWORD;
+            const data = fs.readFileSync('/tmp/reports.tar.gz');
+            const key  = crypto.scryptSync(pass, 'salt', 32);
+            const iv   = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+            const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
+            fs.writeFileSync('/tmp/reports.tar.gz.enc', enc);
+          "
+          echo "✅ رمزنگاری reports.tar.gz.enc انجام شد"
+          rm -rf /tmp/reports /tmp/reports.tar.gz
+
+      - name: 11. Commit و Push reports.tar.gz.enc به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -122,12 +141,31 @@ jobs:
           cd /tmp/third_repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -rf reports/
-          mkdir -p reports
-          cp -r /tmp/reports/* reports/
-          git add -f reports/
-          git commit -m "update reports (run ${{ github.run_id }})" || echo "No changes to commit"
-          git push origin main
+          PUSH_RETRY=0; PUSH_MAX=5
+          while [ $PUSH_RETRY -lt $PUSH_MAX ]; do
+            git fetch origin main 2>/dev/null
+            git rebase origin/main 2>/dev/null
+            REBASE_STATUS=$?
+            if [ $REBASE_STATUS -ne 0 ]; then
+              echo "⚠️ rebase conflict — abort و retry ($((PUSH_RETRY+1))/$PUSH_MAX)"
+              git rebase --abort 2>/dev/null || true
+              PUSH_RETRY=$((PUSH_RETRY+1))
+              sleep $(( (RANDOM % 5) + 3 ))
+              continue
+            fi
+            git rm -rf reports/ 2>/dev/null || true
+            cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
+            git add -f reports.tar.gz.enc
+            git commit -m "update reports encrypted (run ${{ github.run_id }})" 2>/dev/null || true
+            git push origin main && break
+            echo "⚠️ push ناموفق — تلاش مجدد ($((PUSH_RETRY+1))/$PUSH_MAX)"
+            PUSH_RETRY=$((PUSH_RETRY+1))
+            sleep $(( (RANDOM % 5) + 3 ))
+          done
+          if [ $PUSH_RETRY -ge $PUSH_MAX ]; then
+            echo "ERROR: push پس از $PUSH_MAX تلاش ناموفق."
+            exit 1
+          fi
 
   # ================================================================
   # portfolios-generate-matrix: تولید صف کار برای ماژول portfolios
@@ -218,17 +256,42 @@ jobs:
             CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           fi
 
+          INPUT_START="${{ github.event.inputs.chunk_start }}"
+          INPUT_END="${{ github.event.inputs.chunk_end }}"
+          [ -z "$INPUT_START" ] && INPUT_START=0
+          [ -z "$INPUT_END" ]   && INPUT_END=$((CHUNK_COUNT - 1))
+          if ! [[ "$INPUT_START" =~ ^[0-9]+$ ]]; then
+            echo "⚠️ chunk_start غیرعددی ('$INPUT_START') — به 0 تنظیم شد."
+            INPUT_START=0
+          fi
+          if ! [[ "$INPUT_END" =~ ^[0-9]+$ ]]; then
+            echo "⚠️ chunk_end غیرعددی ('$INPUT_END') — به $((CHUNK_COUNT - 1)) تنظیم شد."
+            INPUT_END=$((CHUNK_COUNT - 1))
+          fi
+          [ "$INPUT_START" -lt 0 ] && INPUT_START=0
+          [ "$INPUT_END" -ge "$CHUNK_COUNT" ] && INPUT_END=$((CHUNK_COUNT - 1))
+          if [ "$INPUT_START" -gt "$INPUT_END" ]; then
+            echo "⚠️ بازه chunk خالی است (start=$INPUT_START > end=$INPUT_END) — matrix خالی."
+            echo "matrix_items=[]" >> $GITHUB_OUTPUT
+            echo "empty=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "[DEBUG] پردازش chunk‌های $INPUT_START تا $INPUT_END از مجموع $CHUNK_COUNT"
+
           INDICES="["
           for ((i=0; i<CHUNK_COUNT; i++)); do
             START=$((i * CHUNK_SIZE))
             END=$((START + CHUNK_SIZE))
             echo "$SIG_FILES_CAPPED" | jq ".[$START:$END]" > /tmp/portfolios_chunks/chunk_${i}.json
-            if [ $i -gt 0 ]; then INDICES+=", "; fi
-            INDICES+="$i"
+            if [ "$i" -ge "$INPUT_START" ] && [ "$i" -le "$INPUT_END" ]; then
+              if [ "${#INDICES}" -gt 1 ]; then INDICES+=", "; fi
+              INDICES+="$i"
+            fi
           done
           INDICES+="]"
           echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
           echo "empty=false" >> $GITHUB_OUTPUT
+          echo "✅ $TOTAL امضا در $CHUNK_COUNT چانک — اجرای chunk‌های $INPUT_START تا $INPUT_END."
 
       - name: آپلود چانک‌های portfolios
         if: steps.gen.outputs.empty == 'false'
@@ -284,6 +347,7 @@ jobs:
           fi
 
       - name: 1. بررسی interrupt.flag
+        id: interrupt_check
         if: steps.prev_check.outputs.already_done != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -294,25 +358,37 @@ jobs:
             "https://api.github.com/repos/$THIRD_REPO/contents/interrupt.flag")
           if [ "$HTTP_CODE" = "200" ]; then
             echo "🛑 interrupt.flag یافت شد — job با وضعیت interrupted خاتمه می‌یابد."
-            exit 0
+            echo "interrupted=true" >> $GITHUB_OUTPUT
+          else
+            echo "interrupted=false" >> $GITHUB_OUTPUT
+            echo "✅ interrupt.flag یافت نشد — ادامه پردازش."
           fi
 
       - name: 2. راه‌اندازی پایتون و نصب کتابخانه‌ها
-        if: steps.prev_check.outputs.already_done != 'true'
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - run: pip install pandas numpy scipy pyarrow
-        if: steps.prev_check.outputs.already_done != 'true'
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
 
       - name: دانلود artifact مشترک تمام signatureهای استخراج‌شده (بدون تماس API)
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
         uses: actions/download-artifact@v4
         with:
           name: all-signatures-${{ github.run_id }}
           path: /tmp/all_signatures
 
       - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
-        if: steps.prev_check.outputs.already_done != 'true'
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
         run: |
           mkdir -p /tmp/signatures
           CHUNK_INDEX=${{ matrix.chunk_index }}
@@ -333,7 +409,9 @@ jobs:
           echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
 
       - name: 4. دانلود golden_scores.parquet از مخزن سوم
-        if: steps.prev_check.outputs.already_done != 'true'
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -372,7 +450,9 @@ jobs:
           echo "✅ golden_scores.parquet دریافت و رمزگشایی شد."
 
       - name: 6. اجرای portfolios.py برای این چانک
-        if: steps.prev_check.outputs.already_done != 'true'
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
         run: |
           mkdir -p /tmp/portfolios_chunk_cache
 
@@ -399,19 +479,28 @@ jobs:
           mkdir -p /tmp/portfolios_chunk_cache
 
           if [ -f /tmp/portfolios_chunk_cache/portfolios_status.json ]; then
-            jq -c '.processed_signatures // []' /tmp/portfolios_chunk_cache/portfolios_status.json > /tmp/done_items_from_status.json 2>/dev/null || echo "[]" > /tmp/done_items_from_status.json
+            jq -c '.processed_signatures // []' /tmp/portfolios_chunk_cache/portfolios_status.json \
+              > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
           else
-            echo "[]" > /tmp/done_items_from_status.json
+            if [ ! -f /tmp/done_items.json ]; then
+              echo "[]" > /tmp/done_items.json
+            fi
           fi
 
-          CHUNK_SIGS=$(cat /tmp/portfolios_chunks/chunk_${{ matrix.chunk_index }}.json)
+          jq empty /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
 
-          jq -n --slurpfile arr1 /tmp/done_items_from_status.json --argjson arr2 "$CHUNK_SIGS" '$arr1[0] + $arr2 | unique' > /tmp/done_items_unique.json
-          mv /tmp/done_items_unique.json /tmp/done_items.json
+          DONE_COUNT=$(jq length /tmp/done_items.json)
           cp /tmp/done_items.json /tmp/portfolios_chunk_cache/done_items.json
-          touch /tmp/portfolios_chunk_cache/chunk_completed.flag
 
-          echo "✅ done_items برای chunk ${{ matrix.chunk_index }} ذخیره شد."
+          INTERRUPTED="${{ steps.interrupt_check.outputs.interrupted }}"
+          if [ "$INTERRUPTED" = "true" ]; then
+            echo "⚠️ chunk ${{ matrix.chunk_index }} interrupted بود — chunk_completed.flag زده نمی‌شه."
+            rm -f /tmp/portfolios_chunk_cache/chunk_completed.flag
+          else
+            touch /tmp/portfolios_chunk_cache/chunk_completed.flag
+          fi
+
+          echo "✅ done_items برای chunk ${{ matrix.chunk_index }}: $DONE_COUNT signature واقعاً پردازش‌شده."
 
       - name: 7. ذخیره نتایج در Cache
         if: always()
@@ -450,106 +539,306 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
           CURL="/usr/bin/curl"
+
+          TMP_PARTS_DIR="/tmp/done_parts_valid"
+          mkdir -p "$TMP_PARTS_DIR"
+          PART_IDX=0
           find /tmp/done_artifacts_raw -name 'done_items.json' -print0 2>/dev/null \
             | while IFS= read -r -d '' f; do
-                jq empty "$f" 2>/dev/null && cat "$f" || echo "[]"
-              done \
-            | jq -s 'add // []' > /tmp/merged_done.json 2>/dev/null || echo "[]" > /tmp/merged_done.json
+                if jq -e 'type == "array"' "$f" > /dev/null 2>&1; then
+                  cp "$f" "$TMP_PARTS_DIR/part_${PART_IDX}.json"
+                  PART_IDX=$((PART_IDX+1))
+                else
+                  echo "⚠️ فایل done_items نامعتبر رد شد: $f"
+                fi
+              done
+
+          VALID_COUNT=$(find "$TMP_PARTS_DIR" -name 'part_*.json' | wc -l)
+          if [ "$VALID_COUNT" -eq 0 ]; then
+            echo "[]" > /tmp/merged_done.json
+          else
+            find "$TMP_PARTS_DIR" -name 'part_*.json' -print0 \
+              | xargs -0 cat \
+              | jq -s 'add // []' > /tmp/merged_done.json 2>/dev/null \
+              || echo "[]" > /tmp/merged_done.json
+          fi
           [ -s /tmp/merged_done.json ] || echo "[]" > /tmp/merged_done.json
+
+          if ! jq -e 'type == "array"' /tmp/merged_done.json > /dev/null 2>&1; then
+            echo "⚠️ merged_done.json نامعتبر — reset به []"
+            echo "[]" > /tmp/merged_done.json
+          fi
 
           MERGED_COUNT=$(jq length /tmp/merged_done.json)
           echo "[DEBUG] تعداد کل signatureهای موفق این run: $MERGED_COUNT"
+
           if [ "$MERGED_COUNT" -eq 0 ]; then
             echo "ℹ️ هیچ signature موفقی برای حذف وجود ندارد."
+            QUEUE_RESP=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json" \
+              2>/dev/null)
+            QUEUE_HTTP=$(echo "$QUEUE_RESP" | tail -1)
+            QUEUE_BODY=$(echo "$QUEUE_RESP" | head -n -1)
+            if [ "$QUEUE_HTTP" = "200" ]; then
+              QUEUE_LEN=$(echo "$QUEUE_BODY" | jq 'length' 2>/dev/null || echo "-1")
+              if [ "$QUEUE_LEN" = "0" ]; then
+                echo "✅ صف خالی است — به‌روزرسانی completed_portfolios.json به [\"completed\"]..."
+                echo '["completed"]' > /tmp/completed_portfolios_empty.json
+                SHA_COMP_E=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
+                B64_E=$(base64 -w0 /tmp/completed_portfolios_empty.json)
+                PAYLOAD_E=$(jq -n --arg c "$B64_E" --arg s "$SHA_COMP_E" \
+                  'if $s != "" then {message:"portfolios completed (queue empty)",content:$c,branch:"main",sha:$s}
+                   else {message:"portfolios completed (queue empty)",content:$c,branch:"main"} end')
+                curl -s -X PUT -o /dev/null \
+                  -H "Authorization: token $GH_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "$PAYLOAD_E" \
+                  "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json"
+              else
+                echo "[DEBUG] صف هنوز $QUEUE_LEN آیتم دارد — ادامه loop."
+              fi
+            elif [ "$QUEUE_HTTP" = "404" ]; then
+              echo "⚠️ all_combinations_portfolios.json وجود ندارد (404) — loop متوقف می‌شود."
+            else
+              echo "⚠️ دریافت صف ناموفق (HTTP $QUEUE_HTTP) — ادامه loop."
+            fi
+          else
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
+              /tmp/merged_done.json > /tmp/merged_done_normalized.json
+            [ -s /tmp/merged_done_normalized.json ] || echo "[]" > /tmp/merged_done_normalized.json
+
+            RETRY=0; MAX=10000
+            while [ $RETRY -lt $MAX ]; do
+              SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" -q '.sha' 2>/dev/null || echo "")
+              if [ -z "$SHA" ]; then
+                echo "ERROR: SHA نامعتبر"
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+              fi
+
+              $CURL -s -o /tmp/current.json \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github.v3.raw" \
+                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json" 2>/dev/null
+              if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
+                echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
+              fi
+
+              jq -s '.[0] as $c | .[1] as $d
+                | ($d | unique) as $done_set
+                | $c | map(
+                    (if type == "object" then .signature_path else . end) as $key
+                    | select(($done_set | index($key)) == null)
+                  )
+              ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
+
+              BEFORE=$(jq length /tmp/current.json)
+              AFTER=$(jq length /tmp/new_content.json)
+              echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
+
+              base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
+              jq -n \
+                --arg msg "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
+                --arg content "$(cat /tmp/new_content_base64.txt)" \
+                --arg sha "$SHA" \
+                '{message: $msg, content: $content, sha: $sha, branch: "main"}' \
+                > /tmp/payload.json
+              HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-binary @/tmp/payload.json \
+                "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json")
+
+              if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
+                echo "✅ $((BEFORE-AFTER)) signature با موفقیت حذف شدند."
+                break
+              elif [ "$HTTP_CODE" -eq 409 ] || [ "$HTTP_CODE" -eq 422 ]; then
+                echo "⚠️ تداخل SHA (کد $HTTP_CODE) — تلاش مجدد..."
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 2 )); continue
+              else
+                echo "ERROR: آپلود ناموفق ($HTTP_CODE)"; cat /tmp/upload_response.txt; exit 1
+              fi
+            done
+            [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
+
+            # به‌روزرسانی تجمعی completed_portfolios.json
+            CURRENT_COMPLETED=$(curl -s \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json" 2>/dev/null || echo "[]")
+            CURRENT_NORMALIZED=$(echo "$CURRENT_COMPLETED" | jq -c \
+              '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+              2>/dev/null || echo "[]")
+
+            NEW_SIGS=$(jq -c \
+              '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
+              /tmp/merged_done.json 2>/dev/null || echo "[]")
+
+            MERGED_COMPLETED=$(jq -n \
+              --argjson old "$CURRENT_NORMALIZED" \
+              --argjson new "$NEW_SIGS" \
+              '$old + $new | unique')
+
+            MERGED_COMP_COUNT=$(echo "$MERGED_COMPLETED" | jq 'length')
+            echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_portfolios: $MERGED_COMP_COUNT"
+            echo "$MERGED_COMPLETED" > /tmp/completed_portfolios.json
+
+            if [ "$AFTER" -eq 0 ]; then
+              echo "✅ صف خالی شد — completed_portfolios.json به [\"completed\"] تنظیم می‌شود."
+              echo '["completed"]' > /tmp/completed_portfolios.json
+            fi
+
+            COMP_RETRY=0; COMP_MAX=10000
+            while [ $COMP_RETRY -lt $COMP_MAX ]; do
+              SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
+              base64 -w0 /tmp/completed_portfolios.json > /tmp/completed_base64.txt
+              PAYLOAD_COMP=$(jq -n \
+                --arg msg "update completed_portfolios ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
+                --arg content "$(cat /tmp/completed_base64.txt)" \
+                --arg sha "$SHA_COMP" \
+                'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
+                 else {message: $msg, content: $content, branch: "main"} end')
+              COMP_HTTP=$(curl -s -o /tmp/comp_upload_resp.txt -w "%{http_code}" -X PUT \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD_COMP" \
+                "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json")
+              if [ "$COMP_HTTP" = "200" ] || [ "$COMP_HTTP" = "201" ]; then
+                echo "✅ completed_portfolios.json به‌روز شد."
+                break
+              elif [ "$COMP_HTTP" = "409" ] || [ "$COMP_HTTP" = "422" ]; then
+                echo "⚠️ تداخل SHA در completed_portfolios (HTTP $COMP_HTTP) — تلاش مجدد..."
+                COMP_RETRY=$((COMP_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+              else
+                echo "⚠️ به‌روزرسانی completed_portfolios.json ناموفق (HTTP $COMP_HTTP)"
+                break
+              fi
+            done
+
+            rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt \
+              /tmp/payload.json /tmp/upload_response.txt /tmp/completed_*.json \
+              /tmp/completed_base64.txt /tmp/payload_completed.json
+          fi
+
+      - name: آپلود portfolios.parquet به مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          # جمع‌آوری و ادغام portfolios parquet از artifactهای batch
+          pip install pyarrow pandas --quiet --break-system-packages 2>/dev/null || \
+            pip install pyarrow pandas --quiet 2>/dev/null || true
+
+          gh run download ${{ github.run_id }} \
+            --pattern "portfolios-scores-*-${{ github.run_id }}" \
+            --dir /tmp/portfolios_scores_parts 2>/dev/null || true
+
+          PARQUET_COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
+          if [ "$PARQUET_COUNT" -eq 0 ]; then
+            echo "⚠️ هیچ portfolios parquet یافت نشد — رد می‌شویم."
             exit 0
           fi
 
-          # اصلاح: normalize با شرط type == "object" برای پشتیبانی از string و object
-          # هر آیتم در merged_done ممکن است string (مسیر مستقیم) یا object (با فیلد signature_path) باشد
-          jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
-            /tmp/merged_done.json > /tmp/merged_done_normalized.json
-          [ -s /tmp/merged_done_normalized.json ] || echo "[]" > /tmp/merged_done_normalized.json
+          find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' | sort > /tmp/portfolios_parquet_list.txt
 
-          RETRY=0; MAX=10000
-          while [ $RETRY -lt $MAX ]; do
-            SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" -q '.sha' 2>/dev/null || echo "")
-            if [ -z "$SHA" ]; then
-              echo "ERROR: SHA نامعتبر — پاسخ gh api: $(gh api "repos/$THIRD_REPO/contents/all_combinations_portfolios.json" 2>&1 | head -c 300)"
-              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
-            fi
+          python3 - <<'PYEOF'
+          import sys, pathlib
+          try:
+              import pandas as pd
+              paths = pathlib.Path("/tmp/portfolios_parquet_list.txt").read_text().strip().split("\n")
+              paths = [p for p in paths if p and pathlib.Path(p).exists()]
+              if not paths:
+                  sys.exit(0)
+              dfs = []
+              for p in paths:
+                  try:
+                      dfs.append(pd.read_parquet(p))
+                  except Exception as e:
+                      print(f"skip {p}: {e}")
+              if not dfs:
+                  sys.exit(0)
+              merged = pd.concat(dfs, ignore_index=False)
+              if not merged.index.is_unique:
+                  merged = merged[~merged.index.duplicated(keep="last")]
+              merged.to_parquet("/tmp/portfolios_scores.parquet", index=True)
+              print(f"merged {len(merged)} rows from {len(dfs)} files")
+          except ImportError:
+              import shutil
+              paths = pathlib.Path("/tmp/portfolios_parquet_list.txt").read_text().strip().split("\n")
+              paths = [p for p in paths if p]
+              shutil.copy(paths[-1], "/tmp/portfolios_scores.parquet")
+              print(f"pandas not available, used last file: {paths[-1]}")
+          PYEOF
 
-            $CURL -s -o /tmp/current.json \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json" 2>/dev/null
-            if [ ! -s /tmp/current.json ] || ! jq empty /tmp/current.json 2>/dev/null; then
-              echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
-              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
-            fi
-
-            jq -s '.[0] as $c | .[1] as $d
-              | ($d | unique) as $done_set
-              | $c | map(select(.signature_path as $sp | ($done_set | index($sp)) == null))
-            ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
-
-            BEFORE=$(jq length /tmp/current.json)
-            AFTER=$(jq length /tmp/new_content.json)
-            echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
-
-            base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-            cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
-            HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data-binary @/tmp/payload.json \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json")
-
-            if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
-              echo "✅ $((BEFORE-AFTER)) signature با موفقیت حذف شدند."
-              break
-            elif [ "$HTTP_CODE" -eq 409 ] || [ "$HTTP_CODE" -eq 422 ]; then
-              echo "⚠️ تداخل SHA (کد $HTTP_CODE) — تلاش مجدد..."
-              RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 2 )); continue
-            else
-              echo "ERROR: آپلود ناموفق ($HTTP_CODE)"; cat /tmp/upload_response.txt; exit 1
-            fi
-          done
-          [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
-
-          if [ "$AFTER" -eq 0 ]; then
-            echo "✅ all_combinations_portfolios.json خالی شد. به‌روزرسانی completed_portfolios.json..."
-            echo '["completed"]' > /tmp/completed_portfolios.json
-            SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
-            base64 -w0 /tmp/completed_portfolios.json > /tmp/completed_base64.txt
-            cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "portfolios completed",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
-            if [ -n "$SHA_COMP" ]; then
-              jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
-              mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
-            fi
-            $CURL -s -X PUT -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data-binary @/tmp/payload_completed.json \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json" >/dev/null
+          if [ ! -f /tmp/portfolios_scores.parquet ]; then
+            echo "⚠️ portfolios_scores.parquet پس از merge وجود ندارد — رد می‌شویم."
+            exit 0
           fi
 
-          rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
+          tar -czf /tmp/portfolios_scores.tar.gz -C /tmp portfolios_scores.parquet
+          node -e "
+            const crypto = require('crypto'), fs = require('fs');
+            const pass = process.env.RESULTS_PASSWORD;
+            const data = fs.readFileSync('/tmp/portfolios_scores.tar.gz');
+            const key  = crypto.scryptSync(pass, 'salt', 32);
+            const iv   = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+            const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
+            fs.writeFileSync('/tmp/portfolios_scores.tar.gz.enc', enc);
+          "
+          echo "✅ رمزنگاری portfolios_scores.tar.gz.enc انجام شد"
+
+          DEST="analysis_results/portfolios_scores.parquet.enc"
+          CONTENT_B64=$(base64 -w0 /tmp/portfolios_scores.tar.gz.enc)
+          PS_RETRY=0; PS_MAX=10
+          while [ $PS_RETRY -lt $PS_MAX ]; do
+            SHA_PS=$(curl -s \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" \
+              | jq -r '.sha // empty' 2>/dev/null || echo "")
+            PAYLOAD_PS=$(jq -n \
+              --arg msg "update portfolios_scores merged (run ${{ github.run_id }})" \
+              --arg content "$CONTENT_B64" \
+              --arg sha "$SHA_PS" \
+              'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
+               else {message: $msg, content: $content, branch: "main"} end')
+            PS_HTTP=$(curl -s -o /tmp/ps_resp.txt -w "%{http_code}" -X PUT \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD_PS" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
+            if [ "$PS_HTTP" = "200" ] || [ "$PS_HTTP" = "201" ]; then
+              echo "✅ portfolios_scores.parquet.enc در مخزن سوم آپلود شد → $DEST"
+              break
+            elif [ "$PS_HTTP" = "409" ] || [ "$PS_HTTP" = "422" ]; then
+              echo "⚠️ تداخل SHA در portfolios_scores (HTTP $PS_HTTP) — تلاش مجدد ($((PS_RETRY+1))/$PS_MAX)..."
+              PS_RETRY=$((PS_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+            else
+              echo "⚠️ آپلود portfolios_scores ناموفق (HTTP $PS_HTTP): $(cat /tmp/ps_resp.txt | head -c 200)"
+              break
+            fi
+          done
+          [ $PS_RETRY -ge $PS_MAX ] && echo "ERROR: آپلود portfolios_scores پس از $PS_MAX تلاش ناموفق."
+          rm -f /tmp/portfolios_scores.parquet /tmp/portfolios_scores.tar.gz \
+            /tmp/portfolios_scores.tar.gz.enc /tmp/ps_resp.txt /tmp/portfolios_parquet_list.txt
 
       - name: فراخوانی مجدد loop_analysis.yml
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
         run: |
-          gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
-            -X POST -f ref="main"
+          CS="${{ github.event.inputs.chunk_start }}"
+          CE="${{ github.event.inputs.chunk_end }}"
+          if [ -n "$CS" ] || [ -n "$CE" ]; then
+            gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
+              -X POST \
+              -f ref="main" \
+              -f "inputs[chunk_start]=${CS}" \
+              -f "inputs[chunk_end]=${CE}"
+          else
+            gh api repos/${{ github.repository }}/actions/workflows/loop_analysis.yml/dispatches \
+              -X POST -f ref="main"
+          fi
