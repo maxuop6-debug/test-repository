@@ -772,7 +772,13 @@ jobs:
                 RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
               fi
 
-              jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
+              # باگ dedup fix: done_items مسیر JSONL داره (با پسوند .jsonl)
+              # ولی آیتم‌های صف signature_path بدون پسوند دارن — پسوند رو حذف می‌کنیم
+              jq '[.[] | if type == "object" then .signature_path else . end
+                       | select(. != null)
+                       | ltrimstr("./")        # هر ./ پیشرو
+                       | if endswith(".jsonl") then .[:-6] else . end   # حذف .jsonl
+                  ] | unique' \
                 /tmp/merged_done.json > /tmp/merged_done_normalized.json
               jq -s '.[0] as $c | .[1] as $d
                 | ($d | unique) as $done_set
