@@ -986,14 +986,13 @@ jobs:
             echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
             base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-            cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed combinations (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
+            # fix ARG_MAX: --rawfile به جای heredoc+$(cat) برای فایل بزرگ
+            jq -n \
+              --arg msg "remove $((BEFORE-AFTER)) processed combinations (run ${{ github.run_id }})" \
+              --rawfile content /tmp/new_content_base64.txt \
+              --arg sha "$SHA" \
+              '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
+              > /tmp/payload.json
             HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
