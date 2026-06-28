@@ -211,6 +211,7 @@ jobs:
 
           # باگ W fix: بررسی صحیح DL_URL — فقط URLهای معتبر https:// پذیرفته می‌شن
           EXTRACTED=0
+          : > /tmp/archive_map_parts.jsonl
           while IFS= read -r ARCH_PATH; do
             [ -z "$ARCH_PATH" ] && continue
             API_RESP=$(curl -s -H "Authorization: token $GH_TOKEN" \
@@ -233,9 +234,34 @@ jobs:
               const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
               const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
               fs.writeFileSync('${ENC_FILE%.enc}',dec);
-            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures && EXTRACTED=$((EXTRACTED+1))
+            " 2>/dev/null
+            if [ -f "${ENC_FILE%.enc}" ]; then
+              # باگ dedup ریشه‌ای fix: صف (all_combinations_golden.json) در سطح
+              # "archive" کار می‌کند (signature_path = مسیر archive بدون پسوند)،
+              # نه در سطح فایل .jsonl. بعد از extract هیچ ردی از نام archive در
+              # مسیر فایل‌های استخراج‌شده باقی نمی‌ماند، پس تنها لحظه‌ای که می‌توان
+              # فهمید «این archive شامل کدام فایل‌هاست» همین‌جاست — قبل از extract.
+              ARCH_KEY="${ARCH_PATH#signature_archives/}"
+              ARCH_KEY="${ARCH_KEY%.tar.gz.enc}"
+              ARCH_FILES_JSON=$(tar -tzf "${ENC_FILE%.enc}" 2>/dev/null \
+                | sed 's#^\./##' \
+                | grep '\.jsonl$' \
+                | jq -R -s -c 'split("\n") | map(select(length > 0))')
+              jq -n --arg key "$ARCH_KEY" --argjson files "$ARCH_FILES_JSON" \
+                '{($key): $files}' >> /tmp/archive_map_parts.jsonl
+              tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures && EXTRACTED=$((EXTRACTED+1))
+            fi
             rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
           done < <(echo "$ARCHIVES" | jq -r '.[]')
+
+          # ادغام نگاشت archive -> فایل‌ها در یک فایل JSON واحد (object)
+          if [ -s /tmp/archive_map_parts.jsonl ]; then
+            jq -s 'add' /tmp/archive_map_parts.jsonl > /tmp/archive_map.json 2>/dev/null \
+              || echo '{}' > /tmp/archive_map.json
+          else
+            echo '{}' > /tmp/archive_map.json
+          fi
+          echo "[DEBUG] تعداد archiveهای نگاشته‌شده در archive_map.json: $(jq 'keys | length' /tmp/archive_map.json)"
 
           # باگ ۳ fix: فیلتر completed روی مسیرهای واقعی .jsonl (نه basename archive)
           SKIPPED=0
@@ -261,6 +287,14 @@ jobs:
         with:
           name: all-signatures-${{ github.run_id }}
           path: /tmp/all_signatures/
+          retention-days: 1
+
+      - name: آپلود نگاشت archive → فایل‌های jsonl (لازم برای تشخیص archiveهای کامل‌شده)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: archive-map-${{ github.run_id }}
+          path: /tmp/archive_map.json
           retention-days: 1
 
       - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰۰۰۰۰ تایی با محدودیت ۵۰۰۰۰۰
@@ -575,6 +609,13 @@ jobs:
           path: /tmp/done_artifacts_raw
           merge-multiple: false
 
+      - name: دانلود نگاشت archive → فایل‌های jsonl
+        uses: actions/download-artifact@v4
+        with:
+          name: archive-map-${{ github.run_id }}
+          path: /tmp/archive_map_dl
+        continue-on-error: true
+
       - name: دانلود و ادغام golden_scores از همه چانک‌ها + رمزنگاری و آپلود
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -755,6 +796,61 @@ jobs:
             # ادامه به فراخوانی loop (بدون exit)
           else
 
+            # ── محاسبه‌ی مجموعه‌ی تجمعی فایل‌های .jsonl کامل‌شده (قدیم + این run) ──
+            # این مجموعه (سطح فایل) هم برای completed_golden.json لازم است،
+            # هم زیربنای محاسبه‌ی «کدام archive کامل شده» در ادامه است.
+            curl -s \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3.raw" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" \
+              2>/dev/null > /tmp/current_completed_raw.json
+            if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
+              echo "[]" > /tmp/current_completed_raw.json
+            fi
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+              /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
+              || echo "[]" > /tmp/current_normalized.json
+
+            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
+              /tmp/merged_done.json > /tmp/new_sigs.json 2>/dev/null \
+              || echo "[]" > /tmp/new_sigs.json
+
+            jq -s '.[0] + .[1] | unique' \
+              /tmp/current_normalized.json /tmp/new_sigs.json > /tmp/completed_golden.json 2>/dev/null \
+              || echo "[]" > /tmp/completed_golden.json
+
+            MERGED_COMP_COUNT=$(jq 'length' /tmp/completed_golden.json)
+            echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_golden (تجمعی): $MERGED_COMP_COUNT"
+            rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json /tmp/new_sigs.json
+
+            # باگ dedup ریشه‌ای fix: صف (all_combinations_golden.json) در سطح
+            # "archive" است (signature_path = نام archive، بدون پسوند/prefix)، نه
+            # در سطح فایل .jsonl. done_items/processed_files که از golden.py می‌آید
+            # همیشه در سطح فایل .jsonl است — این دو هیچ‌وقت با تطبیق رشته‌ای مستقیم
+            # یکی نمی‌شوند (به همین خاطر تا الان همیشه ۰ تا حذف می‌شد، فارغ از
+            # اینکه چقدر فایل واقعاً پردازش شده باشد).
+            # راه‌حل: با archive_map.json (نگاشت archive -> فایل‌های داخلش، که در
+            # مرحله extract ساخته شده) بررسی می‌کنیم؛ یک archive فقط وقتی "کامل"
+            # است که همه‌ی فایل‌های .jsonl آن در مجموعه‌ی تجمعی completed_golden.json
+            # حضور داشته باشند.
+            ARCHIVE_MAP_FILE="/tmp/archive_map_dl/archive_map.json"
+            if [ ! -s "$ARCHIVE_MAP_FILE" ] || ! jq -e 'type == "object"' "$ARCHIVE_MAP_FILE" > /dev/null 2>&1; then
+              echo "⚠️ archive_map.json یافت نشد یا نامعتبر بود — هیچ archiveای این run از صف حذف نمی‌شود."
+              echo "[]" > /tmp/fully_done_archives.json
+            else
+              jq --slurpfile done /tmp/completed_golden.json '
+                ($done[0] | unique) as $done_set
+                | [ to_entries[]
+                    | select((.value | length) > 0)
+                    | select(.value | all(. as $f | $done_set | index($f) != null))
+                    | .key
+                  ]
+              ' "$ARCHIVE_MAP_FILE" > /tmp/fully_done_archives.json 2>/dev/null \
+                || echo "[]" > /tmp/fully_done_archives.json
+            fi
+            FULLY_DONE_COUNT=$(jq length /tmp/fully_done_archives.json)
+            echo "[DEBUG] archiveهایی که کاملاً پردازش شده‌اند (قابل حذف از صف): $FULLY_DONE_COUNT"
+
             RETRY=0; MAX=10000
             while [ $RETRY -lt $MAX ]; do
               SHA=$(gh api "repos/$THIRD_REPO/contents/all_combinations_golden.json" -q '.sha' 2>/dev/null || echo "")
@@ -781,29 +877,15 @@ jobs:
                 /tmp/current.json > /tmp/current_clean.json
               mv /tmp/current_clean.json /tmp/current.json
 
-              # normalize done_items:
-              # golden.py مسیر را به شکل "signatures/combo_10day/.../file.jsonl" ذخیره می‌کند
-              # ولی آیتم‌های صف signature_path بدون پسوند و بدون prefix هستند:
-              #   combo_10day/Best_5m/chunk
-              jq '[.[] | if type == "object" then .signature_path else . end
-                       | select(. != null and . != "")
-                       | ltrimstr("/tmp/signatures/")
-                       | ltrimstr("/tmp/all_signatures/")
-                       | ltrimstr("signatures/")
-                       | ltrimstr("./")
-                       | if endswith(".jsonl") then .[:-6] else . end
-                  ] | unique' \
-                /tmp/merged_done.json > /tmp/merged_done_normalized.json
-              NORM_COUNT=$(jq length /tmp/merged_done_normalized.json)
               QUEUE_COUNT=$(jq length /tmp/current.json)
-              echo "[DEBUG] normalized done: $NORM_COUNT | صف: $QUEUE_COUNT"
+              echo "[DEBUG] archiveهای کامل‌شده: $FULLY_DONE_COUNT | صف: $QUEUE_COUNT"
               jq -s '.[0] as $c | .[1] as $d
                 | ($d | unique) as $done_set
                 | $c | map(
                     (if type == "object" then .signature_path else . end) as $key
                     | select(($done_set | index($key)) == null)
                   )
-              ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
+              ' /tmp/current.json /tmp/fully_done_archives.json > /tmp/new_content.json
 
               BEFORE=$(jq length /tmp/current.json)
               AFTER=$(jq length /tmp/new_content.json)
@@ -812,7 +894,7 @@ jobs:
               base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
               # fix ARG_MAX: به جای --arg content "$(cat ...)" از --rawfile استفاده می‌کنیم
               jq -n \
-                --arg msg "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
+                --arg msg "remove $((BEFORE-AFTER)) completed archives (run ${{ github.run_id }})" \
                 --rawfile content /tmp/new_content_base64.txt \
                 --arg sha "$SHA" \
                 '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
@@ -824,7 +906,7 @@ jobs:
                 "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json")
 
               if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
-                echo "✅ $((BEFORE-AFTER)) signature با موفقیت حذف شدند."
+                echo "✅ $((BEFORE-AFTER)) archive با موفقیت از صف حذف شدند."
                 break
               elif [ "$HTTP_CODE" -eq 409 ] || [ "$HTTP_CODE" -eq 422 ]; then
                 echo "⚠️ تداخل SHA (کد $HTTP_CODE) — تلاش مجدد..."
@@ -835,39 +917,8 @@ jobs:
             done
             [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
 
-            # به‌روزرسانی تجمعی completed_golden.json
+            # ── push تجمعی completed_golden.json (محتوای آن بالاتر آماده شده) ──
             echo "✅ به‌روزرسانی completed_golden.json با signatureهای جدید این run..."
-
-            # fix ARG_MAX: همه عملیات merge روی فایل انجام میشه نه shell variable
-            curl -s \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" \
-              2>/dev/null > /tmp/current_completed_raw.json
-            # اگر خالی یا invalid بود، [] جایگزین کن
-            if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
-              echo "[]" > /tmp/current_completed_raw.json
-            fi
-            # normalize به فایل
-            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
-              /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
-              || echo "[]" > /tmp/current_normalized.json
-
-            # new sigs به فایل
-            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
-              /tmp/merged_done.json > /tmp/new_sigs.json 2>/dev/null \
-              || echo "[]" > /tmp/new_sigs.json
-
-            # merge دو فایل JSON با jq -s (نه --argjson با var بزرگ)
-            jq -s '.[0] + .[1] | unique' \
-              /tmp/current_normalized.json /tmp/new_sigs.json > /tmp/completed_golden.json 2>/dev/null \
-              || echo "[]" > /tmp/completed_golden.json
-
-            MERGED_COMP_COUNT=$(jq 'length' /tmp/completed_golden.json)
-            echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_golden: $MERGED_COMP_COUNT"
-
-            rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json /tmp/new_sigs.json
-
             COMP_RETRY=0; COMP_MAX=10000
             while [ $COMP_RETRY -lt $COMP_MAX ]; do
               SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_golden.json" -q '.sha' 2>/dev/null || echo "")
@@ -907,7 +958,8 @@ jobs:
 
             rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt \
               /tmp/payload.json /tmp/payload_comp.json /tmp/upload_response.txt \
-              /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
+              /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json \
+              /tmp/fully_done_archives.json
 
           fi  # پایان بلوک MERGED_COUNT -gt 0
 
