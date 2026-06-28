@@ -251,3 +251,4 @@ Mem:            15Gi       1.0Gi        12Gi        44Mi       2.0Gi        14Gi
 🔄 فراخوانی analysis_fixed_batch.yml...
 https://github.com/Amir9287171/test-repository/actions/runs/28306582356
 ✅ فراخوانی analysis_fixed_batch.yml موفق بود (تلاش 1).
+⏳ all_combinations.json هنوز 990 ترکیب دارد. golden اجرا نمی‌شود.
