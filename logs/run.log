@@ -148,3 +148,7 @@ Mem:            15Gi       894Mi        13Gi        43Mi       2.0Gi        14Gi
 [2026-06-28 13:46:31] [INFO] 📄 فایل لاگ: logs/queue_builder.log
 [2026-06-28 13:46:31] [INFO] ============================================================
 ✅ build_all_queues.py (golden queue) با موفقیت اجرا شد.
+🔍 بررسی پرچم وقفه...
+🔄 فراخوانی analysis_golden.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28324266228
+✅ فراخوانی golden موفق بود (تلاش 1).
