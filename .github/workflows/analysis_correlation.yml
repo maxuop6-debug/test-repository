@@ -216,17 +216,25 @@ jobs:
               "https://api.github.com/repos/$THIRD_REPO/contents/completed_archives.json" | jq -r '.sha // empty' 2>/dev/null || echo "")
             base64 -w0 /tmp/completed_archives_list.json > /tmp/completed_archives_b64.txt
             CA_MSG="update completed_archives (run ${{ github.run_id }})"
-            CA_CONTENT=$(cat /tmp/completed_archives_b64.txt)
+            # fix ARG_MAX + JSON corruption: ساخت payload با jq+--rawfile
             if [ -n "$SHA_CA" ]; then
-              curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
-                -d "{\"message\":\"$CA_MSG\",\"content\":\"$CA_CONTENT\",\"sha\":\"$SHA_CA\",\"branch\":\"main\"}" \
-                "https://api.github.com/repos/$THIRD_REPO/contents/completed_archives.json" >/dev/null
+              jq -n \
+                --arg msg "$CA_MSG" \
+                --rawfile content /tmp/completed_archives_b64.txt \
+                --arg sha "$SHA_CA" \
+                '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
+                > /tmp/payload_ca.json
             else
-              curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
-                -d "{\"message\":\"$CA_MSG\",\"content\":\"$CA_CONTENT\",\"branch\":\"main\"}" \
-                "https://api.github.com/repos/$THIRD_REPO/contents/completed_archives.json" >/dev/null
+              jq -n \
+                --arg msg "$CA_MSG" \
+                --rawfile content /tmp/completed_archives_b64.txt \
+                '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                > /tmp/payload_ca.json
             fi
-            rm -f /tmp/completed_archives_b64.txt
+            curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
+              --data-binary @/tmp/payload_ca.json \
+              "https://api.github.com/repos/$THIRD_REPO/contents/completed_archives.json" >/dev/null
+            rm -f /tmp/completed_archives_b64.txt /tmp/payload_ca.json
           fi
 
           JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
@@ -521,13 +529,11 @@ jobs:
               echo '["completed"]' > /tmp/completed_correlation.json
               SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_correlation.json" -q '.sha' 2>/dev/null || echo "")
               base64 -w0 /tmp/completed_correlation.json > /tmp/completed_base64.txt
-              cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "correlation completed (empty queue)",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
+              # fix ARG_MAX: --rawfile به جای heredoc+$(cat)
+              jq -n \
+                --rawfile content /tmp/completed_base64.txt \
+                '{message: "correlation completed (empty queue)", content: ($content | rtrimstr("\n")), branch: "main"}' \
+                > /tmp/payload_completed.json
               if [ -n "$SHA_COMP" ]; then
                 jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
                 mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
@@ -586,14 +592,13 @@ jobs:
               echo "[DEBUG] قبل: $BEFORE  بعد: $AFTER  (حذف‌شده: $((BEFORE-AFTER)))"
 
               base64 -w0 /tmp/new_content.json > /tmp/new_content_base64.txt
-              cat > /tmp/payload.json <<EOF
-          {
-            "message": "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})",
-            "content": "$(cat /tmp/new_content_base64.txt)",
-            "sha": "$SHA",
-            "branch": "main"
-          }
-          EOF
+              # fix ARG_MAX: --rawfile به جای heredoc+$(cat) برای فایل بزرگ
+              jq -n \
+                --arg msg "remove $((BEFORE-AFTER)) processed signatures (run ${{ github.run_id }})" \
+                --rawfile content /tmp/new_content_base64.txt \
+                --arg sha "$SHA" \
+                '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
+                > /tmp/payload.json
               HTTP_CODE=$($CURL -s -X PUT -o /tmp/upload_response.txt -w "%{http_code}" \
                 -H "Authorization: token $GH_TOKEN" \
                 -H "Content-Type: application/json" \
@@ -617,13 +622,11 @@ jobs:
               echo '["completed"]' > /tmp/completed_correlation.json
               SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_correlation.json" -q '.sha' 2>/dev/null || echo "")
               base64 -w0 /tmp/completed_correlation.json > /tmp/completed_base64.txt
-              cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "correlation completed",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
+              # fix ARG_MAX: --rawfile به جای heredoc+$(cat)
+              jq -n \
+                --rawfile content /tmp/completed_base64.txt \
+                '{message: "correlation completed", content: ($content | rtrimstr("\n")), branch: "main"}' \
+                > /tmp/payload_completed.json
               if [ -n "$SHA_COMP" ]; then
                 jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
                 mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
@@ -659,20 +662,27 @@ jobs:
           SHA_DEST=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" | jq -r '.sha // empty' 2>/dev/null || echo "")
           base64 -w0 "$ENC_FILE" > /tmp/corr_b64.txt
-          CORR_CONTENT=$(cat /tmp/corr_b64.txt)
+          # fix ARG_MAX + JSON corruption: ساخت payload با jq+--rawfile و آپلود با --data-binary
           CORR_MSG="update correlations.parquet (run ${{ github.run_id }})"
           if [ -n "$SHA_DEST" ]; then
-            curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
-              -d "{\"message\":\"$CORR_MSG\",\"content\":\"$CORR_CONTENT\",\"sha\":\"$SHA_DEST\",\"branch\":\"main\"}" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" >/dev/null \
-              && echo "✅ correlations.parquet.enc آپلود شد." || echo "⚠️ آپلود ناموفق."
+            jq -n \
+              --arg msg "$CORR_MSG" \
+              --rawfile content /tmp/corr_b64.txt \
+              --arg sha "$SHA_DEST" \
+              '{message: $msg, content: ($content | rtrimstr("\n")), sha: $sha, branch: "main"}' \
+              > /tmp/payload_corr.json
           else
-            curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
-              -d "{\"message\":\"$CORR_MSG\",\"content\":\"$CORR_CONTENT\",\"branch\":\"main\"}" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" >/dev/null \
-              && echo "✅ correlations.parquet.enc آپلود شد." || echo "⚠️ آپلود ناموفق."
+            jq -n \
+              --arg msg "$CORR_MSG" \
+              --rawfile content /tmp/corr_b64.txt \
+              '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+              > /tmp/payload_corr.json
           fi
-          rm -f /tmp/corr_b64.txt
+          curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
+            --data-binary @/tmp/payload_corr.json \
+            "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" >/dev/null \
+            && echo "✅ correlations.parquet.enc آپلود شد." || echo "⚠️ آپلود ناموفق."
+          rm -f /tmp/corr_b64.txt /tmp/payload_corr.json
 
       - name: فراخوانی مجدد loop_analysis.yml
         env:
