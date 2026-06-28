@@ -455,7 +455,8 @@ def build_golden_queue(repo, token):
         log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
         return 0
 
-    # فیلتر جدید
+    # فیلتر جدید — هم از completed و هم از صف موجود حذف می‌کنیم
+    # (بدون این، آیتم‌هایی که هنوز در صف‌اند ولی پردازش نشدند دوباره اضافه می‌شوند)
     new_signatures = [s for s in all_signatures if s["signature_path"] not in completed_set]
     log(f"  تعداد signatureهای جدید (نه در completed_golden): {len(new_signatures)}")
 
@@ -476,6 +477,19 @@ def build_golden_queue(repo, token):
     else:
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
+
+    # باگ dedup fix: آیتم‌هایی که هنوز در صف‌اند ولی پردازش نشدند رو هم حذف می‌کنیم
+    # (completed_golden فقط پردازش‌شده‌ها رو داره — اگر cleanup کار نکرده باشه،
+    # این آیتم‌ها در صف می‌مانند ولی در completed نیستند → بدون این فیلتر دوباره اضافه می‌شوند)
+    existing_in_queue = {
+        s["signature_path"] if isinstance(s, dict) else s
+        for s in existing_combos
+    }
+    new_signatures = [
+        s for s in new_signatures
+        if s["signature_path"] not in existing_in_queue
+    ]
+    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
 
     updated_combos = existing_combos + new_signatures
     log(f"  تعداد کل ترکیب‌ها پس از اضافه شدن: {len(updated_combos)}")
