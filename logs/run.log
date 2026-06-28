@@ -301,3 +301,7 @@ https://github.com/Amir9287171/test-repository/actions/runs/28324286850
 [2026-06-28 13:48:25] [INFO] 📄 فایل لاگ: logs/queue_builder.log
 [2026-06-28 13:48:25] [INFO] ============================================================
 ✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد.
+🔍 بررسی پرچم وقفه...
+🔄 فراخوانی analysis_portfolios.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28324315596
+✅ فراخوانی portfolios موفق بود (تلاش 1).
