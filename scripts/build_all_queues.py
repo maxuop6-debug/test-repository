@@ -294,7 +294,7 @@ def build_work_queue(repo, token):
         # پنج‌ارز (۱ عدد)
         "BTCUSDT+ETHUSDT+XRPUSDT+SOLUSDT+PAXGUSDT",
     ]
-    intervals = [
+    intervals_10day = [
         "fixed_5d","fixed_10d","fixed_15d","fixed_30d",
         "CPI_pre_1d","CPI_pre_2d","CPI_pre_3d","CPI_pre_5d",
         "CPI_post_1d","CPI_post_2d","CPI_post_3d","CPI_post_5d","CPI_post_7d","CPI_post_10d","CPI_post_15d",
@@ -309,6 +309,18 @@ def build_work_queue(repo, token):
         "CPI_y_y_pre_1d","CPI_y_y_pre_2d","CPI_y_y_pre_3d","CPI_y_y_pre_5d",
         "CPI_y_y_post_1d","CPI_y_y_post_2d","CPI_y_y_post_3d","CPI_y_y_post_5d","CPI_y_y_post_7d","CPI_y_y_post_10d","CPI_y_y_post_15d"
     ]
+    # باگ تکرار fix: combo_monthly.py مقدار --interval را در محاسبه استفاده نمی‌کند
+    # (فقط در نام فایل خروجی درج می‌شود — تابع process_analysis حتی پارامتر interval
+    # نمی‌گیرد). بنابراین تولید ۷۰ ترکیب با همان intervals_10day برای combo_monthly
+    # باعث می‌شد به ازای هر استراتژی ۶۵۱۰ ترکیب ساخته شود در حالی که فقط
+    # ۳۱ کوین × ۳ مدل = ۹۳ ترکیب واقعاً متفاوت وجود دارد (مابقی اجرای کاملاً
+    # تکراری همان تحلیل با نام فایل متفاوت بودند). یک مقدار interval ثابت
+    # کافی است.
+    intervals_monthly = ["monthly"]
+    module_intervals = {
+        "combo_10day": intervals_10day,
+        "combo_monthly": intervals_monthly,
+    }
     models = ["simple_hybrid", "fibonacci_full", "fibonacci_hybrid"]
 
     # خواندن strategies.txt یا دریافت از API
@@ -376,8 +388,9 @@ def build_work_queue(repo, token):
     for strat in strategies_to_process:
         strat_combos = []
         for mod in fixed_modules:
+            mod_intervals = module_intervals[mod]
             for coin in coins:
-                for interval in intervals:
+                for interval in mod_intervals:
                     for model in models:
                         strat_combos.append({
                             "module": mod,
