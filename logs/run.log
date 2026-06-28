@@ -418,3 +418,6 @@ Mem:            15Gi       1.0Gi        12Gi        43Mi       2.0Gi        14Gi
 ✅ build_all_queues.py با موفقیت اجرا شد.
 🔄 دریافت all_combinations.json با retry...
 ✅ تعداد بسته‌ها: 2
+🔄 فراخوانی analysis_fixed_batch.yml...
+https://github.com/Amir9287171/test-repository/actions/runs/28311037410
+✅ فراخوانی analysis_fixed_batch.yml موفق بود (تلاش 1).
