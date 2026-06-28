@@ -431,23 +431,34 @@ def build_golden_queue(repo, token):
     log("🔄 مرحله ۲: ساخت صف golden")
     log("=" * 60)
 
-    # دانلود completed_golden.json
-    log("  دانلود completed_golden.json...")
-    completed_content = gh_api_get(repo, "completed_golden.json")
-    if completed_content is not None:
+    # ── گزینه A fix: مقایسه در سطح archive، نه در سطح فایل .jsonl ──
+    # completed_golden.json توسط analysis_golden.yml در سطح فایل .jsonl آپدیت می‌شود
+    # (مثلاً "combo_10day/Best_5m/BTCUSDT_CPI_pre_1d_trades_0001.jsonl")، اما
+    # all_combinations_golden.json در سطح archive کار می‌کند
+    # (مثلاً {"signature_path": "combo_10day/Best_5m/BTCUSDT_CPI_pre_1d"}).
+    # این دو فرمت هیچ‌وقت با مقایسه‌ی رشته‌ای مستقیم match نمی‌شوند → archive
+    # کامل‌شده دوباره به صف اضافه می‌شود.
+    # راه‌حل: completed_golden_archives.json که توسط analysis_golden.yml (golden-cleanup)
+    # در سطح archive path نگه‌داری می‌شود، معیار اصلی چک است.
+    # fallback: اگر این فایل وجود نداشت (اولین بار) صف موجود هم بررسی می‌شود.
+
+    # دانلود completed_golden_archives.json (سطح archive)
+    log("  دانلود completed_golden_archives.json...")
+    completed_arch_content = gh_api_get(repo, "completed_golden_archives.json")
+    if completed_arch_content is not None:
         try:
-            completed_golden = json.loads(completed_content)
-            if not isinstance(completed_golden, list):
-                completed_golden = []
+            completed_archives = json.loads(completed_arch_content)
+            if not isinstance(completed_archives, list):
+                completed_archives = []
         except Exception:
-            completed_golden = []
+            completed_archives = []
     else:
-        completed_golden = []
+        completed_archives = []
 
-    completed_set = set(completed_golden)
-    log(f"  تعداد signatureهایی که قبلاً در completed_golden.json ثبت شده‌اند: {len(completed_set)}")
+    completed_arch_set = set(completed_archives)
+    log(f"  تعداد archiveهایی که قبلاً در completed_golden_archives.json ثبت شده‌اند: {len(completed_arch_set)}")
 
-    # دریافت signatures از آرشیوها
+    # دریافت signatures از آرشیوها (در سطح archive path)
     all_signatures = get_all_signatures_from_archives(repo, key_name="signature_path")
     log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures)}")
 
@@ -455,10 +466,9 @@ def build_golden_queue(repo, token):
         log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
         return 0
 
-    # فیلتر جدید — هم از completed و هم از صف موجود حذف می‌کنیم
-    # (بدون این، آیتم‌هایی که هنوز در صف‌اند ولی پردازش نشدند دوباره اضافه می‌شوند)
-    new_signatures = [s for s in all_signatures if s["signature_path"] not in completed_set]
-    log(f"  تعداد signatureهای جدید (نه در completed_golden): {len(new_signatures)}")
+    # فیلتر ۱: حذف archiveهایی که قبلاً کامل شده‌اند (سطح archive)
+    new_signatures = [s for s in all_signatures if s["signature_path"] not in completed_arch_set]
+    log(f"  تعداد signatureهای جدید (نه در completed_golden_archives): {len(new_signatures)}")
 
     if not new_signatures:
         log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
@@ -478,9 +488,7 @@ def build_golden_queue(repo, token):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # باگ dedup fix: آیتم‌هایی که هنوز در صف‌اند ولی پردازش نشدند رو هم حذف می‌کنیم
-    # (completed_golden فقط پردازش‌شده‌ها رو داره — اگر cleanup کار نکرده باشه،
-    # این آیتم‌ها در صف می‌مانند ولی در completed نیستند → بدون این فیلتر دوباره اضافه می‌شوند)
+    # فیلتر ۲: حذف archiveهایی که هنوز در صف هستند (منتظر پردازش)
     existing_in_queue = {
         s["signature_path"] if isinstance(s, dict) else s
         for s in existing_combos
@@ -489,12 +497,16 @@ def build_golden_queue(repo, token):
         s for s in new_signatures
         if s["signature_path"] not in existing_in_queue
     ]
-    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
+    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed_archives): {len(new_signatures)}")
+
+    if not new_signatures:
+        log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
+        return 0
 
     updated_combos = existing_combos + new_signatures
     log(f"  تعداد کل ترکیب‌ها پس از اضافه شدن: {len(updated_combos)}")
 
-    # آپلود
+    # آپلود all_combinations_golden.json
     tmp_file = "/tmp/all_combinations_golden.json"
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(updated_combos, f, indent=2, ensure_ascii=False)
@@ -503,16 +515,16 @@ def build_golden_queue(repo, token):
     if not upload_file_with_curl(repo, "all_combinations_golden.json", tmp_file, sha_combos, "update golden queue"):
         raise RuntimeError("آپلود all_combinations_golden.json ناموفق بود")
 
-    # آپدیت completed_golden.json
-    new_sig_paths = [s["signature_path"] for s in new_signatures]
-    updated_completed = completed_golden + new_sig_paths
-    tmp_completed = "/tmp/completed_golden.json"
-    with open(tmp_completed, "w", encoding="utf-8") as f:
-        json.dump(updated_completed, f, indent=2, ensure_ascii=False)
+    # آپدیت completed_golden_archives.json (فقط archive path — نه .jsonl)
+    new_arch_paths = [s["signature_path"] for s in new_signatures]
+    updated_archives = completed_archives + new_arch_paths
+    tmp_arch = "/tmp/completed_golden_archives.json"
+    with open(tmp_arch, "w", encoding="utf-8") as f:
+        json.dump(updated_archives, f, indent=2, ensure_ascii=False)
 
-    sha_completed = get_file_sha(repo, "completed_golden.json")
-    if not upload_file_with_curl(repo, "completed_golden.json", tmp_completed, sha_completed, "update completed golden"):
-        raise RuntimeError("آپدیت completed_golden.json ناموفق بود")
+    sha_arch = get_file_sha(repo, "completed_golden_archives.json")
+    if not upload_file_with_curl(repo, "completed_golden_archives.json", tmp_arch, sha_arch, "update completed golden archives"):
+        raise RuntimeError("آپدیت completed_golden_archives.json ناموفق بود")
 
     log(f"✅ تعداد {len(new_signatures)} signature جدید به all_combinations_golden.json اضافه شد")
     return len(new_signatures)
