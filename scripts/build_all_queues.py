@@ -200,48 +200,67 @@ def get_all_signatures_from_archives(repo, key_name="signature_path"):
     """
     لیست تمام signatureهای موجود در signature_archives/ را برمی‌گرداند.
     key_name: نام کلید دیکشنری خروجی ('signature_path' برای golden/portfolios، 'path' برای correlation)
+
+    از دو ساختار پشتیبانی می‌کند:
+    - ساختار استاندارد: signature_archives/{module}/{strategy}/{coin}/{base_name}.tar.gz.enc
+    - ساختار مسطح: signature_archives/{filename}.tar.gz.enc (فایل‌ها مستقیماً در ریشه)
     """
-    log("  [ARCHIVES] دریافت لیست modules از signature_archives/...")
+    log("  [ARCHIVES] دریافت لیست محتوای signature_archives/...")
     cmd = f"gh api repos/{repo}/contents/signature_archives --jq '.[].name' 2>/dev/null"
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         log("  [ARCHIVES] هیچ محتوایی در signature_archives/ یافت نشد", 'WARNING')
         return []
 
-    modules = [m.strip() for m in result.stdout.strip().split('\n') if m.strip()]
-    log(f"  [ARCHIVES] ماژول‌های یافت‌شده: {modules}")
+    top_level_names = [m.strip() for m in result.stdout.strip().split('\n') if m.strip()]
+    log(f"  [ARCHIVES] محتوای سطح اول: {top_level_names}")
+
+    # بررسی ساختار: اگر combo_10day یا combo_monthly وجود داشت → ساختار استاندارد
+    standard_modules = {"combo_10day", "combo_monthly"}
+    found_modules = [n for n in top_level_names if n in standard_modules]
 
     all_signatures = []
 
-    for module in modules:
-        cmd = f"gh api repos/{repo}/contents/signature_archives/{module} --jq '.[].name' 2>/dev/null"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if result.returncode != 0 or not result.stdout.strip():
-            log(f"  [ARCHIVES] ماژول {module}: استراتژی‌ای یافت نشد", 'WARNING')
-            continue
-        strategies = [s.strip() for s in result.stdout.strip().split('\n') if s.strip()]
-        log(f"  [ARCHIVES] {module}: {len(strategies)} استراتژی")
-
-        for strategy in strategies:
-            cmd = f"gh api repos/{repo}/contents/signature_archives/{module}/{strategy} --jq '.[].name' 2>/dev/null"
+    if found_modules:
+        # ساختار استاندارد: module/strategy/coin/file.tar.gz.enc
+        log(f"  [ARCHIVES] ساختار استاندارد شناسایی شد — ماژول‌ها: {found_modules}")
+        for module in found_modules:
+            cmd = f"gh api repos/{repo}/contents/signature_archives/{module} --jq '.[].name' 2>/dev/null"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode != 0 or not result.stdout.strip():
+                log(f"  [ARCHIVES] ماژول {module}: استراتژی‌ای یافت نشد", 'WARNING')
                 continue
-            coins = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
+            strategies = [s.strip() for s in result.stdout.strip().split('\n') if s.strip()]
+            log(f"  [ARCHIVES] {module}: {len(strategies)} استراتژی")
 
-            for coin in coins:
-                path = f"signature_archives/{module}/{strategy}/{coin}"
-                cmd = f"gh api repos/{repo}/contents/{path} --jq '.[].name' 2>/dev/null"
+            for strategy in strategies:
+                cmd = f"gh api repos/{repo}/contents/signature_archives/{module}/{strategy} --jq '.[].name' 2>/dev/null"
                 result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                 if result.returncode != 0 or not result.stdout.strip():
                     continue
-                files = [fn.strip() for fn in result.stdout.strip().split('\n') if fn.strip()]
+                coins = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
 
-                for fname in files:
-                    if fname.endswith('.tar.gz.enc'):
-                        base_name = fname[:-len('.tar.gz.enc')]
-                        sig_path = f"{module}/{strategy}/{coin}/{base_name}"
-                        all_signatures.append({key_name: sig_path})
+                for coin in coins:
+                    path = f"signature_archives/{module}/{strategy}/{coin}"
+                    cmd = f"gh api repos/{repo}/contents/{path} --jq '.[].name' 2>/dev/null"
+                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                    if result.returncode != 0 or not result.stdout.strip():
+                        continue
+                    files = [fn.strip() for fn in result.stdout.strip().split('\n') if fn.strip()]
+
+                    for fname in files:
+                        if fname.endswith('.tar.gz.enc'):
+                            base_name = fname[:-len('.tar.gz.enc')]
+                            sig_path = f"{module}/{strategy}/{coin}/{base_name}"
+                            all_signatures.append({key_name: sig_path})
+    else:
+        # ساختار مسطح: فایل‌های tar.gz.enc مستقیماً در ریشه signature_archives/
+        log("  [ARCHIVES] ساختار مسطح شناسایی شد — فایل‌ها مستقیماً در ریشه signature_archives/")
+        for fname in top_level_names:
+            if fname.endswith('.tar.gz.enc'):
+                # sig_path همان نام فایل (بدون زیرپوشه)
+                all_signatures.append({key_name: fname})
+        log(f"  [ARCHIVES] تعداد فایل‌های tar.gz.enc در ریشه: {len(all_signatures)}")
 
     log(f"  [ARCHIVES] تعداد کل signatureهای یافت‌شده: {len(all_signatures)}")
     return all_signatures
@@ -292,16 +311,23 @@ def build_work_queue(repo, token):
     ]
     models = ["simple_hybrid", "fibonacci_full", "fibonacci_hybrid"]
 
-    # خواندن strategies.txt
+    # خواندن strategies.txt یا دریافت از API
     strategies_file = os.environ.get('STRATEGIES_FILE', '/tmp/strategies.txt')
     log(f"  خواندن استراتژی‌ها از: {strategies_file}")
-    if not os.path.exists(strategies_file):
-        log(f"  فایل {strategies_file} یافت نشد", 'ERROR')
-        raise FileNotFoundError(f"strategies file not found: {strategies_file}")
-
-    with open(strategies_file, 'r') as f:
-        strategies = [line.strip() for line in f if line.strip()]
-    log(f"  تعداد استراتژی‌های خوانده‌شده از strategies.txt: {len(strategies)}")
+    if os.path.exists(strategies_file):
+        with open(strategies_file, 'r') as f:
+            strategies = [line.strip() for line in f if line.strip()]
+        log(f"  تعداد استراتژی‌های خوانده‌شده از strategies.txt: {len(strategies)}")
+    else:
+        log(f"  فایل {strategies_file} یافت نشد — تلاش برای دریافت از API مخزن سوم...", 'WARNING')
+        cmd = f"gh api repos/{repo}/contents/aggregated --jq '.[].name' 2>/dev/null"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            strategies = [s.strip() for s in result.stdout.strip().split('\n') if s.strip()]
+            log(f"  تعداد استراتژی‌های دریافت‌شده از API (aggregated/): {len(strategies)}")
+        else:
+            log("  دریافت استراتژی‌ها از API هم ناموفق بود", 'ERROR')
+            raise RuntimeError("strategies.txt یافت نشد و دریافت از API نیز ناموفق بود")
 
     if not strategies:
         log("  هیچ استراتژی‌ای یافت نشد", 'WARNING')
@@ -492,15 +518,32 @@ def build_correlation_queue(repo, token):
     completed_set = set(completed_correlation)
     log(f"  تعداد signatureهایی که قبلاً در completed_correlation.json ثبت شده‌اند: {len(completed_set)}")
 
-    # دریافت signatures — کلید "path" (تفاوت با golden)
-    all_signatures = get_all_signatures_from_archives(repo, key_name="path")
-    log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures)}")
+    # دریافت signatures — با فرمت {coin_composition, signature} (تفاوت با golden)
+    all_signatures_raw = get_all_signatures_from_archives(repo, key_name="signature")
+    log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures_raw)}")
 
-    if not all_signatures:
+    if not all_signatures_raw:
         log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
         return 0
 
-    new_signatures = [s for s in all_signatures if s["path"] not in completed_set]
+    # ساخت آیتم‌های صف با کلیدهای coin_composition و signature
+    # coin_composition = قسمت قبل از اولین _ در نام فایل signature
+    def _extract_coin_composition(sig_value):
+        # sig_value ممکن است مسیر کامل (module/strategy/coin/base) یا فقط نام فایل باشد
+        filename = sig_value.split('/')[-1]  # آخرین قسمت مسیر
+        # اگر نام فایل با پسوند tar.gz.enc باشد، آن را حذف می‌کنیم
+        if filename.endswith('.tar.gz.enc'):
+            filename = filename[:-len('.tar.gz.enc')]
+        return filename.split('_')[0]
+
+    all_signatures = []
+    for raw in all_signatures_raw:
+        sig_value = raw["signature"]
+        coin_comp = _extract_coin_composition(sig_value)
+        all_signatures.append({"coin_composition": coin_comp, "signature": sig_value})
+
+    completed_set = set(completed_correlation)
+    new_signatures = [s for s in all_signatures if s["signature"] not in completed_set]
     log(f"  تعداد signatureهای جدید (نه در completed_correlation): {len(new_signatures)}")
 
     if not new_signatures:
@@ -531,7 +574,7 @@ def build_correlation_queue(repo, token):
     if not upload_file_with_curl(repo, "all_combinations_correlation.json", tmp_file, sha_combos, "update correlation queue"):
         raise RuntimeError("آپلود all_combinations_correlation.json ناموفق بود")
 
-    new_sig_paths = [s["path"] for s in new_signatures]
+    new_sig_paths = [s["signature"] for s in new_signatures]
     updated_completed = completed_correlation + new_sig_paths
     tmp_completed = "/tmp/completed_correlation.json"
     with open(tmp_completed, "w", encoding="utf-8") as f:
