@@ -163,7 +163,11 @@ jobs:
             PUSH_RETRY=$((PUSH_RETRY+1))
             sleep $(( (RANDOM % 5) + 3 ))
           done
-          [ $PUSH_RETRY -ge $PUSH_MAX ] && { echo "ERROR: push پس از $PUSH_MAX تلاش ناموفق."; exit 1; }
+          if [ $PUSH_RETRY -ge $PUSH_MAX ]; then
+            echo "ERROR: push پس از $PUSH_MAX تلاش ناموفق."
+            exit 1
+          fi
+          exit 0
 
   # ================================================================
   # golden-generate-matrix: تولید صف کار برای ماژول golden
