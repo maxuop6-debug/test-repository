@@ -12,31 +12,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ============================================================
-  # Job 0: پاک کردن فایل لاگ در ابتدای اجرا
-  # ============================================================
-  init-logs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
-      - name: Clear log file and commit
-        run: |
-          mkdir -p logs
-          echo -n "" > logs/run.log
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "clear logs for run ${{ github.run_id }}" || echo "No changes"
-          git push origin main || true
 
   # ============================================================
   # Job 1: بررسی پرچم وقفه
   # ============================================================
   check-interrupt:
-    needs: init-logs
     runs-on: ubuntu-latest
     outputs:
       force_fixed: ${{ steps.check.outputs.force_fixed }}
@@ -62,19 +42,7 @@ jobs:
             else
               echo "force_fixed=false" >> $GITHUB_OUTPUT
             fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cd $GITHUB_WORKSPACE
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after check-interrupt (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
+          }
 
   # ============================================================
   # Job 2: یکپارچه‌سازی نتایج بک‌تست (با clone مخزن سوم و استفاده محلی)
@@ -534,7 +502,7 @@ jobs:
             done
             fi
             echo "✅ یکپارچه‌سازی کامل شد."
-          } >> logs/run.log 2>&1
+          }
 
       - name: Commit and push changes back to third repo
         run: |
@@ -562,23 +530,6 @@ jobs:
             fi
           fi
 
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          if ! git diff --cached --quiet; then
-            git commit -m "update logs after aggregate-results (run ${{ github.run_id }})" --allow-empty
-            git pull --rebase origin main || true
-            git push origin main || true
-          else
-            echo "هیچ تغییری در لاگ وجود ندارد." >> logs/run.log 2>&1
-            git add -f logs/run.log
-            git commit -m "final logs (run ${{ github.run_id }})" --allow-empty || true
-            git push origin main || true
-          fi
 
   # ============================================================
   # Job 2.5: تولید گزارش‌های جامع نسخه ۵ از داده‌های یکپارچه
@@ -736,27 +687,25 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          mkdir -p logs
           STRATEGIES=$(gh api "repos/$THIRD_REPO/contents/aggregated" -q '.[].name' 2>/dev/null || true)
           if [ -z "$STRATEGIES" ]; then
-            echo "❌ دریافت لیست استراتژی‌ها از aggregated ناموفق بود یا خالی برگشت." | tee -a logs/run.log
+            echo "❌ دریافت لیست استراتژی‌ها از aggregated ناموفق بود یا خالی برگشت."
             # تلاش با منبع پشتیبان: backtest_results
             STRATEGIES=$(gh api "repos/$THIRD_REPO/contents/backtest_results" -q '.[].name' 2>/dev/null || true)
             if [ -z "$STRATEGIES" ]; then
-              echo "❌ منبع پشتیبان (backtest_results) نیز خالی است. job متوقف می‌شود." | tee -a logs/run.log
+              echo "❌ منبع پشتیبان (backtest_results) نیز خالی است. job متوقف می‌شود."
               exit 1
             fi
-            echo "⚠️ از منبع پشتیبان backtest_results استفاده شد." | tee -a logs/run.log
+            echo "⚠️ از منبع پشتیبان backtest_results استفاده شد."
           fi
           echo "$STRATEGIES" > /tmp/strategies.txt
-          echo "✅ لیست استراتژی‌ها دریافت شد ($(wc -l < /tmp/strategies.txt) مورد)." | tee -a logs/run.log
+          echo "✅ لیست استراتژی‌ها دریافت شد ($(wc -l < /tmp/strategies.txt) مورد)."
       - name: ساخت و به‌روزرسانی all_combinations.json (با اسکریپت پایتون اصلاح شده)
         id: queue
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          mkdir -p logs
           {
             echo "🚀 اجرای build_all_queues.py برای ساخت صف کارها..."
             python scripts/build_all_queues.py \
@@ -770,9 +719,9 @@ jobs:
               exit $EXIT_CODE
             fi
             echo "✅ build_all_queues.py با موفقیت اجرا شد."
-          } >> logs/run.log 2>&1
+          }
 
-          echo "🔄 دریافت all_combinations.json با retry..." | tee -a logs/run.log
+          echo "🔄 دریافت all_combinations.json با retry..."
           for attempt in 1 2 3 4 5; do
             TIMESTAMP=$(date +%s%N)
             ALL_COMBOS_CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
@@ -781,33 +730,24 @@ jobs:
             if [ -n "$ALL_COMBOS_CONTENT" ] && [ "$ALL_COMBOS_CONTENT" != "null" ]; then
               TOTAL_COMBOS=$(echo "$ALL_COMBOS_CONTENT" | jq 'length' 2>/dev/null)
               if [ -z "$TOTAL_COMBOS" ] || ! [[ "$TOTAL_COMBOS" =~ ^[0-9]+$ ]]; then
-                echo "❌ jq نتوانست طول آرایه را محاسبه کند. پاسخ نامعتبر است." | tee -a logs/run.log
+                echo "❌ jq نتوانست طول آرایه را محاسبه کند. پاسخ نامعتبر است."
                 TOTAL_BATCHES=0
                 echo "total_batches=0" >> $GITHUB_OUTPUT
                 break
               fi
               TOTAL_BATCHES=$(( (TOTAL_COMBOS + 499) / 500 ))
               echo "total_batches=$TOTAL_BATCHES" >> $GITHUB_OUTPUT
-              echo "✅ تعداد بسته‌ها: $TOTAL_BATCHES" | tee -a logs/run.log
+              echo "✅ تعداد بسته‌ها: $TOTAL_BATCHES"
               break
             fi
-            echo "⏳ تلاش $attempt: فایل در دسترس نیست، 3 ثانیه صبر..." | tee -a logs/run.log
+            echo "⏳ تلاش $attempt: فایل در دسترس نیست، 3 ثانیه صبر..."
             sleep 3
           done
           if [ -z "$TOTAL_BATCHES" ]; then
-            echo "❌ تعداد بسته‌ها صفر در نظر گرفته می‌شود." | tee -a logs/run.log
+            echo "❌ تعداد بسته‌ها صفر در نظر گرفته می‌شود."
             echo "total_batches=0" >> $GITHUB_OUTPUT
           fi
 
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after prepare-dispatch (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
 
   # ============================================================
   # Job 4: بررسی اینکه کدام فیلتر باید اجرا شود (skip cascade gate)
@@ -833,7 +773,6 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          mkdir -p logs
           {
             echo "🔍 بررسی وضعیت صف‌ها برای تعیین فیلتر فعال..."
 
@@ -897,16 +836,7 @@ jobs:
               echo "run_correlation=false" >> $GITHUB_OUTPUT
               echo "run_portfolios=false" >> $GITHUB_OUTPUT
             fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after check-queues (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
+          }
 
   # ============================================================
   # Job 4: اجرای fixed (فیلتر ۱)
@@ -924,7 +854,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_fixed_batch.yml..."
             SUCCESS=false
@@ -942,16 +871,7 @@ jobs:
               echo "❌ هر سه تلاش برای dispatch-fixed ناموفق بود."
               exit 1
             fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after dispatch-fixed (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
+          }
 
   # ============================================================
   # Job 5: ساخت صف golden + اجرا (فیلتر ۲)
@@ -974,7 +894,6 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          mkdir -p logs
           {
             echo "🚀 اجرای build_all_queues.py برای ساخت صف golden..."
             python scripts/build_all_queues.py               --progress /tmp/dummy               --output-dir /tmp/dummy               --batch-size 500 2>&1
@@ -984,12 +903,11 @@ jobs:
               exit $EXIT_CODE
             fi
             echo "✅ build_all_queues.py (golden queue) با موفقیت اجرا شد."
-          } >> logs/run.log 2>&1
+          }
       - name: فراخوانی analysis_golden.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_golden.yml..."
             SUCCESS=false
@@ -1007,16 +925,7 @@ jobs:
               echo "❌ هر سه تلاش برای dispatch-golden ناموفق بود."
               exit 1
             fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after dispatch-golden (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
+          }
 
   # ============================================================
   # Job 6: ساخت صف correlation + اجرا (فیلتر ۳)
@@ -1039,7 +948,6 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          mkdir -p logs
           {
             echo "🚀 اجرای build_all_queues.py برای ساخت صف correlation..."
             python scripts/build_all_queues.py               --progress /tmp/dummy               --output-dir /tmp/dummy               --batch-size 500 2>&1
@@ -1049,12 +957,11 @@ jobs:
               exit $EXIT_CODE
             fi
             echo "✅ build_all_queues.py (correlation queue) با موفقیت اجرا شد."
-          } >> logs/run.log 2>&1
+          }
       - name: فراخوانی analysis_correlation.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_correlation.yml..."
             SUCCESS=false
@@ -1072,16 +979,7 @@ jobs:
               echo "❌ هر سه تلاش برای dispatch-correlation ناموفق بود."
               exit 1
             fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after dispatch-correlation (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
+          }
 
   # ============================================================
   # Job 7: ساخت صف portfolios + اجرا (فیلتر ۴)
@@ -1105,7 +1003,6 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          mkdir -p logs
           {
             pip install pandas pyarrow --quiet --break-system-packages 2>&1 ||               pip install pandas pyarrow --quiet 2>&1
             echo "🚀 اجرای build_all_queues.py برای ساخت صف portfolios..."
@@ -1116,12 +1013,11 @@ jobs:
               exit $EXIT_CODE
             fi
             echo "✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد."
-          } >> logs/run.log 2>&1
+          }
       - name: فراخوانی analysis_portfolios.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p logs
           {
             echo "🔄 فراخوانی analysis_portfolios.yml..."
             SUCCESS=false
@@ -1139,89 +1035,4 @@ jobs:
               echo "❌ هر سه تلاش برای dispatch-portfolios ناموفق بود."
               exit 1
             fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after dispatch-portfolios (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
-
-  # ============================================================
-  # Job 8: فراخوانی مجدد loop (self-dispatch) — همیشه اجرا میشه
-  # ============================================================
-  loop-again:
-    needs: [check-queues, dispatch-fixed, dispatch-golden, dispatch-correlation, dispatch-portfolios]
-    if: always() && needs.check-queues.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          ref: main
-      - name: فراخوانی مجدد loop_analysis.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p logs
-          {
-            echo "🔄 فراخوانی مجدد loop_analysis.yml برای ادامه پردازش..."
-            SUCCESS=false
-            for attempt in 1 2 3; do
-              if gh workflow run loop_analysis.yml --ref main 2>&1; then
-                echo "✅ loop مجدد با موفقیت dispatch شد (تلاش $attempt)."
-                SUCCESS=true
-                break
-              else
-                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
-                sleep 5
-              fi
-            done
-            if [ "$SUCCESS" = "false" ]; then
-              echo "❌ dispatch loop مجدد ناموفق بود."
-              exit 1
-            fi
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after loop-again (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
-
-  # ============================================================
-  # Job 9: ذخیره نهایی لاگ
-  # ============================================================
-  save-logs:
-    needs: [loop-again]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
-          fetch-depth: 0
-      - name: commit و push فایل لاگ واحد
-        run: |
-          cd $GITHUB_WORKSPACE
-          mkdir -p logs
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          if ! git diff --cached --quiet; then
-            git commit -m "final update logs (run ${{ github.run_id }})" --allow-empty
-            git pull --rebase origin main || true
-            git push origin main || true
-          else
-            echo "هیچ تغییری در لاگ وجود ندارد." >> logs/run.log 2>&1
-            git add -f logs/run.log
-            git commit -m "final logs (run ${{ github.run_id }})" --allow-empty || true
-            git push origin main || true
-          fi
+          }
