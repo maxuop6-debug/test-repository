@@ -114,7 +114,26 @@ jobs:
             --output-dir /tmp/reports \
             --password "$RESULTS_PASSWORD"
 
-      - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
+      - name: 10. رمزنگاری reports و آماده‌سازی برای commit
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          tar -czf /tmp/reports.tar.gz -C /tmp reports
+          echo "✅ فشرده‌سازی reports انجام شد ($(du -sh /tmp/reports.tar.gz | cut -f1))"
+          node -e "
+            const crypto = require('crypto'), fs = require('fs');
+            const pass = process.env.RESULTS_PASSWORD;
+            const data = fs.readFileSync('/tmp/reports.tar.gz');
+            const key  = crypto.scryptSync(pass, 'salt', 32);
+            const iv   = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+            const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
+            fs.writeFileSync('/tmp/reports.tar.gz.enc', enc);
+          "
+          echo "✅ رمزنگاری reports.tar.gz.enc انجام شد"
+          rm -rf /tmp/reports /tmp/reports.tar.gz
+
+      - name: 11. Commit و Push reports.tar.gz.enc به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -122,11 +141,10 @@ jobs:
           cd /tmp/third_repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -rf reports/
-          mkdir -p reports
-          cp -r /tmp/reports/* reports/
-          git add -f reports/
-          git commit -m "update reports (run ${{ github.run_id }})" || echo "No changes to commit"
+          git rm -rf reports/ 2>/dev/null || true
+          cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
+          git add -f reports.tar.gz.enc
+          git commit -m "update reports encrypted (run ${{ github.run_id }})" || echo "No changes to commit"
           git push origin main
 
   # ================================================================
@@ -143,7 +161,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: دانلود و استخراج یک‌باره همه archiveهای signature
+      - name: دانلود و استخراج یک‌باره همه archiveهای signature (فقط جدید)
         id: extract
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -151,6 +169,17 @@ jobs:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/all_signatures
+
+          # دریافت لیست signatureهای قبلاً پردازش‌شده برای جلوگیری از تکرار
+          COMPLETED_RAW=$(curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" 2>/dev/null || echo "[]")
+          # normalize: هر عنصر ممکن است string یا object با فیلد signature_path باشد
+          COMPLETED_SET=$(echo "$COMPLETED_RAW" | jq -c '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' 2>/dev/null || echo "[]")
+          COMPLETED_COUNT=$(echo "$COMPLETED_SET" | jq 'length')
+          echo "[DEBUG] تعداد signatureهای قبلاً پردازش‌شده: $COMPLETED_COUNT"
+
           TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
 
@@ -158,7 +187,17 @@ jobs:
           ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
           echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
 
+          SKIPPED=0
+          EXTRACTED=0
           echo "$ARCHIVES" | jq -r '.[]' | while read -r ARCH_PATH; do
+            # بررسی: اگر basename این archive در completed_set هست، رد شو
+            ARCH_BASENAME=$(basename "$ARCH_PATH" .tar.gz.enc)
+            ALREADY_DONE=$(echo "$COMPLETED_SET" | jq --arg k "$ARCH_BASENAME" 'map(select(. == $k or endswith($k))) | length')
+            if [ "$ALREADY_DONE" -gt 0 ]; then
+              SKIPPED=$((SKIPPED+1))
+              continue
+            fi
+
             DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
               "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url')
             [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ] && continue
@@ -174,12 +213,12 @@ jobs:
               const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
               const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
               fs.writeFileSync('${ENC_FILE%.enc}',dec);
-            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures
+            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures && EXTRACTED=$((EXTRACTED+1))
             rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
           done
 
           JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCHIVE_COUNT archive."
+          echo "✅ استخراج: $JSONL_TOTAL فایل JSONL از $EXTRACTED archive (رد شده به‌خاطر تکرار: $SKIPPED)"
           echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
 
       - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
@@ -347,6 +386,79 @@ jobs:
             --resume
           echo "✅ golden chunk ${{ matrix.chunk_index }} پردازش شد."
 
+      - name: 5.2. رمزنگاری golden_scores.parquet و آپلود به مخزن سوم
+        if: steps.prev_check.outputs.already_done != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          # جمع‌آوری golden_scores.parquet از cache
+          PARQUET_SRC=""
+          for candidate in \
+              /tmp/golden_chunk_cache/golden_scores.parquet \
+              /tmp/golden_chunk_cache/golden_scores/golden_scores.parquet; do
+            if [ -f "$candidate" ]; then
+              PARQUET_SRC="$candidate"
+              break
+            fi
+          done
+          # جستجوی عمیق‌تر در صورت پیدا نشدن
+          if [ -z "$PARQUET_SRC" ]; then
+            PARQUET_SRC=$(find /tmp/golden_chunk_cache -name 'golden_scores.parquet' | head -1)
+          fi
+
+          if [ -z "$PARQUET_SRC" ]; then
+            echo "⚠️ golden_scores.parquet یافت نشد — رد می‌شویم."
+            exit 0
+          fi
+          echo "[DEBUG] golden_scores.parquet یافت شد: $PARQUET_SRC"
+          cp "$PARQUET_SRC" /tmp/golden_scores.parquet
+
+          # فشرده‌سازی
+          tar -czf /tmp/golden_scores.tar.gz -C /tmp golden_scores.parquet
+          echo "✅ فشرده‌سازی انجام شد ($(du -sh /tmp/golden_scores.tar.gz | cut -f1))"
+
+          # رمزنگاری AES-256-CBC
+          node -e "
+            const crypto = require('crypto'), fs = require('fs');
+            const pass = process.env.RESULTS_PASSWORD;
+            const data = fs.readFileSync('/tmp/golden_scores.tar.gz');
+            const key  = crypto.scryptSync(pass, 'salt', 32);
+            const iv   = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+            const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
+            fs.writeFileSync('/tmp/golden_scores.tar.gz.enc', enc);
+          "
+          echo "✅ رمزنگاری golden_scores.tar.gz.enc انجام شد"
+
+          # آپلود به analysis_results/golden_scores.parquet.enc در مخزن سوم
+          DEST="analysis_results/golden_scores.parquet.enc"
+          SHA_EXISTING=$(gh api "repos/$THIRD_REPO/contents/$DEST" -q '.sha' 2>/dev/null || echo "")
+          CONTENT_B64=$(base64 -w0 /tmp/golden_scores.tar.gz.enc)
+
+          PAYLOAD=$(jq -n \
+            --arg msg "update golden_scores chunk ${{ matrix.chunk_index }} (run ${{ github.run_id }})" \
+            --arg content "$CONTENT_B64" \
+            --arg sha "$SHA_EXISTING" \
+            'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
+             else {message: $msg, content: $content, branch: "main"} end')
+
+          HTTP=$(curl -s -o /tmp/gs_upload_resp.json -w "%{http_code}" \
+            -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
+
+          if [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ]; then
+            echo "✅ golden_scores.parquet.enc آپلود شد → $DEST"
+          else
+            echo "⚠️ آپلود golden_scores ناموفق (HTTP $HTTP): $(cat /tmp/gs_upload_resp.json | head -c 200)"
+          fi
+
+          rm -f /tmp/golden_scores.parquet /tmp/golden_scores.tar.gz /tmp/golden_scores.tar.gz.enc /tmp/gs_upload_resp.json
+
       - name: 5.5. ذخیره done_items این chunk در Cache
         if: always()
         run: |
@@ -481,27 +593,51 @@ jobs:
           done
           [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
 
-          # اگر صف خالی شد، completed_golden.json را به‌روز کن
-          if [ "$AFTER" -eq 0 ]; then
-            echo "✅ all_combinations_golden.json خالی شد. به‌روزرسانی completed_golden.json..."
-            echo '["completed"]' > /tmp/completed_golden.json
-            SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_golden.json" -q '.sha' 2>/dev/null || echo "")
-            base64 -w0 /tmp/completed_golden.json > /tmp/completed_base64.txt
-            cat > /tmp/payload_completed.json <<EOF
-          {
-            "message": "golden completed",
-            "content": "$(cat /tmp/completed_base64.txt)",
-            "branch": "main"
-          }
-          EOF
-            if [ -n "$SHA_COMP" ]; then
-              jq --arg sha "$SHA_COMP" '. + {sha: $sha}' /tmp/payload_completed.json > /tmp/payload_completed_with_sha.json
-              mv /tmp/payload_completed_with_sha.json /tmp/payload_completed.json
-            fi
-            $CURL -s -X PUT -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data-binary @/tmp/payload_completed.json \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" >/dev/null
+          # به‌روزرسانی تجمعی completed_golden.json با لیست واقعی signatureهای پردازش‌شده
+          echo "✅ به‌روزرسانی completed_golden.json با signatureهای جدید این run..."
+
+          # دریافت completed_golden.json فعلی از مخزن
+          CURRENT_COMPLETED=$(curl -s \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" 2>/dev/null || echo "[]")
+          # normalize: عناصر قدیمی ممکن است string یا object باشند
+          CURRENT_NORMALIZED=$(echo "$CURRENT_COMPLETED" | jq -c \
+            '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+            2>/dev/null || echo "[]")
+
+          # استخراج signatureهای این run از merged_done.json
+          NEW_SIGS=$(jq -c \
+            '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
+            /tmp/merged_done.json 2>/dev/null || echo "[]")
+
+          # ادغام و حذف تکراری
+          MERGED_COMPLETED=$(jq -n \
+            --argjson old "$CURRENT_NORMALIZED" \
+            --argjson new "$NEW_SIGS" \
+            '$old + $new | unique')
+
+          MERGED_COMP_COUNT=$(echo "$MERGED_COMPLETED" | jq 'length')
+          echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_golden: $MERGED_COMP_COUNT"
+
+          echo "$MERGED_COMPLETED" > /tmp/completed_golden.json
+          SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_golden.json" -q '.sha' 2>/dev/null || echo "")
+          base64 -w0 /tmp/completed_golden.json > /tmp/completed_base64.txt
+          PAYLOAD_COMP=$(jq -n \
+            --arg msg "update completed_golden ($MERGED_COMP_COUNT signatures, run ${{ github.run_id }})" \
+            --arg content "$(cat /tmp/completed_base64.txt)" \
+            --arg sha "$SHA_COMP" \
+            'if $sha != "" then {message: $msg, content: $content, branch: "main", sha: $sha}
+             else {message: $msg, content: $content, branch: "main"} end')
+          COMP_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD_COMP" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json")
+          if [ "$COMP_HTTP" = "200" ] || [ "$COMP_HTTP" = "201" ]; then
+            echo "✅ completed_golden.json با $MERGED_COMP_COUNT signature به‌روز شد."
+          else
+            echo "⚠️ به‌روزرسانی completed_golden.json ناموفق (HTTP $COMP_HTTP)"
           fi
 
           rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
