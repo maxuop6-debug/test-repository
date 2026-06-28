@@ -45,3 +45,4 @@ Mem:            15Gi       909Mi        13Gi        43Mi       2.0Gi        14Gi
 [2026-06-28 14:28:26] [INFO]   [UPLOAD] /tmp/all_combinations.json → Amir9287171/now-test-repo/all_combinations.json
 [2026-06-28 14:28:26] [ERROR]   [UPLOAD] پاسخ ناموفق: API rate limit exceeded for user ID 223898777. If you reach out to GitHub Support for help, please include the request ID 2004:15D1B5:DC4EB27:E0BFFB6:6A412F8A and timestamp 2026-06-28 14:28:26 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
 [2026-06-28 14:28:26] [ERROR] ❌ مرحله ۱ (work) با خطا مواجه شد: آپلود all_combinations.json ناموفق بود
+هیچ تغییری در لاگ وجود ندارد.
