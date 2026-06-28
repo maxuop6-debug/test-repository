@@ -684,6 +684,15 @@ jobs:
             && echo "✅ correlations.parquet.enc آپلود شد." || echo "⚠️ آپلود ناموفق."
           rm -f /tmp/corr_b64.txt /tmp/payload_corr.json
 
+  # ================================================================
+  # dispatch-loop: فراخوانی loop_analysis.yml — همیشه اجرا می‌شود
+  # حتی اگر correlation-batch یا correlation-cleanup skip شده باشد
+  # ================================================================
+  dispatch-loop:
+    needs: [correlation-generate-matrix, correlation-cleanup]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
       - name: فراخوانی مجدد loop_analysis.yml
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
