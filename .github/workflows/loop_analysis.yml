@@ -810,11 +810,110 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 4: اجرای fixed jobs (توزیع بسته‌ها) با retry
+  # Job 4: بررسی اینکه کدام فیلتر باید اجرا شود (skip cascade gate)
+  # منطق: fixed > golden > correlation > portfolios
+  # هر فیلتر فقط وقتی اجرا میشه که همه فیلترهای قبلی خالی باشن
+  # ============================================================
+  check-queues:
+    needs: prepare-dispatch
+    runs-on: ubuntu-latest
+    outputs:
+      run_fixed: ${{ steps.gate.outputs.run_fixed }}
+      run_golden: ${{ steps.gate.outputs.run_golden }}
+      run_correlation: ${{ steps.gate.outputs.run_correlation }}
+      run_portfolios: ${{ steps.gate.outputs.run_portfolios }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: بررسی وضعیت همه صف‌ها
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔍 بررسی وضعیت صف‌ها برای تعیین فیلتر فعال..."
+
+            # بررسی interrupt.flag
+            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
+              echo "⚠️ interrupt.flag فعال است — همه فیلترها skip."
+              echo "run_fixed=false" >> $GITHUB_OUTPUT
+              echo "run_golden=false" >> $GITHUB_OUTPUT
+              echo "run_correlation=false" >> $GITHUB_OUTPUT
+              echo "run_portfolios=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
+            get_len() {
+              local FILE="$1"
+              local RESP
+              RESP=$(curl -s -H "Authorization: token $GH_TOKEN"                 -H "Accept: application/vnd.github.v3.raw"                 "https://api.github.com/repos/$THIRD_REPO/contents/${FILE}?t=$(date +%s)" 2>/dev/null)
+              if [ -z "$RESP" ] || [ "$RESP" = "null" ]; then
+                echo "0"
+              else
+                echo "$RESP" | jq 'if type=="array" then length else 0 end' 2>/dev/null || echo "0"
+              fi
+            }
+
+            LEN_FIXED=$(get_len "all_combinations.json")
+            LEN_GOLDEN=$(get_len "all_combinations_golden.json")
+            LEN_CORR=$(get_len "all_combinations_correlation.json")
+            LEN_PORT=$(get_len "all_combinations_portfolios.json")
+
+            echo "[DEBUG] fixed=$LEN_FIXED  golden=$LEN_GOLDEN  correlation=$LEN_CORR  portfolios=$LEN_PORT"
+
+            # منطق cascade: اولین صف غیر‌خالی اجرا میشه، بقیه skip
+            if [ "$LEN_FIXED" -gt 0 ]; then
+              echo "▶ fixed کار دارد ($LEN_FIXED) — بقیه skip."
+              echo "run_fixed=true"  >> $GITHUB_OUTPUT
+              echo "run_golden=false" >> $GITHUB_OUTPUT
+              echo "run_correlation=false" >> $GITHUB_OUTPUT
+              echo "run_portfolios=false" >> $GITHUB_OUTPUT
+            elif [ "$LEN_GOLDEN" -gt 0 ]; then
+              echo "▶ golden کار دارد ($LEN_GOLDEN) — fixed خالی، بقیه skip."
+              echo "run_fixed=false" >> $GITHUB_OUTPUT
+              echo "run_golden=true"  >> $GITHUB_OUTPUT
+              echo "run_correlation=false" >> $GITHUB_OUTPUT
+              echo "run_portfolios=false" >> $GITHUB_OUTPUT
+            elif [ "$LEN_CORR" -gt 0 ]; then
+              echo "▶ correlation کار دارد ($LEN_CORR) — fixed/golden خالی، portfolios skip."
+              echo "run_fixed=false" >> $GITHUB_OUTPUT
+              echo "run_golden=false" >> $GITHUB_OUTPUT
+              echo "run_correlation=true"  >> $GITHUB_OUTPUT
+              echo "run_portfolios=false" >> $GITHUB_OUTPUT
+            elif [ "$LEN_PORT" -gt 0 ]; then
+              echo "▶ portfolios کار دارد ($LEN_PORT) — بقیه خالی."
+              echo "run_fixed=false" >> $GITHUB_OUTPUT
+              echo "run_golden=false" >> $GITHUB_OUTPUT
+              echo "run_correlation=false" >> $GITHUB_OUTPUT
+              echo "run_portfolios=true"  >> $GITHUB_OUTPUT
+            else
+              echo "ℹ️ همه صف‌ها خالی هستند — loop ادامه می‌یابد."
+              echo "run_fixed=false" >> $GITHUB_OUTPUT
+              echo "run_golden=false" >> $GITHUB_OUTPUT
+              echo "run_correlation=false" >> $GITHUB_OUTPUT
+              echo "run_portfolios=false" >> $GITHUB_OUTPUT
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after check-queues (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 4: اجرای fixed (فیلتر ۱)
   # ============================================================
   dispatch-fixed:
-    needs: prepare-dispatch
-    if: needs.prepare-dispatch.outputs.total_batches != '0'
+    needs: [prepare-dispatch, check-queues]
+    if: needs.check-queues.outputs.run_fixed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -855,52 +954,22 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 5a: ساخت صف golden (قبل از dispatch-golden)
+  # Job 5: ساخت صف golden + اجرا (فیلتر ۲)
   # ============================================================
-  prepare-golden-queue:
-    needs: [prepare-dispatch, dispatch-fixed]
-    if: |
-      always() &&
-      needs.prepare-dispatch.result == 'success' &&
-      (needs.dispatch-fixed.result == 'success' || needs.dispatch-fixed.result == 'skipped')
+  dispatch-golden:
+    needs: [prepare-dispatch, check-queues]
+    if: needs.check-queues.outputs.run_golden == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      can_run: ${{ steps.check_queue_done.outputs.can_run }}
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           ref: main
-      - name: بررسی خالی بودن واقعی all_combinations.json
-        id: check_queue_done
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          CONTENT=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations.json?t=$(date +%s)" \
-            -H "Accept: application/vnd.github.v3.raw" 2>/dev/null || echo "")
-          if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-            echo "✅ all_combinations.json وجود ندارد یا خالی است. golden اجرا می‌شود." | tee -a logs/run.log
-            echo "can_run=true" >> $GITHUB_OUTPUT
-          else
-            LEN=$(echo "$CONTENT" | jq 'length' 2>/dev/null || echo "-1")
-            if [ "$LEN" = "0" ]; then
-              echo "✅ all_combinations.json طول صفر دارد. batch‌ها کامل شدند. golden اجرا می‌شود." | tee -a logs/run.log
-              echo "can_run=true" >> $GITHUB_OUTPUT
-            else
-              echo "⏳ all_combinations.json هنوز $LEN ترکیب دارد. golden اجرا نمی‌شود." | tee -a logs/run.log
-              echo "can_run=false" >> $GITHUB_OUTPUT
-            fi
-          fi
       - name: راه‌اندازی پایتون
-        if: steps.check_queue_done.outputs.can_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: ساخت و به‌روزرسانی all_combinations_golden.json
-        if: steps.check_queue_done.outputs.can_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -908,10 +977,7 @@ jobs:
           mkdir -p logs
           {
             echo "🚀 اجرای build_all_queues.py برای ساخت صف golden..."
-            python scripts/build_all_queues.py \
-              --progress /tmp/dummy \
-              --output-dir /tmp/dummy \
-              --batch-size 500 2>&1
+            python scripts/build_all_queues.py               --progress /tmp/dummy               --output-dir /tmp/dummy               --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
               echo "❌ build_all_queues.py (golden queue) با خطا مواجه شد (کد $EXIT_CODE)"
@@ -919,63 +985,7 @@ jobs:
             fi
             echo "✅ build_all_queues.py (golden queue) با موفقیت اجرا شد."
           } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after prepare-golden-queue (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
-
-  # ============================================================
-  # Job 5: اجرای golden (پس از آماده‌سازی صف golden)
-  # ============================================================
-  dispatch-golden:
-    needs: [prepare-dispatch, prepare-golden-queue]
-    if: |
-      always() &&
-      needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-golden-queue.result == 'success' &&
-      needs.prepare-golden-queue.outputs.can_run == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          ref: main
-
-      - name: بررسی پرچم وقفه و وضعیت قبلی golden
-        id: status_check
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            echo "🔍 بررسی پرچم وقفه..."
-            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
-              echo "⚠️ پرچم وقفه فعال است. golden اجرا نخواهد شد."
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            # بررسی خالی بودن صف golden
-            EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json?t=$(date +%s)" \
-              -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
-            if [ "$EMPTY" = "true" ]; then
-              echo "ℹ️ صف golden خالی است. این ماژول کامل شده."
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          } >> logs/run.log 2>&1
-
       - name: فراخوانی analysis_golden.yml
-        if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -998,7 +1008,6 @@ jobs:
               exit 1
             fi
           } >> logs/run.log 2>&1
-
       - name: Save logs after job
         if: always()
         run: |
@@ -1010,144 +1019,11 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 5c: ساخت صف portfolios (قبل از dispatch-portfolios)
+  # Job 6: ساخت صف correlation + اجرا (فیلتر ۳)
   # ============================================================
-  prepare-portfolios-queue:
-    needs: [prepare-dispatch, dispatch-correlation]
-    if: |
-      always() &&
-      needs.prepare-dispatch.result == 'success' &&
-      needs.dispatch-correlation.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          ref: main
-      - name: راه‌اندازی پایتون
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: ساخت و به‌روزرسانی all_combinations_portfolios.json
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          mkdir -p logs
-          {
-            pip install pandas pyarrow --quiet --break-system-packages 2>&1 || \
-              pip install pandas pyarrow --quiet 2>&1
-            echo "🚀 اجرای build_all_queues.py برای ساخت صف portfolios..."
-            python scripts/build_all_queues.py \
-              --progress /tmp/dummy \
-              --output-dir /tmp/dummy \
-              --batch-size 500 \
-              --min-score 45 2>&1
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ build_all_queues.py (portfolios queue) با خطا مواجه شد (کد $EXIT_CODE)"
-              exit $EXIT_CODE
-            fi
-            echo "✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد."
-          } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after prepare-portfolios-queue (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
-
-  # ============================================================
-  # Job 6: اجرای portfolios (پس از آماده‌سازی صف portfolios)
-  # ============================================================
-  dispatch-portfolios:
-    needs: [prepare-dispatch, prepare-portfolios-queue]
-    if: |
-      always() &&
-      needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-portfolios-queue.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          ref: main
-
-      - name: بررسی پرچم وقفه و وضعیت قبلی portfolios
-        id: status_check
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            echo "🔍 بررسی پرچم وقفه..."
-            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
-              echo "⚠️ پرچم وقفه فعال است. portfolios اجرا نخواهد شد."
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json?t=$(date +%s)" \
-              -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
-            if [ "$EMPTY" = "true" ]; then
-              echo "ℹ️ صف portfolios خالی است. این ماژول کامل شده."
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          } >> logs/run.log 2>&1
-
-      - name: فراخوانی analysis_portfolios.yml
-        if: steps.status_check.outputs.should_run == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p logs
-          {
-            echo "🔄 فراخوانی analysis_portfolios.yml..."
-            SUCCESS=false
-            for attempt in 1 2 3; do
-              if gh workflow run analysis_portfolios.yml --ref main 2>&1; then
-                echo "✅ فراخوانی portfolios موفق بود (تلاش $attempt)."
-                SUCCESS=true
-                break
-              else
-                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
-                sleep 5
-              fi
-            done
-            if [ "$SUCCESS" = "false" ]; then
-              echo "❌ هر سه تلاش برای dispatch-portfolios ناموفق بود."
-              exit 1
-            fi
-          } >> logs/run.log 2>&1
-
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after dispatch-portfolios (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
-
-  # ============================================================
-  # Job 6b: ساخت صف correlation (قبل از dispatch-correlation)
-  # ============================================================
-  prepare-correlation-queue:
-    needs: [prepare-dispatch, dispatch-golden]
-    if: |
-      always() &&
-      needs.prepare-dispatch.result == 'success' &&
-      needs.dispatch-golden.result == 'success'
+  dispatch-correlation:
+    needs: [prepare-dispatch, check-queues]
+    if: needs.check-queues.outputs.run_correlation == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -1166,10 +1042,7 @@ jobs:
           mkdir -p logs
           {
             echo "🚀 اجرای build_all_queues.py برای ساخت صف correlation..."
-            python scripts/build_all_queues.py \
-              --progress /tmp/dummy \
-              --output-dir /tmp/dummy \
-              --batch-size 500 2>&1
+            python scripts/build_all_queues.py               --progress /tmp/dummy               --output-dir /tmp/dummy               --batch-size 500 2>&1
             EXIT_CODE=$?
             if [ $EXIT_CODE -ne 0 ]; then
               echo "❌ build_all_queues.py (correlation queue) با خطا مواجه شد (کد $EXIT_CODE)"
@@ -1177,61 +1050,7 @@ jobs:
             fi
             echo "✅ build_all_queues.py (correlation queue) با موفقیت اجرا شد."
           } >> logs/run.log 2>&1
-      - name: Save logs after job
-        if: always()
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config user.name "github-actions[bot]"
-          git config user.email "actions@github.com"
-          git add -f logs/run.log
-          git commit -m "update logs after prepare-correlation-queue (run ${{ github.run_id }})" || echo "No changes"
-          git push origin main || true
-
-  # ============================================================
-  # Job 6.5: اجرای correlation (پس از آماده‌سازی صف correlation)
-  # ============================================================
-  dispatch-correlation:
-    needs: [prepare-dispatch, prepare-correlation-queue]
-    if: |
-      always() &&
-      needs.prepare-dispatch.result == 'success' &&
-      needs.prepare-correlation-queue.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          ref: main
-
-      - name: بررسی پرچم وقفه و وضعیت قبلی correlation
-        id: status_check
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          mkdir -p logs
-          {
-            echo "🔍 بررسی پرچم وقفه..."
-            if gh api "repos/$THIRD_REPO/contents/interrupt.flag" -i 2>/dev/null | head -n1 | grep -q 200; then
-              echo "⚠️ پرچم وقفه فعال است. correlation اجرا نخواهد شد."
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            EMPTY=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json?t=$(date +%s)" \
-              -H "Accept: application/vnd.github.v3.raw" | jq -e 'length == 0' 2>/dev/null || echo "false")
-            if [ "$EMPTY" = "true" ]; then
-              echo "ℹ️ صف correlation خالی است. این ماژول کامل شده."
-              echo "should_run=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          } >> logs/run.log 2>&1
-
       - name: فراخوانی analysis_correlation.yml
-        if: steps.status_check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -1254,7 +1073,6 @@ jobs:
               exit 1
             fi
           } >> logs/run.log 2>&1
-
       - name: Save logs after job
         if: always()
         run: |
@@ -1266,9 +1084,122 @@ jobs:
           git push origin main || true
 
   # ============================================================
-  # Job 7: ذخیره نهایی لاگ (همیشه اجرا می‌شود، مستقل از موفقیت/شکست)
+  # Job 7: ساخت صف portfolios + اجرا (فیلتر ۴)
+  # ============================================================
+  dispatch-portfolios:
+    needs: [prepare-dispatch, check-queues]
+    if: needs.check-queues.outputs.run_portfolios == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: راه‌اندازی پایتون
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: ساخت و به‌روزرسانی all_combinations_portfolios.json
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          mkdir -p logs
+          {
+            pip install pandas pyarrow --quiet --break-system-packages 2>&1 ||               pip install pandas pyarrow --quiet 2>&1
+            echo "🚀 اجرای build_all_queues.py برای ساخت صف portfolios..."
+            python scripts/build_all_queues.py               --progress /tmp/dummy               --output-dir /tmp/dummy               --batch-size 500               --min-score 45 2>&1
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ build_all_queues.py (portfolios queue) با خطا مواجه شد (کد $EXIT_CODE)"
+              exit $EXIT_CODE
+            fi
+            echo "✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد."
+          } >> logs/run.log 2>&1
+      - name: فراخوانی analysis_portfolios.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔄 فراخوانی analysis_portfolios.yml..."
+            SUCCESS=false
+            for attempt in 1 2 3; do
+              if gh workflow run analysis_portfolios.yml --ref main 2>&1; then
+                echo "✅ فراخوانی portfolios موفق بود (تلاش $attempt)."
+                SUCCESS=true
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ هر سه تلاش برای dispatch-portfolios ناموفق بود."
+              exit 1
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after dispatch-portfolios (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 8: فراخوانی مجدد loop (self-dispatch) — همیشه اجرا میشه
+  # ============================================================
+  loop-again:
+    needs: [check-queues, dispatch-fixed, dispatch-golden, dispatch-correlation, dispatch-portfolios]
+    if: always() && needs.check-queues.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: فراخوانی مجدد loop_analysis.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p logs
+          {
+            echo "🔄 فراخوانی مجدد loop_analysis.yml برای ادامه پردازش..."
+            SUCCESS=false
+            for attempt in 1 2 3; do
+              if gh workflow run loop_analysis.yml --ref main 2>&1; then
+                echo "✅ loop مجدد با موفقیت dispatch شد (تلاش $attempt)."
+                SUCCESS=true
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ dispatch loop مجدد ناموفق بود."
+              exit 1
+            fi
+          } >> logs/run.log 2>&1
+      - name: Save logs after job
+        if: always()
+        run: |
+          cd $GITHUB_WORKSPACE
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add -f logs/run.log
+          git commit -m "update logs after loop-again (run ${{ github.run_id }})" || echo "No changes"
+          git push origin main || true
+
+  # ============================================================
+  # Job 9: ذخیره نهایی لاگ
   # ============================================================
   save-logs:
+    needs: [loop-again]
     if: always()
     runs-on: ubuntu-latest
     steps:
