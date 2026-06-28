@@ -486,8 +486,13 @@ jobs:
             PARQUET_SRC=$(find /tmp/golden_chunk_cache -name 'golden_scores.parquet' | head -1)
           fi
           if [ -n "$PARQUET_SRC" ]; then
-            cp "$PARQUET_SRC" /tmp/golden_chunk_cache/golden_scores.parquet
-            echo "✅ golden_scores.parquet برای artifact ذخیره شد: $PARQUET_SRC"
+            DEST="/tmp/golden_chunk_cache/golden_scores.parquet"
+            if [ "$(realpath "$PARQUET_SRC")" != "$(realpath "$DEST" 2>/dev/null || echo "")" ]; then
+              cp "$PARQUET_SRC" "$DEST"
+              echo "✅ golden_scores.parquet برای artifact ذخیره شد: $PARQUET_SRC"
+            else
+              echo "✅ golden_scores.parquet قبلاً در مسیر صحیح است: $PARQUET_SRC"
+            fi
           else
             echo "⚠️ golden_scores.parquet در این chunk یافت نشد."
           fi
