@@ -771,22 +771,27 @@ jobs:
                 echo "ERROR: دریافت محتوای فایل ناموفق — تلاش مجدد..."
                 RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
               fi
+              # بررسی: پاسخ باید array از objects باشد نه error string از GitHub
+              if ! jq -e 'type == "array" and (length == 0 or (.[0] | type == "object" and has("signature_path")))' /tmp/current.json > /dev/null 2>&1; then
+                echo "ERROR: محتوای دریافتی معتبر نیست: $(head -c 200 /tmp/current.json)"
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 5) + 3 )); continue
+              fi
 
-              # باگ dedup fix: done_items ممکن است مسیر کامل داشته باشد مثل:
-              #   /tmp/signatures/combo_10day/Best_5m/chunk.jsonl
-              # ولی آیتم‌های صف فقط مسیر نسبی بدون پسوند دارند:
+              # normalize done_items:
+              # golden.py مسیر را به شکل "signatures/combo_10day/.../file.jsonl" ذخیره می‌کند
+              # ولی آیتم‌های صف signature_path بدون پسوند و بدون prefix هستند:
               #   combo_10day/Best_5m/chunk
-              # پس باید: ۱) prefix های /tmp/.../  حذف شود  ۲) پسوند .jsonl حذف شود
               jq '[.[] | if type == "object" then .signature_path else . end
                        | select(. != null and . != "")
                        | ltrimstr("/tmp/signatures/")
                        | ltrimstr("/tmp/all_signatures/")
+                       | ltrimstr("signatures/")
                        | ltrimstr("./")
                        | if endswith(".jsonl") then .[:-6] else . end
                   ] | unique' \
                 /tmp/merged_done.json > /tmp/merged_done_normalized.json
               echo "[DEBUG] نمونه merged_done_normalized: $(jq '.[0:2]' /tmp/merged_done_normalized.json)"
-              echo "[DEBUG] نمونه صف: $(jq '[.[0:2][] | if type == "object" then .signature_path else . end]' /tmp/current.json)"
+              echo "[DEBUG] نمونه صف: $(jq '[.[0:2][] | .signature_path]' /tmp/current.json)"
               jq -s '.[0] as $c | .[1] as $d
                 | ($d | unique) as $done_set
                 | $c | map(
