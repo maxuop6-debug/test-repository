@@ -222,7 +222,7 @@ def get_all_signatures_from_archives(repo, key_name="signature_path"):
     all_signatures = []
 
     if found_modules:
-        # ساختار استاندارد: module/strategy/coin/file.tar.gz.enc
+        # ساختار واقعی: module/strategy/file.tar.gz.enc  (۳ سطح، نه ۴)
         log(f"  [ARCHIVES] ساختار استاندارد شناسایی شد — ماژول‌ها: {found_modules}")
         for module in found_modules:
             cmd = f"gh api repos/{repo}/contents/signature_archives/{module} --jq '.[].name' 2>/dev/null"
@@ -234,25 +234,20 @@ def get_all_signatures_from_archives(repo, key_name="signature_path"):
             log(f"  [ARCHIVES] {module}: {len(strategies)} استراتژی")
 
             for strategy in strategies:
-                cmd = f"gh api repos/{repo}/contents/signature_archives/{module}/{strategy} --jq '.[].name' 2>/dev/null"
+                path = f"signature_archives/{module}/{strategy}"
+                cmd = f"gh api repos/{repo}/contents/{path} --jq '.[].name' 2>/dev/null"
                 result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                 if result.returncode != 0 or not result.stdout.strip():
+                    log(f"  [ARCHIVES] {module}/{strategy}: فایلی یافت نشد", 'WARNING')
                     continue
-                coins = [c.strip() for c in result.stdout.strip().split('\n') if c.strip()]
+                files = [fn.strip() for fn in result.stdout.strip().split('\n') if fn.strip()]
+                log(f"  [ARCHIVES] {module}/{strategy}: {len([f for f in files if f.endswith('.tar.gz.enc')])} فایل .tar.gz.enc")
 
-                for coin in coins:
-                    path = f"signature_archives/{module}/{strategy}/{coin}"
-                    cmd = f"gh api repos/{repo}/contents/{path} --jq '.[].name' 2>/dev/null"
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                    if result.returncode != 0 or not result.stdout.strip():
-                        continue
-                    files = [fn.strip() for fn in result.stdout.strip().split('\n') if fn.strip()]
-
-                    for fname in files:
-                        if fname.endswith('.tar.gz.enc'):
-                            base_name = fname[:-len('.tar.gz.enc')]
-                            sig_path = f"{module}/{strategy}/{coin}/{base_name}"
-                            all_signatures.append({key_name: sig_path})
+                for fname in files:
+                    if fname.endswith('.tar.gz.enc'):
+                        base_name = fname[:-len('.tar.gz.enc')]
+                        sig_path = f"{module}/{strategy}/{base_name}"
+                        all_signatures.append({key_name: sig_path})
     else:
         # ساختار مسطح: فایل‌های tar.gz.enc مستقیماً در ریشه signature_archives/
         log("  [ARCHIVES] ساختار مسطح شناسایی شد — فایل‌ها مستقیماً در ریشه signature_archives/")
