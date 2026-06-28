@@ -153,3 +153,6 @@ Mem:            15Gi       974Mi       8.9Gi        42Mi       6.1Gi        14Gi
 🔄 فراخوانی analysis_golden.yml...
 https://github.com/Amir9287171/test-repository/actions/runs/28326457552
 ✅ فراخوانی golden موفق بود (تلاش 1).
+🔄 فراخوانی مجدد loop_analysis.yml برای ادامه پردازش...
+https://github.com/Amir9287171/test-repository/actions/runs/28326462198
+✅ loop مجدد با موفقیت dispatch شد (تلاش 1).
