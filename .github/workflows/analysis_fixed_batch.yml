@@ -6,15 +6,6 @@ permissions:
 
 on:
   workflow_dispatch:
-    inputs:
-      chunk_start:
-        description: 'شماره شروع چانک (اختیاری)'
-        required: false
-        default: ''
-      chunk_end:
-        description: 'شماره پایان چانک (اختیاری)'
-        required: false
-        default: ''
 
 concurrency:
   group: analysis-runner
@@ -114,6 +105,23 @@ jobs:
             --output-dir /tmp/reports \
             --password "$RESULTS_PASSWORD"
 
+      - name: 9.5. فشرده‌سازی و رمزنگاری پوشه reports
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          tar -czf /tmp/reports.tar.gz -C /tmp reports
+          node -e "
+            const crypto=require('crypto'),fs=require('fs');
+            const pass=process.env.RESULTS_PASSWORD;
+            const key=crypto.scryptSync(pass,'salt',32);
+            const iv=crypto.randomBytes(16);
+            const data=fs.readFileSync('/tmp/reports.tar.gz');
+            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+            const enc=Buffer.concat([iv,cipher.update(data),cipher.final()]);
+            fs.writeFileSync('/tmp/reports.tar.gz.enc',enc);
+          "
+          rm -rf /tmp/reports /tmp/reports.tar.gz
+
       - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -122,12 +130,16 @@ jobs:
           cd /tmp/third_repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -rf reports/
-          mkdir -p reports
-          cp -r /tmp/reports/* reports/
-          git add -f reports/
+          rm -f reports.tar.gz.enc
+          cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
+          git add -f reports.tar.gz.enc
           git commit -m "update reports (run ${{ github.run_id }})" || echo "No changes to commit"
-          git push origin main
+          RETRY=0; MAX=5
+          while [ $RETRY -lt $MAX ]; do
+            git pull --rebase origin main && git push origin main && break
+            RETRY=$((RETRY+1))
+            sleep 2
+          done
 
   # ================================================================
   # generate-matrix: تقسیم all_combinations.json به چانک‌ها
@@ -580,9 +592,6 @@ jobs:
             SAFE_COIN=$(echo "$COIN" | tr '+' '_')
             INTERVAL=$(echo "$ITEM" | jq -r '.interval')
             MODEL=$(echo "$ITEM"    | jq -r '.model')
-            CHUNK_START="${{ github.event.inputs.chunk_start }}"
-            CHUNK_END="${{ github.event.inputs.chunk_end }}"
-
             echo "   📊 پردازش: $STRAT / $COIN / $INTERVAL / $MODEL"
 
             if [ "$MODULE" == "deep" ]; then
@@ -620,9 +629,6 @@ jobs:
               --model $MODEL \
               $OHLC_ARG \
               $JSONL_OUT_ARG"
-            if [ -n "$CHUNK_START" ] && [ -n "$CHUNK_END" ]; then
-              CMD="$CMD --chunk-start $CHUNK_START --chunk-end $CHUNK_END"
-            fi
             : > /tmp/item_output.log
             set -o pipefail
             eval $CMD 2>&1 | tee /tmp/item_output.log
@@ -935,8 +941,7 @@ jobs:
           echo "[DEBUG] تعداد کل ترکیبات موفق این run: $MERGED_COUNT"
           if [ "$MERGED_COUNT" -eq 0 ]; then
             echo "ℹ️ هیچ ترکیب موفقی برای حذف وجود ندارد."
-            exit 0
-          fi
+          else
 
           RETRY=0; MAX=10000
           while [ $RETRY -lt $MAX ]; do
@@ -1007,6 +1012,7 @@ jobs:
           done
           [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
           rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt
+          fi
 
       - name: فراخوانی مجدد loop_analysis.yml
         env:
