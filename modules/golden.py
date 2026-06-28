@@ -69,7 +69,14 @@ DEFAULT_CHUNK_SIZE = 50  # تعداد امضا در هر قطعه (chunk)
 # ---------------------------------------------------------------------------
 
 def load_signatures(signatures_dir: str) -> pd.DataFrame:
-    """بارگذاری تمام فایل‌های .jsonl از دایرکتوری مشخص."""
+    """بارگذاری تمام فایل‌های .jsonl از دایرکتوری مشخص.
+
+    باگ dedup fix: هر ردیف با مسیر نسبیِ فایل مبدأش (source_file) برچسب می‌خورد.
+    این مسیر همان چیزی است که در completed_golden.json / all_combinations_golden.json
+    استفاده می‌شود (نه «امضای خبری» سطح ردیف که در build_signature ساخته می‌شود).
+    بدون این، dedup در سطح YAML هیچ‌وقت کار نمی‌کرد چون دو نوع «امضا»
+    در دو سطح متفاوت (فایل در برابر رکورد) با هم مقایسه می‌شدند.
+    """
     path = Path(signatures_dir)
     files = list(path.rglob("*.jsonl"))
     if not files:
@@ -79,6 +86,8 @@ def load_signatures(signatures_dir: str) -> pd.DataFrame:
     for f in files:
         log.info(f"بارگذاری: {f.name}")
         df = pd.read_json(f, lines=True)
+        rel_path = f.relative_to(path).as_posix()
+        df["source_file"] = rel_path
         frames.append(df)
 
     data = pd.concat(frames, ignore_index=True)
@@ -324,10 +333,17 @@ def save_status(
     total_chunks: int,
     status: str,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    processed_files=None,
 ) -> dict:
-    """ذخیره فایل وضعیت golden_status.json."""
+    """ذخیره فایل وضعیت golden_status.json.
+
+    باگ dedup fix: علاوه بر processed_signatures (امضای سطح ردیف، برای resume داخلی)،
+    processed_files (مسیر نسبی فایل‌های .jsonl پردازش‌شده) هم ذخیره می‌شود.
+    این لیست دوم همان چیزی است که باید با completed_golden.json در YAML مقایسه شود.
+    """
     payload = {
         "processed_signatures": sorted(set(processed_signatures)),
+        "processed_files": sorted(set(processed_files)) if processed_files is not None else [],
         "last_chunk_index": last_chunk_index,
         "total_chunks": total_chunks,
         "chunk_size": chunk_size,
@@ -420,6 +436,15 @@ def run(
     unique_signatures = sorted(sig_df["signature"].unique().tolist())
     total_signatures = len(unique_signatures)
 
+    # باگ dedup fix: نگاشت هر فایل مبدأ به مجموعه‌ی امضاهای داخل آن، تا بدانیم
+    # یک فایل JSONL کِی "کامل" پردازش شده (یعنی همه‌ی امضاهایش در چانک‌های
+    # پردازش‌شده هستند) و آن را به completed_golden.json اضافه کنیم.
+    file_to_signatures: dict[str, set] = {}
+    for src_file, sub_df in sig_df.groupby("source_file"):
+        file_to_signatures[src_file] = set(sub_df["signature"].unique().tolist())
+    total_files = len(file_to_signatures)
+    log.info(f"تعداد فایل‌های .jsonl منبع: {total_files:,}")
+
     # ── گام ۳: تقسیم به قطعات ────────────────────────────────────────────
     chunks = chunk_list(unique_signatures, chunk_size)
     total_chunks = len(chunks)
@@ -429,6 +454,7 @@ def run(
     )
 
     processed_signatures: set = set()
+    processed_files: set = set()
     start_chunk = 0
     raw_records: list = []
 
@@ -437,10 +463,12 @@ def run(
         prev_status = load_status(status_path)
         if prev_status and prev_status.get("status") in ("interrupted", "running"):
             processed_signatures = set(prev_status.get("processed_signatures", []))
+            processed_files = set(prev_status.get("processed_files", []))
             start_chunk = prev_status.get("last_chunk_index", -1) + 1
             log.info(
                 f"ادامه از وضعیت قبلی: شروع از قطعه {start_chunk}/{total_chunks} | "
-                f"امضاهای پردازش‌شده قبلی: {len(processed_signatures):,}"
+                f"امضاهای پردازش‌شده قبلی: {len(processed_signatures):,} | "
+                f"فایل‌های کامل قبلی: {len(processed_files):,}"
             )
             try:
                 existing_raw = _load(output_path / "golden_raw.parquet")
@@ -453,7 +481,7 @@ def run(
 
     if total_chunks == 0:
         log.warning("هیچ امضایی برای پردازش یافت نشد.")
-        save_status(status_path, processed_signatures, -1, 0, "completed", chunk_size)
+        save_status(status_path, processed_signatures, -1, 0, "completed", chunk_size, processed_files)
         write_summary(output_path, "completed", 0, 0, 0, 0, [], version_id, now_utc)
         return
 
@@ -465,7 +493,7 @@ def run(
             raw_df_partial = pd.DataFrame(raw_records)
             if not raw_df_partial.empty:
                 _save(raw_df_partial, output_path / "golden_raw.parquet")
-            save_status(status_path, processed_signatures, chunk_idx - 1, total_chunks, "interrupted", chunk_size)
+            save_status(status_path, processed_signatures, chunk_idx - 1, total_chunks, "interrupted", chunk_size, processed_files)
             interrupted = True
             break
 
@@ -487,10 +515,21 @@ def run(
 
         processed_signatures.update(chunk_signatures)
 
+        # باگ dedup fix: یک فایل را "کامل" علامت بزن فقط وقتی همه‌ی
+        # امضاهای آن فایل دیگر در processed_signatures باشند.
+        for src_file, sigs in file_to_signatures.items():
+            if src_file in processed_files:
+                continue
+            if sigs.issubset(processed_signatures):
+                processed_files.add(src_file)
+
         raw_df_partial = pd.DataFrame(raw_records)
         _save(raw_df_partial, output_path / "golden_raw.parquet")
-        save_status(status_path, processed_signatures, chunk_idx, total_chunks, "running", chunk_size)
-        log.info(f"قطعه {chunk_idx + 1}/{total_chunks} پردازش شد ({len(chunk_signatures)} امضا).")
+        save_status(status_path, processed_signatures, chunk_idx, total_chunks, "running", chunk_size, processed_files)
+        log.info(
+            f"قطعه {chunk_idx + 1}/{total_chunks} پردازش شد ({len(chunk_signatures)} امضا) | "
+            f"فایل‌های کامل تاکنون: {len(processed_files):,}/{total_files:,}"
+        )
 
     if interrupted:
         log.info("پردازش به دلیل interrupt.flag متوقف شد (خروج graceful با کد ۰).")
@@ -506,7 +545,7 @@ def run(
 
     if raw_df.empty:
         log.warning("هیچ داده‌ای برای پردازش یافت نشد.")
-        save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size)
+        save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size, processed_files)
         write_summary(output_path, "completed", total_signatures, len(processed_signatures), 0, 0, [], version_id, now_utc)
         return
 
@@ -525,7 +564,7 @@ def run(
 
     if filtered_df.empty:
         log.warning("هیچ گروه معتبری پس از فیلتر باقی نماند. خروج.")
-        save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size)
+        save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size, processed_files)
         write_summary(
             output_path, "completed", total_signatures, len(processed_signatures),
             total_groups, 0, [raw_out.name], version_id, now_utc,
@@ -555,7 +594,7 @@ def run(
     log.info(f"golden_scores ذخیره شد: {scores_out}")
 
     # ── وضعیت نهایی: completed ───────────────────────────────────────────
-    save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size)
+    save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size, processed_files)
 
     # ── خروجی خلاصه golden_summary.json ──────────────────────────────────
     write_summary(
