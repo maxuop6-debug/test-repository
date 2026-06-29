@@ -212,13 +212,63 @@ jobs:
             exit 0
           fi
 
-          # اجرای اسکریپت جداگانه تولید چانک‌ها
-          # [DIAG] بررسی وضعیت /tmp/all_signatures قبل از فیلتر — این مستقیماً به نتیجه باگ ۱ (ددلاک) وابسته است
+          # ================================================================
+          # [DIAG] بررسی وضعیت /tmp/all_signatures قبل از فیلتر
+          # ================================================================
           SIG_JSONL_COUNT=$(find /tmp/all_signatures -name '*.jsonl' 2>/dev/null | wc -l)
           echo "[DIAG] تعداد فایل .jsonl موجود در /tmp/all_signatures قبل از فراخوانی generate_correlation_chunks.py = $SIG_JSONL_COUNT"
           if [ "$SIG_JSONL_COUNT" -eq 0 ]; then
-            echo "[DIAG] 🔴 /tmp/all_signatures خالی است → تمام $QUEUE_COUNT آیتم صف به‌خاطر نبود فایل .jsonl حذف خواهند شد (نتیجه مستقیم باگ ۱، نه باگ مستقل در generate_correlation_chunks.py)."
+            echo "[DIAG] 🔴 /tmp/all_signatures خالی است → تمام $QUEUE_COUNT آیتم صف به‌خاطر نبود فایل .jsonl حذف خواهند شد."
           fi
+
+          # ================================================================
+          # [FIX REAL BUG] مشکل واقعی: عدم تطبیق نام sig در صف با stem فایل .jsonl
+          #
+          # صف دارد:   sig = "combo_10day/Best_15m/Best_15m_chunk_0_20260628T224502Z"
+          # index دارد: stem = "Best_15m_chunk_0_20260628T224502Z"  (بدون path prefix)
+          #
+          # generate_correlation_chunks.py فقط basename بدون timestamp را می‌خواند یا
+          # کل path را به عنوان key استفاده می‌کند — در هر دو حالت match ناموفق است.
+          #
+          # راه‌حل: یک symlink-map می‌سازیم که هم basename کامل و هم
+          # بدون timestamp (strip regex _\d{8}T\d{6}Z) را به فایل اصلی map می‌کند.
+          # این باعث می‌شود generate_correlation_chunks.py هر دو شکل را پیدا کند.
+          # ================================================================
+          echo "[FIX] در حال ساخت نقشه نرمال‌سازی timestamp برای فایل‌های .jsonl..."
+          python3 - <<'NORMALIZE_EOF'
+          import os, re, pathlib
+
+          sig_dir = pathlib.Path("/tmp/all_signatures")
+          TS_RE = re.compile(r'_\d{8}T\d{6}Z$')
+
+          created = 0
+          for jsonl in sig_dir.rglob("*.jsonl"):
+              stem = jsonl.stem  # e.g. Best_15m_chunk_0_20260628T224502Z
+              stem_no_ts = TS_RE.sub('', stem)  # e.g. Best_15m_chunk_0
+              if stem_no_ts == stem:
+                  continue  # no timestamp, nothing to do
+              # ساخت symlink در همان دایرکتوری با نام بدون timestamp
+              link_path = jsonl.parent / (stem_no_ts + ".jsonl")
+              if not link_path.exists():
+                  try:
+                      link_path.symlink_to(jsonl.name)
+                      created += 1
+                  except Exception as e:
+                      print(f"[WARN] symlink failed for {link_path}: {e}")
+
+          print(f"[FIX] {created} symlink نرمال‌سازی‌شده ساخته شد.")
+
+          # لاگ نمونه برای تأیید
+          sample = list(sig_dir.rglob("*.jsonl"))[:6]
+          for s in sample:
+              print(f"  [SAMPLE] {s.relative_to(sig_dir)}")
+          NORMALIZE_EOF
+
+          # [DIAG] نمونه آیتم صف vs نمونه stem موجود برای تأیید تطبیق
+          echo "[DIAG] نمونه sig از صف:"
+          jq -r '.[0:3] | .[] | .signature // .sig // "N/A"' /tmp/all_combinations_correlation.json 2>/dev/null || true
+          echo "[DIAG] نمونه stems موجود در /tmp/all_signatures:"
+          find /tmp/all_signatures -name '*.jsonl' | head -5 | xargs -I{} basename {} .jsonl 2>/dev/null || true
 
           python modules/generate_correlation_chunks.py \
             --signatures-dir /tmp/all_signatures \
