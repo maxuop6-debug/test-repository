@@ -700,32 +700,32 @@ jobs:
           fi
 
           python3 - <<'PYEOF'
-import sys, pathlib
-try:
-    import pandas as pd
-    paths = list(pathlib.Path("/tmp/corr_dec_parts").glob("correlations_*.parquet"))
-    if not paths:
-        sys.exit(0)
-    dfs = []
-    for p in sorted(paths):
-        try:
-            dfs.append(pd.read_parquet(p))
-        except Exception as e:
-            print(f"skip {p}: {e}")
-    if not dfs:
-        sys.exit(0)
-    merged = pd.concat(dfs, ignore_index=False)
-    if not merged.index.is_unique:
-        merged = merged[~merged.index.duplicated(keep="last")]
-    merged.to_parquet("/tmp/correlations_merged.parquet", index=True)
-    print(f"merged {len(merged)} rows from {len(dfs)} files")
-except ImportError:
-    import shutil
-    paths = sorted(pathlib.Path("/tmp/corr_dec_parts").glob("correlations_*.parquet"))
-    if paths:
-        shutil.copy(paths[-1], "/tmp/correlations_merged.parquet")
-        print(f"pandas not available, used last file: {paths[-1]}")
-PYEOF
+          import sys, pathlib
+          try:
+              import pandas as pd
+              paths = list(pathlib.Path("/tmp/corr_dec_parts").glob("correlations_*.parquet"))
+              if not paths:
+                  sys.exit(0)
+              dfs = []
+              for p in sorted(paths):
+                  try:
+                      dfs.append(pd.read_parquet(p))
+                  except Exception as e:
+                      print(f"skip {p}: {e}")
+              if not dfs:
+                  sys.exit(0)
+              merged = pd.concat(dfs, ignore_index=False)
+              if not merged.index.is_unique:
+                  merged = merged[~merged.index.duplicated(keep="last")]
+              merged.to_parquet("/tmp/correlations_merged.parquet", index=True)
+              print(f"merged {len(merged)} rows from {len(dfs)} files")
+          except ImportError:
+              import shutil
+              paths = sorted(pathlib.Path("/tmp/corr_dec_parts").glob("correlations_*.parquet"))
+              if paths:
+                  shutil.copy(paths[-1], "/tmp/correlations_merged.parquet")
+                  print(f"pandas not available, used last file: {paths[-1]}")
+          PYEOF
 
           if [ ! -f /tmp/correlations_merged.parquet ]; then
             echo "⚠️ ادغام parquet ناموفق بود."
