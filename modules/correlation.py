@@ -89,23 +89,129 @@ def _extract_coin_signature_from_path(path_str: str) -> Tuple[str, str]:
     return coin_composition, path_str
 
 
-def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None) -> pd.DataFrame:
-    """تمام فایل‌های .jsonl را از دایرکتوری signatures بخوان و یکپارچه کن.
+def _parse_allowed_pairs(filter_path: str) -> Optional[set]:
+    """فایل signatures-filter را بخوان و set تاپل‌های (coin_composition, signature) مجاز را برگردان.
 
-    در صورتی که signatures_filter داده شده باشد، فقط رکوردهایی که ترکیب
-    (coin_composition, signature) آنها در لیست موجود در فایل JSON فیلتر
-    قرار دارد نگه داشته می‌شوند. فایل فیلتر باید آرایه‌ای از اشیاء با کلیدهای
-    coin_composition و signature باشد. برای سازگاری با نسخه‌های قبلی، آیتم‌هایی
-    با کلید path (یا رشته‌های خام) نیز پشتیبانی می‌شوند.
+    اگه فایل وجود نداشت یا خطا داشت None برمیگردونه.
+    """
+    if not filter_path or not os.path.exists(filter_path):
+        return None
+    try:
+        with open(filter_path, "r", encoding="utf-8") as f:
+            _filter_data = json.load(f)
+    except Exception as e:
+        logger.warning("خطا در خواندن signatures-filter %s: %s", filter_path, e)
+        return None
+
+    allowed_pairs: set = set()
+    for item in _filter_data:
+        if isinstance(item, dict):
+            if "coin_composition" in item and "signature" in item:
+                allowed_pairs.add((item["coin_composition"], item["signature"]))
+            elif "path" in item:
+                allowed_pairs.add(_extract_coin_signature_from_path(item["path"]))
+            else:
+                logger.warning(
+                    "آیتم نامعتبر در signatures-filter نادیده گرفته شد: %s", item
+                )
+        else:
+            allowed_pairs.add(_extract_coin_signature_from_path(str(item)))
+    return allowed_pairs
+
+
+def _build_sig_index(signatures_path: Path) -> Dict[str, List[Path]]:
+    """ایندکس سریع از signature-stem -> لیست فایل‌های .jsonl بسازد.
+
+    key = stem فایل (بدون پسوند .jsonl).
+    این تابع فقط نام فایل‌ها رو اسکن می‌کنه — هیچ فایلی باز نمی‌شه.
+    """
+    index: Dict[str, List[Path]] = {}
+    for p in signatures_path.rglob("*.jsonl"):
+        stem = p.stem
+        index.setdefault(stem, []).append(p)
+    return index
+
+
+def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None) -> pd.DataFrame:
+    """فایل‌های .jsonl را از دایرکتوری signatures بخوان و یکپارچه کن.
+
+    بهینه‌سازی کلیدی: اگه signatures_filter داده شده باشه، فقط فایل‌هایی که
+    signature آنها در لیست فیلتر هست خوانده می‌شن — نه همه 36k+ فایل.
     """
     _log(f"load_signatures: شروع از {signatures_dir}")
     signatures_path = Path(signatures_dir)
     if not signatures_path.exists():
         raise FileNotFoundError(f"مسیر signatures پیدا نشد: {signatures_dir}")
 
-    records: List[Dict[str, Any]] = []
+    # ---- اگه filter داده شده: فقط فایل‌های مرتبط رو بخون ----
+    if signatures_filter:
+        allowed_pairs = _parse_allowed_pairs(signatures_filter)
+        if allowed_pairs is None:
+            logger.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
+            # fallback به حالت کامل
+        else:
+            _log(f"load_signatures: filter فعال — {len(allowed_pairs)} ترکیب مجاز، ایندکس‌سازی فایل‌ها...")
+            sig_index = _build_sig_index(signatures_path)
+            _log(f"load_signatures: ایندکس ساخته شد ({len(sig_index)} stem یکتا)")
+
+            # فقط فایل‌هایی که signature آنها در allowed_pairs هست رو بخون
+            # signature در allowed_pairs معمولاً stem فایل .jsonl هست
+            allowed_stems = {sig for (_, sig) in allowed_pairs}
+            # همچنین stem بدون timestamp (مثل foo_bar بجای foo_bar_1234567890)
+            files_to_read: List[Path] = []
+            for stem, paths in sig_index.items():
+                if stem in allowed_stems:
+                    files_to_read.extend(paths)
+
+            _log(f"load_signatures: {len(files_to_read)} فایل مرتبط از {len(sig_index)} کل (بجای همه فایل‌ها)")
+
+            records: List[Dict[str, Any]] = []
+            for file_path in files_to_read:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    for line_no, line in enumerate(f, start=1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                            rec["_source_file"] = file_path.name
+                            records.append(rec)
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                "خطای JSON در فایل %s خط %d: %s", file_path.name, line_no, e
+                            )
+
+            if not records:
+                _log("load_signatures: هیچ رکوردی از فایل‌های فیلترشده پیدا نشد")
+                return pd.DataFrame()
+
+            df = pd.DataFrame(records)
+            _log(f"load_signatures: {len(df)} رکورد از {len(files_to_read)} فایل بارگذاری شد")
+            logger.info("تعداد %d رکورد از %d فایل signatures بارگذاری شد (فیلترشده).", len(df), len(files_to_read))
+
+            if "signature" not in df.columns:
+                df["signature"] = df.apply(build_signature, axis=1)
+
+            # اعمال فیلتر نهایی بر اساس (coin_composition, signature)
+            if {"coin_composition", "signature"}.issubset(df.columns):
+                before = len(df)
+                df = df[
+                    df.apply(
+                        lambda r: (r["coin_composition"], r["signature"]) in allowed_pairs, axis=1
+                    )
+                ].copy()
+                _log(f"load_signatures: فیلتر نهایی {before} -> {len(df)} رکورد")
+                logger.info(
+                    "اعمال signatures-filter: %d -> %d رکورد (%d ترکیب مجاز).",
+                    before, len(df), len(allowed_pairs),
+                )
+            _log(f"load_signatures: پایان - {len(df)} رکورد نهایی")
+            return df
+
+    # ---- حالت بدون filter: همه فایل‌ها رو بخون (رفتار قبلی) ----
+    records = []
     jsonl_files = sorted(signatures_path.rglob("*.jsonl"))
-    _log(f"load_signatures: {len(jsonl_files)} فایل .jsonl پیدا شد")
+    _log(f"load_signatures: {len(jsonl_files)} فایل .jsonl پیدا شد (بدون filter، همه خوانده می‌شوند)")
     if not jsonl_files:
         logger.warning("هیچ فایل .jsonl در %s پیدا نشد.", signatures_dir)
 
@@ -131,51 +237,11 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
     _log(f"load_signatures: {len(df)} رکورد از {len(jsonl_files)} فایل بارگذاری شد")
     logger.info("تعداد %d رکورد از %d فایل signatures بارگذاری شد.", len(df), len(jsonl_files))
 
-    # اگر ستون signature وجود نداشت، آن را از فیلدهای موجود بساز
     if "signature" not in df.columns:
         logger.info("ستون signature یافت نشد؛ با build_signature ساخته می‌شود.")
         df["signature"] = df.apply(build_signature, axis=1)
 
-    if signatures_filter and os.path.exists(signatures_filter):
-        with open(signatures_filter, "r", encoding="utf-8") as f:
-            _filter_data = json.load(f)
-
-        # ساخت یک set از تاپل‌های (coin_composition, signature) مجاز
-        allowed_pairs: set = set()
-        for item in _filter_data:
-            if isinstance(item, dict):
-                if "coin_composition" in item and "signature" in item:
-                    allowed_pairs.add((item["coin_composition"], item["signature"]))
-                elif "path" in item:
-                    # سازگاری با نسخه‌های قبلی (کلید path به‌جای coin_composition/signature)
-                    allowed_pairs.add(_extract_coin_signature_from_path(item["path"]))
-                else:
-                    logger.warning(
-                        "آیتم نامعتبر در signatures-filter (فاقد coin_composition/signature/path) نادیده گرفته شد: %s",
-                        item,
-                    )
-            else:
-                # رشته‌ی خام؛ برای سازگاری با نسخه‌های قدیمی‌تر همانند path در نظر گرفته می‌شود
-                allowed_pairs.add(_extract_coin_signature_from_path(str(item)))
-
-        if {"coin_composition", "signature"}.issubset(df.columns):
-            before = len(df)
-            df = df[
-                df.apply(
-                    lambda r: (r["coin_composition"], r["signature"]) in allowed_pairs, axis=1
-                )
-            ].copy()
-            logger.info(
-                "اعمال signatures-filter بر اساس (coin_composition, signature): %d -> %d رکورد (%d ترکیب مجاز).",
-                before, len(df), len(allowed_pairs),
-            )
-        else:
-            logger.warning(
-                "ستون coin_composition و/یا signature در داده‌ها وجود ندارد؛ signatures-filter نادیده گرفته شد."
-            )
-    elif signatures_filter:
-        logger.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
-
+    _log(f"load_signatures: پایان - {len(df)} رکورد نهایی")
     return df
 
 
