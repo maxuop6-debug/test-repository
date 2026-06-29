@@ -221,56 +221,9 @@ jobs:
             echo "[DIAG] 🔴 /tmp/all_signatures خالی است → تمام $QUEUE_COUNT آیتم صف به‌خاطر نبود فایل .jsonl حذف خواهند شد."
           fi
 
-          # ================================================================
-          # [FIX REAL BUG] مشکل واقعی: عدم تطبیق نام sig در صف با stem فایل .jsonl
-          #
-          # صف دارد:   sig = "combo_10day/Best_15m/Best_15m_chunk_0_20260628T224502Z"
-          # index دارد: stem = "Best_15m_chunk_0_20260628T224502Z"  (بدون path prefix)
-          #
-          # generate_correlation_chunks.py فقط basename بدون timestamp را می‌خواند یا
-          # کل path را به عنوان key استفاده می‌کند — در هر دو حالت match ناموفق است.
-          #
-          # راه‌حل: یک symlink-map می‌سازیم که هم basename کامل و هم
-          # بدون timestamp (strip regex _\d{8}T\d{6}Z) را به فایل اصلی map می‌کند.
-          # این باعث می‌شود generate_correlation_chunks.py هر دو شکل را پیدا کند.
-          # ================================================================
-          echo "[FIX] در حال ساخت نقشه نرمال‌سازی timestamp برای فایل‌های .jsonl..."
-          python3 - <<'NORMALIZE_EOF'
-import os, re, pathlib
-
-sig_dir = pathlib.Path("/tmp/all_signatures")
-TS_RE = re.compile(r'_\d{8}T\d{6}Z$')
-
-created = 0
-for jsonl in sig_dir.rglob("*.jsonl"):
-    stem = jsonl.stem  # e.g. Best_15m_chunk_0_20260628T224502Z
-    stem_no_ts = TS_RE.sub('', stem)  # e.g. Best_15m_chunk_0
-    if stem_no_ts == stem:
-        continue  # no timestamp, nothing to do
-    # ساخت symlink در همان دایرکتوری با نام بدون timestamp
-    link_path = jsonl.parent / (stem_no_ts + ".jsonl")
-    if not link_path.exists():
-        try:
-            link_path.symlink_to(jsonl.name)
-            created += 1
-        except Exception as e:
-            print(f"[WARN] symlink failed for {link_path}: {e}")
-
-print(f"[FIX] {created} symlink نرمال‌سازی‌شده ساخته شد.")
-
-# [DIAG] لاگ ساختار واقعی دایرکتوری برای تأیید match
-sample = list(sig_dir.rglob("*.jsonl"))[:6]
-for s in sample:
-    print(f"  [SAMPLE] {s.relative_to(sig_dir)}")
-
-# [DIAG] بررسی اینکه آیا آیتم‌های نوع combo_10day اصلاً وجود دارند
-combo_types = set()
-for jsonl in sig_dir.rglob("*.jsonl"):
-    parts = jsonl.relative_to(sig_dir).parts
-    if parts:
-        combo_types.add(parts[0])
-print(f"[DIAG] انواع combo موجود در /tmp/all_signatures: {sorted(combo_types)}")
-NORMALIZE_EOF
+          # [NOTE] منطق نرمال‌سازی timestamp و symlink دیگر نیازی به اجرای inline نیست.
+          # generate_correlation_chunks.py مستقیماً strip_ts و build_jsonl_index را
+          # اجرا می‌کند و هم basename دقیق و هم نسخه بدون timestamp را match می‌کند.
 
           # [DIAG] نمونه آیتم صف vs نمونه stem موجود برای تأیید تطبیق
           echo "[DIAG] نمونه sig از صف:"
