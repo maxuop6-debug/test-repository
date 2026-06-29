@@ -52,8 +52,33 @@ jobs:
           COMPLETED_COUNT_BEFORE=$(jq length /tmp/completed_archives_list.json 2>/dev/null || echo "ERR")
           echo "[DIAG] ARCHIVE_COUNT (کل آرشیوهای موجود در repo) = $ARCHIVE_COUNT"
           echo "[DIAG] COMPLETED_ARCHIVES_COUNT (تعداد قبلاً پردازش‌شده طبق completed_archives.json) = $COMPLETED_COUNT_BEFORE"
+
+          # FIX: تشخیص و رفع ددلاک
+          # اگه صف (all_combinations_correlation.json) پر باشه ولی /tmp/all_signatures خالی بمونه
+          # یعنی state ناهماهنگه — completed_archives.json رو برای skip logic نادیده می‌گیریم
+          QUEUE_PRECHECK_COUNT=0
+          QUEUE_PRECHECK_RAW=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_correlation.json" 2>/dev/null || echo "[]")
+          jq empty <<<"$QUEUE_PRECHECK_RAW" 2>/dev/null && \
+            QUEUE_PRECHECK_COUNT=$(jq length <<<"$QUEUE_PRECHECK_RAW" 2>/dev/null || echo "0") || \
+            QUEUE_PRECHECK_COUNT=0
+
+          FORCE_REEXTRACT=false
           if [ "$ARCHIVE_COUNT" -gt 0 ] && [ "$COMPLETED_COUNT_BEFORE" != "ERR" ] && [ "$ARCHIVE_COUNT" -le "$COMPLETED_COUNT_BEFORE" ]; then
-            echo "[DIAG] ⚠️ ARCHIVE_COUNT <= COMPLETED_ARCHIVES_COUNT — این یعنی همه آرشیوهای موجود از قبل در completed_archives.json هستند و این run قطعاً همه را skip خواهد کرد (ددلاک محتمل)."
+            echo "[DIAG] ⚠️ ARCHIVE_COUNT <= COMPLETED_ARCHIVES_COUNT — ددلاک محتمل."
+            if [ "$QUEUE_PRECHECK_COUNT" -gt 0 ]; then
+              echo "[FIX] 🔄 صف ($QUEUE_PRECHECK_COUNT آیتم) پر است ولی همه آرشیوها در completed_archives.json هستند."
+              echo "[FIX] → force re-extract فعال شد. completed_archives.json برای این run نادیده گرفته می‌شود."
+              FORCE_REEXTRACT=true
+              # تاریخچه قدیمی رو جدا نگه می‌داریم برای merge نهایی (نه برای skip logic)
+              cp /tmp/completed_archives_list.json /tmp/completed_archives_history.json
+              echo "[]" > /tmp/completed_archives_list.json
+            else
+              echo "[DIAG] ⚠️ ARCHIVE_COUNT <= COMPLETED_ARCHIVES_COUNT — ولی صف هم خالیه. ددلاک نیست، کار تمام شده."
+            fi
+          else
+            echo "[]" > /tmp/completed_archives_history.json
           fi
 
           SKIPPED_COUNT=0
@@ -61,6 +86,7 @@ jobs:
           echo "$ARCHIVES" | jq -r '.[]' > /tmp/archives_list.txt
           while read -r ARCH_PATH; do
             # بررسی اینکه آیا این آرشیو قبلاً پردازش شده است
+            # (اگه FORCE_REEXTRACT=true باشه، این چک همیشه false برمی‌گردونه چون لیست رو reset کردیم)
             ARCH_BASENAME=$(basename "$ARCH_PATH")
             ALREADY_DONE=$(jq --arg p "$ARCH_PATH" --arg b "$ARCH_BASENAME" \
               'map(select(. == $p or . == $b)) | length' /tmp/completed_archives_list.json 2>/dev/null || echo "0")
@@ -94,9 +120,23 @@ jobs:
           rm -f /tmp/archives_list.txt
 
           # [DIAG] خلاصه نهایی حلقه استخراج
-          echo "[DIAG] خلاصه حلقه: SKIPPED_COUNT=$SKIPPED_COUNT  NEW_COUNT(تلاش‌شده برای دانلود/استخراج)=$NEW_COUNT  ARCHIVE_COUNT(کل)=$ARCHIVE_COUNT"
+          echo "[DIAG] خلاصه حلقه: FORCE_REEXTRACT=$FORCE_REEXTRACT  SKIPPED_COUNT=$SKIPPED_COUNT  NEW_COUNT(تلاش‌شده)=$NEW_COUNT  ARCHIVE_COUNT(کل)=$ARCHIVE_COUNT"
           if [ "$NEW_COUNT" -eq 0 ] && [ "$ARCHIVE_COUNT" -gt 0 ]; then
-            echo "[DIAG] 🔴 تایید ددلاک: هیچ آرشیو جدیدی برای استخراج وجود نداشت چون همه در completed_archives.json بودند. این علت اصلی jsonl_total=0 در این اجراست."
+            if [ "$FORCE_REEXTRACT" = "true" ]; then
+              echo "[DIAG] 🔴 با وجود force re-extract، هیچ آرشیو جدیدی استخراج نشد. مشکل در دانلود یا رمزگشایی آرشیوها بررسی شود."
+            else
+              echo "[DIAG] 🔴 تایید ددلاک: هیچ آرشیو جدیدی برای استخراج وجود نداشت چون همه در completed_archives.json بودند. این علت اصلی jsonl_total=0 در این اجراست."
+            fi
+          fi
+
+          # FIX: merge تاریخچه قدیمی با نتایج این run قبل از آپلود
+          # (جلوگیری از overwrite تاریخچه وقتی FORCE_REEXTRACT=true بوده)
+          if [ -s /tmp/completed_archives_history.json ] && [ "$(jq length /tmp/completed_archives_history.json 2>/dev/null || echo 0)" != "0" ]; then
+            jq -s '.[0] + .[1] | unique' \
+              /tmp/completed_archives_history.json /tmp/completed_archives_list.json \
+              > /tmp/completed_archives_merged.json
+            mv /tmp/completed_archives_merged.json /tmp/completed_archives_list.json
+            echo "[FIX] تاریخچه قدیمی با نتایج این run ادغام شد."
           fi
 
           # آپلود completed_archives.json به‌روزرسانی‌شده به مخزن سوم
