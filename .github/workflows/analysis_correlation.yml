@@ -13,140 +13,9 @@ concurrency:
 
 jobs:
   # ================================================================
-  # generate-reports: تولید گزارش‌های جامع نسخه ۵ و commit به مخزن سوم
-  # ================================================================
-  generate-reports:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 1. Checkout مخزن اصلی
-        uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 2. نصب پایتون و کتابخانه‌ها
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: نصب وابستگی‌ها
-        run: pip install pandas numpy scipy pyarrow
-
-      - name: 3. Clone مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          git clone \
-            --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/${THIRD_REPO}.git" \
-            /tmp/third_repo
-
-      - name: 4. اجرای loader.py
-        run: |
-          python modules/loader.py \
-            --news-dir data/news \
-            --results-dir /tmp/third_repo/aggregated \
-            --strategies-dir /tmp/third_repo/strategies \
-            --output-news /tmp/news.pickle \
-            --output-strategies /tmp/strategies.json
-
-      - name: 5. اجرای calculator_stoploss.py
-        run: |
-          python modules/calculator_stoploss.py \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --strategies-dir /tmp/third_repo/strategies \
-            --output /tmp/stoploss.json
-
-      - name: 6. اجرای calculators.py returns
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py returns \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --output /tmp/returns.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 7. اجرای calculators.py risk
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py risk \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/risk.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 8. اجرای calculators.py inverse
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py inverse \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/inverse.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 9. اجرای calculators.py report
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          mkdir -p /tmp/reports
-          python modules/calculators.py report \
-            --returns-cache /tmp/returns.json \
-            --strategies-json /tmp/strategies.json \
-            --risk-cache /tmp/risk.json \
-            --inverse-cache /tmp/inverse.json \
-            --results-base /tmp/third_repo/aggregated \
-            --news-pickle /tmp/news.pickle \
-            --output-dir /tmp/reports \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 9.5. فشرده‌سازی و رمزنگاری پوشه reports
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          tar -czf /tmp/reports.tar.gz -C /tmp reports
-          node -e "
-            const crypto=require('crypto'),fs=require('fs');
-            const pass=process.env.RESULTS_PASSWORD;
-            const key=crypto.scryptSync(pass,'salt',32);
-            const iv=crypto.randomBytes(16);
-            const data=fs.readFileSync('/tmp/reports.tar.gz');
-            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
-            const enc=Buffer.concat([iv,cipher.update(data),cipher.final()]);
-            fs.writeFileSync('/tmp/reports.tar.gz.enc',enc);
-          "
-          rm -rf /tmp/reports /tmp/reports.tar.gz
-
-      - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          cd /tmp/third_repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          rm -f reports.tar.gz.enc
-          cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
-          git add -f reports.tar.gz.enc
-          RETRY=0; MAX=5
-          while [ $RETRY -lt $MAX ]; do
-            git pull --rebase origin main \
-              && git commit -m "update reports (run ${{ github.run_id }})" --allow-empty \
-              && git push origin main && break
-            RETRY=$((RETRY+1))
-            sleep 2
-          done
-
-  # ================================================================
   # correlation-generate-matrix: تولید صف کار برای ماژول correlation
   # ================================================================
   correlation-generate-matrix:
-    needs: [generate-reports]
     runs-on: ubuntu-latest
     outputs:
       matrix_items: ${{ steps.gen.outputs.matrix_items }}
@@ -179,6 +48,16 @@ jobs:
           echo "$COMPLETED_ARCHIVES_RAW" | jq -e 'type == "array"' >/dev/null 2>&1 || COMPLETED_ARCHIVES_RAW="[]"
           echo "$COMPLETED_ARCHIVES_RAW" > /tmp/completed_archives_list.json
 
+          # [DIAG] لاگ کامل وضعیت ورودی قبل از شروع حلقه — برای تشخیص قطعی ددلاک
+          COMPLETED_COUNT_BEFORE=$(jq length /tmp/completed_archives_list.json 2>/dev/null || echo "ERR")
+          echo "[DIAG] ARCHIVE_COUNT (کل آرشیوهای موجود در repo) = $ARCHIVE_COUNT"
+          echo "[DIAG] COMPLETED_ARCHIVES_COUNT (تعداد قبلاً پردازش‌شده طبق completed_archives.json) = $COMPLETED_COUNT_BEFORE"
+          if [ "$ARCHIVE_COUNT" -gt 0 ] && [ "$COMPLETED_COUNT_BEFORE" != "ERR" ] && [ "$ARCHIVE_COUNT" -le "$COMPLETED_COUNT_BEFORE" ]; then
+            echo "[DIAG] ⚠️ ARCHIVE_COUNT <= COMPLETED_ARCHIVES_COUNT — این یعنی همه آرشیوهای موجود از قبل در completed_archives.json هستند و این run قطعاً همه را skip خواهد کرد (ددلاک محتمل)."
+          fi
+
+          SKIPPED_COUNT=0
+          NEW_COUNT=0
           echo "$ARCHIVES" | jq -r '.[]' > /tmp/archives_list.txt
           while read -r ARCH_PATH; do
             # بررسی اینکه آیا این آرشیو قبلاً پردازش شده است
@@ -186,9 +65,11 @@ jobs:
             ALREADY_DONE=$(jq --arg p "$ARCH_PATH" --arg b "$ARCH_BASENAME" \
               'map(select(. == $p or . == $b)) | length' /tmp/completed_archives_list.json 2>/dev/null || echo "0")
             if [ "$ALREADY_DONE" != "0" ] && [ "$ALREADY_DONE" != "" ]; then
+              SKIPPED_COUNT=$((SKIPPED_COUNT+1))
               echo "ℹ️ آرشیو قبلاً پردازش شده — رد می‌شود: $ARCH_PATH"
               continue
             fi
+            NEW_COUNT=$((NEW_COUNT+1))
 
             DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
               "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url')
@@ -211,6 +92,12 @@ jobs:
             rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
           done < /tmp/archives_list.txt
           rm -f /tmp/archives_list.txt
+
+          # [DIAG] خلاصه نهایی حلقه استخراج
+          echo "[DIAG] خلاصه حلقه: SKIPPED_COUNT=$SKIPPED_COUNT  NEW_COUNT(تلاش‌شده برای دانلود/استخراج)=$NEW_COUNT  ARCHIVE_COUNT(کل)=$ARCHIVE_COUNT"
+          if [ "$NEW_COUNT" -eq 0 ] && [ "$ARCHIVE_COUNT" -gt 0 ]; then
+            echo "[DIAG] 🔴 تایید ددلاک: هیچ آرشیو جدیدی برای استخراج وجود نداشت چون همه در completed_archives.json بودند. این علت اصلی jsonl_total=0 در این اجراست."
+          fi
 
           # آپلود completed_archives.json به‌روزرسانی‌شده به مخزن سوم
           if [ -s /tmp/completed_archives_list.json ] && [ "$(jq length /tmp/completed_archives_list.json)" != "0" ]; then
@@ -286,6 +173,13 @@ jobs:
           fi
 
           # اجرای اسکریپت جداگانه تولید چانک‌ها
+          # [DIAG] بررسی وضعیت /tmp/all_signatures قبل از فیلتر — این مستقیماً به نتیجه باگ ۱ (ددلاک) وابسته است
+          SIG_JSONL_COUNT=$(find /tmp/all_signatures -name '*.jsonl' 2>/dev/null | wc -l)
+          echo "[DIAG] تعداد فایل .jsonl موجود در /tmp/all_signatures قبل از فراخوانی generate_correlation_chunks.py = $SIG_JSONL_COUNT"
+          if [ "$SIG_JSONL_COUNT" -eq 0 ]; then
+            echo "[DIAG] 🔴 /tmp/all_signatures خالی است → تمام $QUEUE_COUNT آیتم صف به‌خاطر نبود فایل .jsonl حذف خواهند شد (نتیجه مستقیم باگ ۱، نه باگ مستقل در generate_correlation_chunks.py)."
+          fi
+
           python modules/generate_correlation_chunks.py \
             --signatures-dir /tmp/all_signatures \
             --queue-file /tmp/all_combinations_correlation.json \
@@ -320,7 +214,7 @@ jobs:
   # correlation-batch: پردازش موازی چانک‌های correlation
   # ================================================================
   correlation-batch:
-    needs: [generate-reports, correlation-generate-matrix]
+    needs: [correlation-generate-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     if: ${{ needs.correlation-generate-matrix.outputs.empty == 'false' }}
