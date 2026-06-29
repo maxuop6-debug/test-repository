@@ -536,6 +536,15 @@ jobs:
         run: |
           mkdir -p /tmp/golden_chunk_cache
 
+          # اگر chunk از cache بارگذاری شده و parquet در آن موجود است، مطمئن می‌شیم
+          # که در مسیر استاندارد قرار دارد تا step 6.6 بتونه آن را آپلود کنه
+          if [ "${{ steps.prev_check.outputs.already_done }}" = "true" ]; then
+            CACHED_PARQUET=$(find /tmp/golden_chunk_cache -name 'golden_scores.parquet' 2>/dev/null | head -1)
+            if [ -n "$CACHED_PARQUET" ] && [ "$(realpath "$CACHED_PARQUET")" != "/tmp/golden_chunk_cache/golden_scores.parquet" ]; then
+              cp "$CACHED_PARQUET" /tmp/golden_chunk_cache/golden_scores.parquet
+            fi
+          fi
+
           # باگ dedup ریشه‌ای fix: done_items باید مسیرهای فایل JSONL باشه
           # (همان فرمتی که completed_golden.json / all_combinations_golden.json استفاده می‌کنن)
           # نه «امضای خبری» سطح ردیف (processed_signatures) که از محتوای داده ساخته می‌شه.
