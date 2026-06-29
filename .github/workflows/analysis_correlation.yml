@@ -236,33 +236,41 @@ jobs:
           # ================================================================
           echo "[FIX] در حال ساخت نقشه نرمال‌سازی timestamp برای فایل‌های .jsonl..."
           python3 - <<'NORMALIZE_EOF'
-          import os, re, pathlib
+import os, re, pathlib
 
-          sig_dir = pathlib.Path("/tmp/all_signatures")
-          TS_RE = re.compile(r'_\d{8}T\d{6}Z$')
+sig_dir = pathlib.Path("/tmp/all_signatures")
+TS_RE = re.compile(r'_\d{8}T\d{6}Z$')
 
-          created = 0
-          for jsonl in sig_dir.rglob("*.jsonl"):
-              stem = jsonl.stem  # e.g. Best_15m_chunk_0_20260628T224502Z
-              stem_no_ts = TS_RE.sub('', stem)  # e.g. Best_15m_chunk_0
-              if stem_no_ts == stem:
-                  continue  # no timestamp, nothing to do
-              # ساخت symlink در همان دایرکتوری با نام بدون timestamp
-              link_path = jsonl.parent / (stem_no_ts + ".jsonl")
-              if not link_path.exists():
-                  try:
-                      link_path.symlink_to(jsonl.name)
-                      created += 1
-                  except Exception as e:
-                      print(f"[WARN] symlink failed for {link_path}: {e}")
+created = 0
+for jsonl in sig_dir.rglob("*.jsonl"):
+    stem = jsonl.stem  # e.g. Best_15m_chunk_0_20260628T224502Z
+    stem_no_ts = TS_RE.sub('', stem)  # e.g. Best_15m_chunk_0
+    if stem_no_ts == stem:
+        continue  # no timestamp, nothing to do
+    # ساخت symlink در همان دایرکتوری با نام بدون timestamp
+    link_path = jsonl.parent / (stem_no_ts + ".jsonl")
+    if not link_path.exists():
+        try:
+            link_path.symlink_to(jsonl.name)
+            created += 1
+        except Exception as e:
+            print(f"[WARN] symlink failed for {link_path}: {e}")
 
-          print(f"[FIX] {created} symlink نرمال‌سازی‌شده ساخته شد.")
+print(f"[FIX] {created} symlink نرمال‌سازی‌شده ساخته شد.")
 
-          # لاگ نمونه برای تأیید
-          sample = list(sig_dir.rglob("*.jsonl"))[:6]
-          for s in sample:
-              print(f"  [SAMPLE] {s.relative_to(sig_dir)}")
-          NORMALIZE_EOF
+# [DIAG] لاگ ساختار واقعی دایرکتوری برای تأیید match
+sample = list(sig_dir.rglob("*.jsonl"))[:6]
+for s in sample:
+    print(f"  [SAMPLE] {s.relative_to(sig_dir)}")
+
+# [DIAG] بررسی اینکه آیا آیتم‌های نوع combo_10day اصلاً وجود دارند
+combo_types = set()
+for jsonl in sig_dir.rglob("*.jsonl"):
+    parts = jsonl.relative_to(sig_dir).parts
+    if parts:
+        combo_types.add(parts[0])
+print(f"[DIAG] انواع combo موجود در /tmp/all_signatures: {sorted(combo_types)}")
+NORMALIZE_EOF
 
           # [DIAG] نمونه آیتم صف vs نمونه stem موجود برای تأیید تطبیق
           echo "[DIAG] نمونه sig از صف:"
