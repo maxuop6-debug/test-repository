@@ -34,36 +34,48 @@ from pathlib import Path
 MAX_CHUNK_SIZE = 500
 
 
-def find_jsonl_for_item(item: dict, signatures_dir: Path) -> bool:
+def build_jsonl_index(signatures_dir: Path) -> tuple:
     """
-    بررسی می‌کند که فایل .jsonl متناظر آیتم در signatures_dir وجود دارد.
-    جستجو recursive و case-sensitive است.
+    یک‌بار همه فایل‌های .jsonl را index می‌کند.
+    برمی‌گرداند:
+      - stems: مجموعه stem نام فایل‌ها (بدون پسوند، بدون مسیر)
+      - rel_paths: مجموعه مسیرهای نسبی به‌صورت "parent_name/stem"
+    """
+    stems = set()
+    rel_paths = set()
+    for p in signatures_dir.rglob("*.jsonl"):
+        stems.add(p.stem)
+        rel_paths.add(f"{p.parent.name}/{p.stem}")
+    return stems, rel_paths
+
+
+def find_jsonl_for_item(item: dict, stems: set, rel_paths: set) -> bool:
+    """
+    بررسی می‌کند که فایل .jsonl متناظر آیتم در index وجود دارد.
+    از index از پیش‌ساخته‌شده استفاده می‌کند (O(1) به‌جای rglob تکراری).
     """
     sig = item.get("signature", "")
     coin = item.get("coin_composition", "")
     if not sig:
         return False
 
-    # اگر coin_composition داریم، مسیر دقیق‌تری جستجو می‌کنیم
-    # ساختار رایج: signatures_dir/<هر زیرمسیری>/<sig>.jsonl
-    # یا: signatures_dir/<coin_composition>/<sig>.jsonl
-    # جستجو را با find پوشانیم تا از ساختار دقیق بی‌نیاز باشیم
+    # ۱. مطابقت دقیق stem
+    if sig in stems:
+        return True
 
-    # ابتدا مسیر ترجیحی را چک کن
-    if coin:
-        preferred = signatures_dir / coin / f"{sig}.jsonl"
-        if preferred.exists():
-            return True
+    # ۲. مطابقت مسیر ترکیبی coin/sig
+    if coin and f"{coin}/{sig}" in rel_paths:
+        return True
 
-    # جستجوی recursive برای هر نام فایل منطبق
-    sig_filename = f"{sig}.jsonl"
-    for found in signatures_dir.rglob(sig_filename):
+    # ۳. اگر sig شامل پسوند .jsonl بود، بدون پسوند چک کن
+    sig_no_ext = sig[:-6] if sig.endswith(".jsonl") else sig
+    if sig_no_ext != sig and sig_no_ext in stems:
         return True
 
     return False
 
 
-def normalize_item(raw_item: dict) -> dict | None:
+def normalize_item(raw_item: dict):
     """
     هر دو فرمت آیتم صف را به فرمت استاندارد {coin_composition, signature, ...}
     تبدیل می‌کند. None برمی‌گرداند اگر آیتم قابل تبدیل نباشد.
@@ -143,7 +155,7 @@ def main():
     print(f"[DEBUG] تعداد آیتم‌های normalize‌شده: {len(normalized)}", flush=True)
 
     # ── حذف duplicates با کلید ترکیبی ─────────────────────────────
-    seen_keys: set[str] = set()
+    seen_keys = set()
     deduped = []
     for item in normalized:
         key = item["coin_composition"] + "|||" + item["signature"]
@@ -153,15 +165,38 @@ def main():
 
     print(f"[DEBUG] تعداد آیتم‌های یکتا (بعد از dedup): {len(deduped)}", flush=True)
 
-    # ── فیلتر: فقط آیتم‌هایی که فایل .jsonl دارند ────────────────
+    # ── ساخت index یک‌باره از همه فایل‌های .jsonl ─────────────────
     if signatures_dir.exists():
+        print(f"[DEBUG] در حال ساخت index از {signatures_dir} ...", flush=True)
+        stems, rel_paths = build_jsonl_index(signatures_dir)
+        print(f"[DEBUG] index آماده شد: {len(stems)} فایل .jsonl منحصربه‌فرد", flush=True)
+
+        # [DIAG] نمونه از stems و آیتم‌های صف برای تشخیص mismatch
+        sample_stems = sorted(stems)[:5]
+        print(f"[DIAG] نمونه stems در index: {sample_stems}", flush=True)
+        sample_items = deduped[:3]
+        for it in sample_items:
+            print(f"[DIAG] آیتم صف — coin={it.get('coin_composition')} sig={it.get('signature')}", flush=True)
+
         before_filter = len(deduped)
-        deduped = [item for item in deduped
-                   if find_jsonl_for_item(item, signatures_dir)]
-        skipped = before_filter - len(deduped)
+        matched = []
+        missed = []
+        for item in deduped:
+            if find_jsonl_for_item(item, stems, rel_paths):
+                matched.append(item)
+            else:
+                missed.append(item)
+
+        skipped = before_filter - len(matched)
         if skipped > 0:
             print(f"[DEBUG] {skipped} آیتم بدون فایل .jsonl حذف شدند "
                   f"(archive هنوز extract نشده)", flush=True)
+            # [DIAG] نمایش چند آیتم miss‌شده برای تشخیص علت
+            for it in missed[:5]:
+                print(f"[DIAG] miss — coin={it.get('coin_composition')} "
+                      f"sig={it.get('signature')}", flush=True)
+
+        deduped = matched
     else:
         print(f"⚠️ signatures-dir وجود ندارد: {signatures_dir} — "
               f"فیلتر .jsonl رد می‌شود", flush=True)
