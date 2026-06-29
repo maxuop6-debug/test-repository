@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: analysis-runner
+  group: analysis-runner-correlation
   cancel-in-progress: false
 
 jobs:
@@ -179,7 +179,8 @@ jobs:
           echo "$COMPLETED_ARCHIVES_RAW" | jq -e 'type == "array"' >/dev/null 2>&1 || COMPLETED_ARCHIVES_RAW="[]"
           echo "$COMPLETED_ARCHIVES_RAW" > /tmp/completed_archives_list.json
 
-          echo "$ARCHIVES" | jq -r '.[]' | while read -r ARCH_PATH; do
+          echo "$ARCHIVES" | jq -r '.[]' > /tmp/archives_list.txt
+          while read -r ARCH_PATH; do
             # بررسی اینکه آیا این آرشیو قبلاً پردازش شده است
             ARCH_BASENAME=$(basename "$ARCH_PATH")
             ALREADY_DONE=$(jq --arg p "$ARCH_PATH" --arg b "$ARCH_BASENAME" \
@@ -208,7 +209,8 @@ jobs:
               jq --arg p "$ARCH_PATH" '. + [$p] | unique' /tmp/completed_archives_list.json > /tmp/completed_archives_list.tmp && \
               mv /tmp/completed_archives_list.tmp /tmp/completed_archives_list.json
             rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
-          done
+          done < /tmp/archives_list.txt
+          rm -f /tmp/archives_list.txt
 
           # آپلود completed_archives.json به‌روزرسانی‌شده به مخزن سوم
           if [ -s /tmp/completed_archives_list.json ] && [ "$(jq length /tmp/completed_archives_list.json)" != "0" ]; then
@@ -652,18 +654,101 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
-          ENC_FILE=$(find /tmp/corr_artifacts -name 'correlations.tar.gz.enc' 2>/dev/null | tail -1)
-          if [ -z "$ENC_FILE" ] || [ ! -s "$ENC_FILE" ]; then
+          # باگ ۵ fix: ادغام همه chunk‌های parquet، نه فقط tail -1
+          pip install pyarrow pandas --quiet --break-system-packages 2>/dev/null || \
+            pip install pyarrow pandas --quiet 2>/dev/null || true
+
+          find /tmp/corr_artifacts -name 'correlations.tar.gz.enc' 2>/dev/null \
+            | sort > /tmp/corr_enc_list.txt
+          ENC_COUNT=$(wc -l < /tmp/corr_enc_list.txt)
+
+          if [ "$ENC_COUNT" -eq 0 ]; then
             echo "ℹ️ هیچ correlations.tar.gz.enc برای آپلود یافت نشد — رد می‌شود."
             exit 0
           fi
+
+          mkdir -p /tmp/corr_dec_parts
+          IDX=0
+          while IFS= read -r ENC_FILE; do
+            [ -z "$ENC_FILE" ] && continue
+            DEC_FILE="/tmp/corr_dec_parts/correlations_${IDX}.parquet"
+            TMP_TAR="/tmp/corr_dec_parts/tmp_${IDX}.tar.gz"
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ENC_FILE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('$TMP_TAR',dec);
+            " 2>/dev/null
+            tar -xzf "$TMP_TAR" -C /tmp/corr_dec_parts 2>/dev/null && \
+              mv /tmp/corr_dec_parts/correlations.parquet "$DEC_FILE" 2>/dev/null || true
+            rm -f "$TMP_TAR"
+            IDX=$((IDX+1))
+          done < /tmp/corr_enc_list.txt
+
+          PARQUET_COUNT=$(find /tmp/corr_dec_parts -name 'correlations_*.parquet' | wc -l)
+          echo "[DEBUG] تعداد parquet‌های رمزگشایی‌شده: $PARQUET_COUNT"
+
+          if [ "$PARQUET_COUNT" -eq 0 ]; then
+            echo "⚠️ هیچ parquet قابل رمزگشایی یافت نشد."
+            exit 0
+          fi
+
+          python3 - <<'PYEOF'
+import sys, pathlib
+try:
+    import pandas as pd
+    paths = list(pathlib.Path("/tmp/corr_dec_parts").glob("correlations_*.parquet"))
+    if not paths:
+        sys.exit(0)
+    dfs = []
+    for p in sorted(paths):
+        try:
+            dfs.append(pd.read_parquet(p))
+        except Exception as e:
+            print(f"skip {p}: {e}")
+    if not dfs:
+        sys.exit(0)
+    merged = pd.concat(dfs, ignore_index=False)
+    if not merged.index.is_unique:
+        merged = merged[~merged.index.duplicated(keep="last")]
+    merged.to_parquet("/tmp/correlations_merged.parquet", index=True)
+    print(f"merged {len(merged)} rows from {len(dfs)} files")
+except ImportError:
+    import shutil
+    paths = sorted(pathlib.Path("/tmp/corr_dec_parts").glob("correlations_*.parquet"))
+    if paths:
+        shutil.copy(paths[-1], "/tmp/correlations_merged.parquet")
+        print(f"pandas not available, used last file: {paths[-1]}")
+PYEOF
+
+          if [ ! -f /tmp/correlations_merged.parquet ]; then
+            echo "⚠️ ادغام parquet ناموفق بود."
+            exit 0
+          fi
+
+          tar -czf /tmp/correlations_final.tar.gz -C /tmp correlations_merged.parquet
+          node -e "
+            const crypto=require('crypto'),fs=require('fs');
+            const pass=process.env.RESULTS_PASSWORD;
+            const data=fs.readFileSync('/tmp/correlations_final.tar.gz');
+            const key=crypto.scryptSync(pass,'salt',32);
+            const iv=crypto.randomBytes(16);
+            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+            const enc=Buffer.concat([iv,cipher.update(data),cipher.final()]);
+            fs.writeFileSync('/tmp/correlations_final.tar.gz.enc',enc);
+          "
+
           DEST="analysis_results/correlations.parquet.enc"
           SHA_DEST=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" | jq -r '.sha // empty' 2>/dev/null || echo "")
-          base64 -w0 "$ENC_FILE" > /tmp/corr_b64.txt
-          # fix ARG_MAX + JSON corruption: ساخت payload با jq+--rawfile و آپلود با --data-binary
-          CORR_MSG="update correlations.parquet (run ${{ github.run_id }})"
+          base64 -w0 /tmp/correlations_final.tar.gz.enc > /tmp/corr_b64.txt
+          CORR_MSG="update correlations.parquet merged (run ${{ github.run_id }})"
           if [ -n "$SHA_DEST" ]; then
             jq -n \
               --arg msg "$CORR_MSG" \
@@ -678,11 +763,18 @@ jobs:
               '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
               > /tmp/payload_corr.json
           fi
-          curl -s -X PUT -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
+          HTTP_CORR=$(curl -s -o /tmp/corr_resp.txt -w "%{http_code}" -X PUT \
+            -H "Authorization: token $GH_TOKEN" -H "Content-Type: application/json" \
             --data-binary @/tmp/payload_corr.json \
-            "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" >/dev/null \
-            && echo "✅ correlations.parquet.enc آپلود شد." || echo "⚠️ آپلود ناموفق."
-          rm -f /tmp/corr_b64.txt /tmp/payload_corr.json
+            "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
+          if [ "$HTTP_CORR" = "200" ] || [ "$HTTP_CORR" = "201" ]; then
+            echo "✅ correlations.parquet.enc (ادغام‌شده از $PARQUET_COUNT chunk) آپلود شد."
+          else
+            echo "⚠️ آپلود ناموفق (HTTP $HTTP_CORR): $(cat /tmp/corr_resp.txt | head -c 200)"
+          fi
+          rm -f /tmp/corr_b64.txt /tmp/payload_corr.json /tmp/corr_resp.txt \
+            /tmp/correlations_merged.parquet /tmp/correlations_final.tar.gz \
+            /tmp/correlations_final.tar.gz.enc /tmp/corr_enc_list.txt
 
   # ================================================================
   # dispatch-loop: فراخوانی loop_analysis.yml — همیشه اجرا می‌شود
