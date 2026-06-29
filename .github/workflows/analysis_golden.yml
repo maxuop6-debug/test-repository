@@ -634,9 +634,13 @@ jobs:
         run: |
           mkdir -p /tmp/golden_scores_parts
 
+          echo "[DEBUG] شروع دانلود artifact های golden_scores برای run ${{ github.run_id }}"
           gh run download ${{ github.run_id }} \
             --pattern "golden-scores-*-${{ github.run_id }}" \
             --dir /tmp/golden_scores_parts 2>/dev/null || true
+
+          echo "[DEBUG] ساختار دایرکتوری golden_scores_parts:"
+          find /tmp/golden_scores_parts -type f | head -30 || echo "(خالی)"
 
           PARQUET_COUNT=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
           echo "[DEBUG] تعداد golden_scores.parquet یافت‌شده: $PARQUET_COUNT"
@@ -653,14 +657,15 @@ jobs:
             cat /tmp/parquet_list.txt
 
             # باگ K fix: ادغام parquet با حفظ index اصلی (signature key)
-            # اسکریپت python به‌صورت base64 encode شده تا مشکل YAML heredoc نداشته باشیم
             echo "aW1wb3J0IHN5cywgcGF0aGxpYgp0cnk6CiAgICBpbXBvcnQgcGFuZGFzIGFzIHBkCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9wYXJxdWV0X2xpc3QudHh0IikucmVhZF90ZXh0KCkuc3RyaXAoKS5zcGxpdCgiCiIpCiAgICBwYXRocyA9IFtwIGZvciBwIGluIHBhdGhzIGlmIHAgYW5kIHBhdGhsaWIuUGF0aChwKS5leGlzdHMoKV0KICAgIGlmIG5vdCBwYXRoczoKICAgICAgICBwcmludCgibm8gdmFsaWQgcGFycXVldCBmaWxlcyBmb3VuZCIpCiAgICAgICAgc3lzLmV4aXQoMCkKICAgIGRmcyA9IFtdCiAgICBmb3IgcCBpbiBwYXRoczoKICAgICAgICB0cnk6CiAgICAgICAgICAgIGRmcy5hcHBlbmQocGQucmVhZF9wYXJxdWV0KHApKQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICAgICAgcHJpbnQoZiJza2lwIHtwfToge2V9IikKICAgIGlmIG5vdCBkZnM6CiAgICAgICAgc3lzLmV4aXQoMCkKICAgIG1lcmdlZCA9IHBkLmNvbmNhdChkZnMsIGlnbm9yZV9pbmRleD1GYWxzZSkKICAgIGlmIG5vdCBtZXJnZWQuaW5kZXguaXNfdW5pcXVlOgogICAgICAgIG1lcmdlZCA9IG1lcmdlZFt+bWVyZ2VkLmluZGV4LmR1cGxpY2F0ZWQoa2VlcD0ibGFzdCIpXQogICAgbWVyZ2VkLnRvX3BhcnF1ZXQoIi90bXAvZ29sZGVuX3Njb3Jlcy5wYXJxdWV0IiwgaW5kZXg9VHJ1ZSkKICAgIHByaW50KGYibWVyZ2VkIHtsZW4obWVyZ2VkKX0gcm93cyBmcm9tIHtsZW4oZGZzKX0gZmlsZXMiKQpleGNlcHQgSW1wb3J0RXJyb3I6CiAgICBpbXBvcnQgc2h1dGlsCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9wYXJxdWV0X2xpc3QudHh0IikucmVhZF90ZXh0KCkuc3RyaXAoKS5zcGxpdCgiCiIpCiAgICBwYXRocyA9IFtwIGZvciBwIGluIHBhdGhzIGlmIHBdCiAgICBzaHV0aWwuY29weShwYXRoc1stMV0sICIvdG1wL2dvbGRlbl9zY29yZXMucGFycXVldCIpCiAgICBwcmludChmInBhbmRhcyBub3QgYXZhaWxhYmxlLCB1c2VkIGxhc3QgZmlsZToge3BhdGhzWy0xXX0iKQo=" \
               | base64 -d > /tmp/merge_parquet.py
             python3 /tmp/merge_parquet.py
+            echo "[DEBUG] خروجی merge_parquet.py: exit=$?"
 
             if [ ! -f /tmp/golden_scores.parquet ]; then
               echo "⚠️ golden_scores.parquet پس از merge وجود ندارد — رد می‌شویم."
             else
+              echo "[DEBUG] اندازه golden_scores.parquet: $(du -sh /tmp/golden_scores.parquet | cut -f1)"
               tar -czf /tmp/golden_scores.tar.gz -C /tmp golden_scores.parquet
               echo "✅ فشرده‌سازی انجام شد ($(du -sh /tmp/golden_scores.tar.gz | cut -f1))"
 
@@ -674,53 +679,93 @@ jobs:
                 const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
                 fs.writeFileSync('/tmp/golden_scores.tar.gz.enc', enc);
               "
-              echo "✅ رمزنگاری golden_scores.tar.gz.enc انجام شد"
+              echo "✅ رمزنگاری golden_scores.tar.gz.enc انجام شد ($(du -sh /tmp/golden_scores.tar.gz.enc | cut -f1))"
 
-              # باگ U fix: retry loop برای آپلود golden_scores (مثل all_combinations_golden)
-              DEST="analysis_results/golden_scores.parquet.enc"
-              # fix ARG_MAX: به جای CONTENT_B64=$(base64 ...) در shell، فایل رو به‌صورت مستقیم پاس می‌دیم
+              # باگ P fix: مسیر فایل در ریشه مخزن سوم (نه زیرپوشه analysis_results که وجود ندارد)
+              # GitHub API برای PUT در پوشه‌ای که وجود ندارد 422 می‌دهد
+              DEST="golden_scores.parquet.enc"
+              echo "[DEBUG] مسیر مقصد در مخزن سوم: $DEST"
+
               base64 -w0 /tmp/golden_scores.tar.gz.enc > /tmp/golden_scores_b64.txt
+              echo "[DEBUG] اندازه base64: $(wc -c < /tmp/golden_scores_b64.txt) بایت"
+
               GS_RETRY=0; GS_MAX=10
+              GS_UPLOADED=false
               while [ $GS_RETRY -lt $GS_MAX ]; do
-                SHA_GS=$(curl -s \
+                echo "[DEBUG] تلاش آپلود golden_scores ($((GS_RETRY+1))/$GS_MAX)..."
+
+                # باگ Q fix: دریافت SHA با بررسی HTTP code (نه فقط jq empty)
+                SHA_RESP=$(curl -s -w "\n%{http_code}" \
                   -H "Authorization: token $CROSS_REPO_TOKEN" \
                   -H "Accept: application/vnd.github.v3+json" \
-                  "https://api.github.com/repos/$THIRD_REPO/contents/$DEST" \
-                  | jq -r '.sha // empty' 2>/dev/null || echo "")
-                if [ -n "$SHA_GS" ]; then
+                  "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
+                SHA_HTTP=$(echo "$SHA_RESP" | tail -1)
+                SHA_GS=$(echo "$SHA_RESP" | head -n -1 | jq -r '.sha // empty' 2>/dev/null || echo "")
+                echo "[DEBUG] SHA_HTTP=$SHA_HTTP SHA_GS='$SHA_GS'"
+
+                if [ "$SHA_HTTP" = "200" ] && [ -n "$SHA_GS" ]; then
                   jq -n \
                     --arg msg "update golden_scores merged (run ${{ github.run_id }})" \
                     --rawfile content /tmp/golden_scores_b64.txt \
                     --arg sha "$SHA_GS" \
                     '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
                     > /tmp/payload_gs.json
-                else
+                  echo "[DEBUG] payload با SHA آماده شد (update موجود)"
+                elif [ "$SHA_HTTP" = "404" ]; then
                   jq -n \
-                    --arg msg "update golden_scores merged (run ${{ github.run_id }})" \
+                    --arg msg "add golden_scores merged (run ${{ github.run_id }})" \
                     --rawfile content /tmp/golden_scores_b64.txt \
                     '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
                     > /tmp/payload_gs.json
+                  echo "[DEBUG] payload بدون SHA آماده شد (فایل جدید)"
+                else
+                  echo "⚠️ دریافت SHA نامعتبر (HTTP $SHA_HTTP) — تلاش مجدد..."
+                  GS_RETRY=$((GS_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
                 fi
+
                 GS_HTTP=$(curl -s -o /tmp/gs_resp.txt -w "%{http_code}" -X PUT \
                   -H "Authorization: token $CROSS_REPO_TOKEN" \
                   -H "Content-Type: application/json" \
                   --data-binary @/tmp/payload_gs.json \
                   "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
+                echo "[DEBUG] نتیجه PUT: HTTP $GS_HTTP"
+                echo "[DEBUG] پاسخ سرور: $(cat /tmp/gs_resp.txt | head -c 300)"
+
                 if [ "$GS_HTTP" = "200" ] || [ "$GS_HTTP" = "201" ]; then
                   echo "✅ golden_scores.parquet.enc در مخزن سوم آپلود شد → $DEST"
+                  GS_UPLOADED=true
                   break
-                elif [ "$GS_HTTP" = "409" ] || [ "$GS_HTTP" = "422" ]; then
-                  echo "⚠️ تداخل SHA در golden_scores (HTTP $GS_HTTP) — تلاش مجدد ($((GS_RETRY+1))/$GS_MAX)..."
+                elif [ "$GS_HTTP" = "409" ]; then
+                  # 409 = SHA conflict (race condition) → SHA رو دوباره بگیر و retry
+                  echo "⚠️ تداخل SHA (HTTP 409) — دریافت SHA جدید و تلاش مجدد ($((GS_RETRY+1))/$GS_MAX)..."
                   GS_RETRY=$((GS_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+                elif [ "$GS_HTTP" = "422" ]; then
+                  # 422 می‌تواند یعنی: SHA اشتباه، یا پوشه وجود ندارد
+                  RESP_MSG=$(cat /tmp/gs_resp.txt | jq -r '.message // empty' 2>/dev/null || echo "")
+                  echo "⚠️ HTTP 422 — پیام: '$RESP_MSG'"
+                  # باگ P fix: اگر پیام مربوط به SHA باشد retry، وگرنه خطای واقعی است
+                  if echo "$RESP_MSG" | grep -qi "sha"; then
+                    echo "   → SHA مشکل دارد — retry..."
+                    GS_RETRY=$((GS_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+                  else
+                    echo "ERROR: آپلود golden_scores به خطای غیرقابل‌بازیابی رسید (422 غیر-SHA): $RESP_MSG"
+                    break
+                  fi
                 else
-                  echo "⚠️ آپلود golden_scores ناموفق (HTTP $GS_HTTP): $(cat /tmp/gs_resp.txt | head -c 200)"
-                  break
+                  echo "ERROR: آپلود golden_scores ناموفق (HTTP $GS_HTTP): $(cat /tmp/gs_resp.txt | head -c 300)"
+                  GS_RETRY=$((GS_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
                 fi
               done
-              [ $GS_RETRY -ge $GS_MAX ] && echo "ERROR: آپلود golden_scores پس از $GS_MAX تلاش ناموفق."
+
+              # باگ R fix: در صورت شکست، step را با خطا خاتمه بده (نه silent fail)
+              if [ "$GS_UPLOADED" != "true" ]; then
+                echo "ERROR: آپلود golden_scores پس از $GS_MAX تلاش ناموفق — workflow متوقف می‌شود."
+                exit 1
+              fi
 
               rm -f /tmp/golden_scores.parquet /tmp/golden_scores.tar.gz \
-                /tmp/golden_scores.tar.gz.enc /tmp/gs_resp.txt /tmp/parquet_list.txt
+                /tmp/golden_scores.tar.gz.enc /tmp/gs_resp.txt /tmp/parquet_list.txt \
+                /tmp/golden_scores_b64.txt /tmp/payload_gs.json
             fi
           fi
 
