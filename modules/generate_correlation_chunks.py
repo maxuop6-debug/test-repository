@@ -23,54 +23,123 @@ generate_correlation_chunks.py
     (این آیتم‌ها در صف‌اند ولی archive هنوز extract نشده — دور بعدی پردازش می‌شوند)
   - آیتم‌های باقی‌مانده را unique_by(coin_composition + "|||" + signature) می‌کند
   - در chunk‌های MAX_CHUNK_SIZE تایی تقسیم می‌کند
+
+FIX (2026-06):
+  - build_jsonl_index اکنون همه سطوح مسیر نسبی را index می‌کند نه فقط یه سطح parent.
+    این مشکل miss شدن آیتم‌هایی مثل combo_10day/Best_15m/Best_15m_chunk_0_... را برطرف می‌کند.
+  - find_jsonl_for_item با روش‌های متعدد match می‌کند:
+      1. stem دقیق
+      2. basename آخر sig (بعد از آخرین /)
+      3. sig کامل در rel_paths
+      4. هر زیرمسیر sig در rel_paths
+      5. coin/sig و coin/basename
+      6. نسخه بدون پسوند .jsonl
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 MAX_CHUNK_SIZE = 500
 
+# regex برای strip کردن timestamp از انتهای stem
+TS_RE = re.compile(r'_\d{8}T\d{6}Z$')
+
+
+def strip_ts(name: str) -> str:
+    """حذف timestamp از انتهای نام فایل (e.g. chunk_0_20260628T224502Z → chunk_0)"""
+    return TS_RE.sub('', name)
+
 
 def build_jsonl_index(signatures_dir: Path) -> tuple:
     """
     یک‌بار همه فایل‌های .jsonl را index می‌کند.
+
     برمی‌گرداند:
-      - stems: مجموعه stem نام فایل‌ها (بدون پسوند، بدون مسیر)
-      - rel_paths: مجموعه مسیرهای نسبی به‌صورت "parent_name/stem"
+      - stems: مجموعه stem نام فایل‌ها (بدون پسوند، بدون مسیر) + نسخه بدون timestamp
+      - rel_paths: مجموعه همه زیرمسیرهای نسبی ممکن (بدون پسوند)
+                   مثلاً برای combo_monthly/Best_15m/SOLUSDT/monthly_fibonacci_full.jsonl:
+                     "combo_monthly/Best_15m/SOLUSDT/monthly_fibonacci_full"
+                     "Best_15m/SOLUSDT/monthly_fibonacci_full"
+                     "SOLUSDT/monthly_fibonacci_full"
+                     "monthly_fibonacci_full"
+                   + نسخه‌های بدون timestamp برای هر کدام
     """
     stems = set()
     rel_paths = set()
+
     for p in signatures_dir.rglob("*.jsonl"):
-        stems.add(p.stem)
-        rel_paths.add(f"{p.parent.name}/{p.stem}")
+        stem = p.stem
+        stem_no_ts = strip_ts(stem)
+
+        # ① stems دقیق و بدون timestamp
+        stems.add(stem)
+        if stem_no_ts != stem:
+            stems.add(stem_no_ts)
+
+        # ② همه زیرمسیرهای نسبی ممکن
+        try:
+            rel_parts = p.relative_to(signatures_dir).with_suffix("").parts
+        except ValueError:
+            rel_parts = (stem,)
+
+        for i in range(len(rel_parts)):
+            sub = "/".join(rel_parts[i:])
+            rel_paths.add(sub)
+            # نسخه بدون timestamp فقط برای آخرین بخش (stem)
+            sub_no_ts = "/".join(rel_parts[i:-1] + (strip_ts(rel_parts[-1]),)) if rel_parts else sub
+            if sub_no_ts != sub:
+                rel_paths.add(sub_no_ts)
+
     return stems, rel_paths
 
 
 def find_jsonl_for_item(item: dict, stems: set, rel_paths: set) -> bool:
     """
     بررسی می‌کند که فایل .jsonl متناظر آیتم در index وجود دارد.
-    از index از پیش‌ساخته‌شده استفاده می‌کند (O(1) به‌جای rglob تکراری).
+    چندین روش match برای پوشش ساختارهای مختلف sig.
     """
     sig = item.get("signature", "")
     coin = item.get("coin_composition", "")
     if not sig:
         return False
 
-    # ۱. مطابقت دقیق stem
-    if sig in stems:
-        return True
-
-    # ۲. مطابقت مسیر ترکیبی coin/sig
-    if coin and f"{coin}/{sig}" in rel_paths:
-        return True
-
-    # ۳. اگر sig شامل پسوند .jsonl بود، بدون پسوند چک کن
+    # نرمال‌سازی پسوند
     sig_no_ext = sig[:-6] if sig.endswith(".jsonl") else sig
-    if sig_no_ext != sig and sig_no_ext in stems:
-        return True
+
+    # basename آخر sig (بعد از آخرین /)
+    sig_basename = sig_no_ext.split("/")[-1]
+    sig_basename_no_ts = strip_ts(sig_basename)
+
+    candidates_stems = {sig_no_ext, sig_basename, sig_basename_no_ts}
+    candidates_rel = {sig_no_ext, sig_basename, sig_basename_no_ts}
+
+    if coin:
+        candidates_rel.add(f"{coin}/{sig_no_ext}")
+        candidates_rel.add(f"{coin}/{sig_basename}")
+        candidates_rel.add(f"{coin}/{sig_basename_no_ts}")
+
+    # همه زیرمسیرهای sig برای match در rel_paths
+    sig_parts = sig_no_ext.split("/")
+    for i in range(len(sig_parts)):
+        sub = "/".join(sig_parts[i:])
+        candidates_rel.add(sub)
+        sub_no_ts = "/".join(sig_parts[i:-1] + [strip_ts(sig_parts[-1])]) if sig_parts else sub
+        if sub_no_ts != sub:
+            candidates_rel.add(sub_no_ts)
+
+    # بررسی در stems
+    for c in candidates_stems:
+        if c and c in stems:
+            return True
+
+    # بررسی در rel_paths
+    for c in candidates_rel:
+        if c and c in rel_paths:
+            return True
 
     return False
 
@@ -169,11 +238,13 @@ def main():
     if signatures_dir.exists():
         print(f"[DEBUG] در حال ساخت index از {signatures_dir} ...", flush=True)
         stems, rel_paths = build_jsonl_index(signatures_dir)
-        print(f"[DEBUG] index آماده شد: {len(stems)} فایل .jsonl منحصربه‌فرد", flush=True)
+        print(f"[DEBUG] index آماده شد: {len(stems)} stem و {len(rel_paths)} مسیر نسبی منحصربه‌فرد", flush=True)
 
-        # [DIAG] نمونه از stems و آیتم‌های صف برای تشخیص mismatch
+        # [DIAG] نمونه از stems و rel_paths و آیتم‌های صف برای تشخیص mismatch
         sample_stems = sorted(stems)[:5]
+        sample_rels = sorted(rel_paths)[:5]
         print(f"[DIAG] نمونه stems در index: {sample_stems}", flush=True)
+        print(f"[DIAG] نمونه rel_paths در index: {sample_rels}", flush=True)
         sample_items = deduped[:3]
         for it in sample_items:
             print(f"[DIAG] آیتم صف — coin={it.get('coin_composition')} sig={it.get('signature')}", flush=True)
@@ -191,10 +262,11 @@ def main():
         if skipped > 0:
             print(f"[DEBUG] {skipped} آیتم بدون فایل .jsonl حذف شدند "
                   f"(archive هنوز extract نشده)", flush=True)
-            # [DIAG] نمایش چند آیتم miss‌شده برای تشخیص علت
             for it in missed[:5]:
                 print(f"[DIAG] miss — coin={it.get('coin_composition')} "
                       f"sig={it.get('signature')}", flush=True)
+        else:
+            print(f"[DEBUG] همه {before_filter} آیتم فایل .jsonl متناظر دارند ✅", flush=True)
 
         deduped = matched
     else:
