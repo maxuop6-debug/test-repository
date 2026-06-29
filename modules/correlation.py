@@ -119,24 +119,133 @@ def _parse_allowed_pairs(filter_path: str) -> Optional[set]:
     return allowed_pairs
 
 
-def _build_sig_index(signatures_path: Path) -> Dict[str, List[Path]]:
-    """ایندکس سریع از signature-stem -> لیست فایل‌های .jsonl بسازد.
+# --------------------------------------------------------------------------
+# regex برای strip کردن timestamp از انتهای stem
+# فرمت: _20260628T224502Z  (همان فرمت generate_correlation_chunks.py)
+# --------------------------------------------------------------------------
+import re as _re
+_TS_RE = _re.compile(r'_\d{8}T\d{6}Z$')
 
-    key = stem فایل (بدون پسوند .jsonl).
-    این تابع فقط نام فایل‌ها رو اسکن می‌کنه — هیچ فایلی باز نمی‌شه.
+
+def _strip_ts(name: str) -> str:
+    """حذف timestamp از انتهای نام فایل/stem."""
+    return _TS_RE.sub('', name)
+
+
+def _build_sig_index_full(signatures_path: Path) -> tuple:
     """
-    index: Dict[str, List[Path]] = {}
+    ایندکس کامل از همه فایل‌های .jsonl — منطق یکسان با generate_correlation_chunks.py.
+
+    برمی‌گرداند:
+      stems      : set[str]  — stem نام فایل‌ها (+ نسخه بدون timestamp)
+      rel_paths  : set[str]  — همه زیرمسیرهای نسبی ممکن (بدون پسوند + بدون ts)
+      path_map   : dict[str, list[Path]]  — rel_path (کامل) -> لیست فایل‌های واقعی
+    """
+    stems: set = set()
+    rel_paths: set = set()
+    path_map: Dict[str, List[Path]] = {}
+
     for p in signatures_path.rglob("*.jsonl"):
         stem = p.stem
-        index.setdefault(stem, []).append(p)
-    return index
+        stem_no_ts = _strip_ts(stem)
+
+        stems.add(stem)
+        if stem_no_ts != stem:
+            stems.add(stem_no_ts)
+
+        try:
+            rel_parts = p.relative_to(signatures_path).with_suffix("").parts
+        except ValueError:
+            rel_parts = (stem,)
+
+        # ثبت همه زیرمسیرهای ممکن
+        for i in range(len(rel_parts)):
+            sub = "/".join(rel_parts[i:])
+            rel_paths.add(sub)
+            path_map.setdefault(sub, []).append(p)
+
+            sub_no_ts = "/".join(rel_parts[i:-1] + (_strip_ts(rel_parts[-1]),)) if rel_parts else sub
+            if sub_no_ts != sub:
+                rel_paths.add(sub_no_ts)
+                path_map.setdefault(sub_no_ts, []).append(p)
+
+    _log(f"_build_sig_index_full: {len(stems)} stem | {len(rel_paths)} rel_path | {sum(len(v) for v in path_map.values())} فایل در path_map")
+    return stems, rel_paths, path_map
+
+
+def _find_files_for_sig(sig: str, coin: str,
+                         stems: set, rel_paths: set,
+                         path_map: Dict[str, List[Path]],
+                         rel_paths_list: list,
+                         signatures_path: Path) -> List[Path]:
+    """
+    فایل‌های .jsonl متناظر یک signature را پیدا کن.
+    منطق match کاملاً یکسان با find_jsonl_for_item در generate_correlation_chunks.py است.
+
+    مراحل:
+      1. exact match روی stems  (فقط نام فایل)
+      2. exact match روی rel_paths (زیرمسیر نسبی)
+      3. prefix match برای combo chunks
+    """
+    sig_no_ext = sig[:-6] if sig.endswith(".jsonl") else sig
+    sig_parts = sig_no_ext.split("/")
+    sig_basename = sig_parts[-1]
+    sig_basename_no_ts = _strip_ts(sig_basename)
+    sig_no_ts = "/".join(sig_parts[:-1] + [_strip_ts(sig_parts[-1])]) if sig_parts else sig_no_ext
+
+    found: List[Path] = []
+    seen: set = set()
+
+    def _add(paths):
+        for p in paths:
+            if p not in seen:
+                seen.add(p)
+                found.append(p)
+
+    # ① exact match از طریق stems
+    for candidate in {sig_no_ext, sig_basename, sig_basename_no_ts}:
+        if candidate and candidate in stems:
+            # stems فقط stem هستند — فایل واقعی را از path_map بگیر
+            _add(path_map.get(candidate, []))
+
+    # ② exact match از طریق rel_paths (زیرمسیر نسبی)
+    candidates_rel = set()
+    for i in range(len(sig_parts)):
+        sub = "/".join(sig_parts[i:])
+        candidates_rel.add(sub)
+        sub_no_ts = "/".join(sig_parts[i:-1] + [_strip_ts(sig_parts[-1])]) if sig_parts else sub
+        candidates_rel.add(sub_no_ts)
+    if coin:
+        candidates_rel.add(f"{coin}/{sig_no_ext}")
+        candidates_rel.add(f"{coin}/{sig_basename}")
+        candidates_rel.add(f"{coin}/{sig_basename_no_ts}")
+
+    for c in candidates_rel:
+        if c and c in rel_paths:
+            _add(path_map.get(c, []))
+
+    # ③ prefix match برای combo chunks
+    # sig = "combo_10day/Best_15m/Best_15m_chunk_0_20260628T224502Z"
+    # فایل‌های individual داخل این prefix match می‌شوند
+    if not found and len(sig_parts) >= 2 and "chunk" in sig_basename.lower():
+        parent = "/".join(sig_parts[:-1])
+        if len(parent) >= 3:
+            prefix_slash = parent + "/"
+            for rp in rel_paths_list:
+                if rp.startswith(prefix_slash):
+                    _add(path_map.get(rp, []))
+
+    return found
 
 
 def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None) -> pd.DataFrame:
     """فایل‌های .jsonl را از دایرکتوری signatures بخوان و یکپارچه کن.
 
-    بهینه‌سازی کلیدی: اگه signatures_filter داده شده باشه، فقط فایل‌هایی که
-    signature آنها در لیست فیلتر هست خوانده می‌شن — نه همه 36k+ فایل.
+    FIX (2026-06): منطق match با generate_correlation_chunks.py هم‌راستا شد.
+    قبلاً فقط stem فایل‌ها با signature مقایسه می‌شد؛ اما generate_correlation_chunks.py
+    کل مسیر نسبی را در فیلد signature ذخیره می‌کند (مثلاً
+    "combo_10day/Best_15m/Best_15m_chunk_0_20260628T224502Z").
+    حالا سه مرحله match داریم: stems، rel_paths، و prefix check برای combo chunks.
     """
     _log(f"load_signatures: شروع از {signatures_dir}")
     signatures_path = Path(signatures_dir)
@@ -148,38 +257,73 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
         allowed_pairs = _parse_allowed_pairs(signatures_filter)
         if allowed_pairs is None:
             logger.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
-            # fallback به حالت کامل
+            # fallback به حالت کامل (ادامه بدون return)
         else:
             _log(f"load_signatures: filter فعال — {len(allowed_pairs)} ترکیب مجاز، ایندکس‌سازی فایل‌ها...")
-            sig_index = _build_sig_index(signatures_path)
-            _log(f"load_signatures: ایندکس ساخته شد ({len(sig_index)} stem یکتا)")
 
-            # فقط فایل‌هایی که signature آنها در allowed_pairs هست رو بخون
-            # signature در allowed_pairs معمولاً stem فایل .jsonl هست
-            allowed_stems = {sig for (_, sig) in allowed_pairs}
-            # همچنین stem بدون timestamp (مثل foo_bar بجای foo_bar_1234567890)
+            # ساخت ایندکس کامل (یک‌بار — همان منطق generate_correlation_chunks.py)
+            stems, rel_paths, path_map = _build_sig_index_full(signatures_path)
+            rel_paths_list = list(rel_paths)
+
+            _log(f"load_signatures: ایندکس ساخته شد ({len(stems)} stem | {len(rel_paths)} rel_path یکتا)")
+
+            # دیاگنوستیک: نمونه‌ای از stems و sigs برای تشخیص mismatch
+            sample_stems = sorted(stems)[:5]
+            sample_sigs = sorted({sig for (_, sig) in allowed_pairs})[:5]
+            _log(f"load_signatures: [DIAG] نمونه stems موجود: {sample_stems}")
+            _log(f"load_signatures: [DIAG] نمونه signatures در filter: {sample_sigs}")
+
+            # پیدا کردن فایل‌های متناظر با هر (coin, sig) مجاز
             files_to_read: List[Path] = []
-            for stem, paths in sig_index.items():
-                if stem in allowed_stems:
-                    files_to_read.extend(paths)
+            seen_paths: set = set()
+            matched_sigs = 0
+            missed_sigs = []
 
-            _log(f"load_signatures: {len(files_to_read)} فایل مرتبط از {len(sig_index)} کل (بجای همه فایل‌ها)")
+            for (coin, sig) in allowed_pairs:
+                found = _find_files_for_sig(
+                    sig, coin, stems, rel_paths, path_map, rel_paths_list, signatures_path
+                )
+                if found:
+                    matched_sigs += 1
+                    for p in found:
+                        if p not in seen_paths:
+                            seen_paths.add(p)
+                            files_to_read.append(p)
+                else:
+                    missed_sigs.append((coin, sig))
 
+            _log(f"load_signatures: {len(files_to_read)} فایل مرتبط از {len(rel_paths)} rel_path کل")
+            _log(f"load_signatures: {matched_sigs} sig مچ شد | {len(missed_sigs)} sig بدون فایل")
+
+            if missed_sigs:
+                for (c, s) in missed_sigs[:5]:
+                    _log(f"load_signatures: [DIAG] بدون فایل — coin={c} sig={s}")
+                if len(missed_sigs) > 5:
+                    _log(f"load_signatures: [DIAG] ... و {len(missed_sigs) - 5} مورد دیگر")
+
+            if not files_to_read:
+                _log("load_signatures: هیچ رکوردی از فایل‌های فیلترشده پیدا نشد")
+                return pd.DataFrame()
+
+            # خواندن فایل‌های پیداشده
             records: List[Dict[str, Any]] = []
             for file_path in files_to_read:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    for line_no, line in enumerate(f, start=1):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            rec = json.loads(line)
-                            rec["_source_file"] = file_path.name
-                            records.append(rec)
-                        except json.JSONDecodeError as e:
-                            logger.warning(
-                                "خطای JSON در فایل %s خط %d: %s", file_path.name, line_no, e
-                            )
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        for line_no, line in enumerate(f, start=1):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                rec = json.loads(line)
+                                rec["_source_file"] = file_path.name
+                                records.append(rec)
+                            except json.JSONDecodeError as e:
+                                logger.warning(
+                                    "خطای JSON در فایل %s خط %d: %s", file_path.name, line_no, e
+                                )
+                except OSError as e:
+                    logger.warning("خطا در باز کردن فایل %s: %s", file_path, e)
 
             if not records:
                 _log("load_signatures: هیچ رکوردی از فایل‌های فیلترشده پیدا نشد")
@@ -192,7 +336,7 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
             if "signature" not in df.columns:
                 df["signature"] = df.apply(build_signature, axis=1)
 
-            # اعمال فیلتر نهایی بر اساس (coin_composition, signature)
+            # فیلتر نهایی بر اساس (coin_composition, signature) — فقط اگر هر دو ستون موجود باشند
             if {"coin_composition", "signature"}.issubset(df.columns):
                 before = len(df)
                 df = df[
@@ -205,6 +349,7 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
                     "اعمال signatures-filter: %d -> %d رکورد (%d ترکیب مجاز).",
                     before, len(df), len(allowed_pairs),
                 )
+
             _log(f"load_signatures: پایان - {len(df)} رکورد نهایی")
             return df
 
@@ -216,19 +361,22 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
         logger.warning("هیچ فایل .jsonl در %s پیدا نشد.", signatures_dir)
 
     for file_path in jsonl_files:
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    rec["_source_file"] = file_path.name
-                    records.append(rec)
-                except json.JSONDecodeError as e:
-                    logger.warning(
-                        "خطای JSON در فایل %s خط %d: %s", file_path.name, line_no, e
-                    )
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line_no, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        rec["_source_file"] = file_path.name
+                        records.append(rec)
+                    except json.JSONDecodeError as e:
+                        logger.warning(
+                            "خطای JSON در فایل %s خط %d: %s", file_path.name, line_no, e
+                        )
+        except OSError as e:
+            logger.warning("خطا در باز کردن فایل %s: %s", file_path, e)
 
     if not records:
         return pd.DataFrame()
