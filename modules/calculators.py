@@ -76,7 +76,7 @@ def apply_special_rounding(percent, move_percents):
             return result - 0.1
         else:
             result = round_to_nearest(abs(percent) + 0.05, move_percents) - 0.05
-            return -(result + 0.1)
+            return -(result - 0.1)  # باگ ۱: قبلاً +0.1 بود → کارمزد کمتر روی ضررها
     except Exception:
         return percent
 
@@ -178,7 +178,9 @@ def max_consecutive_count(trades):
 def consecutive_loss_value(count, stop_loss):
     """مجموع ضررهای متوالی بر اساس درصد stop_loss."""
     count = int(count or 0)
-    return count * float(stop_loss)  # stop_loss باید منفی باشد مثلاً -2.0
+    sl = float(stop_loss)
+    # باگ ۳: اگر stop_loss مثبت ذخیره شده باشد، نتیجه باید منفی باشد
+    return count * (-abs(sl))
 
 def max_drawdown(trades):
     peak = cum = 0.0
@@ -254,7 +256,8 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
 
     mp = move_percents_override if move_percents_override is not None else (meta.get("move_percents") or [])
     sl = stop_loss_override if stop_loss_override is not None else meta.get("stop_loss_initial", -2.0)
-    max_g = meta.get("max_move_percent") or (max(mp) if mp else None)
+    # باگ ۸: max_g باید از mp (که ممکن است override شده باشد) محاسبه شود، نه مستقیم از metadata
+    max_g = max(mp) if mp else meta.get("max_move_percent")
 
     if not trades:
         log.warning("%s: هیچ معامله‌ای وجود ندارد.", enc_path)
@@ -297,6 +300,8 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
         merged = []
         for s in combo:
             merged.extend(groups[s])
+        # باگ ۹: مرتب‌سازی بر اساس زمان معامله برای صحت max_consecutive و max_drawdown
+        merged.sort(key=lambda t: t.get("closeTime") or t.get("openTime") or t.get("time") or 0)
         wins = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) > 0)
         losses = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) < 0)
         wr = (wins / len(merged) * 100) if merged else 0.0
@@ -515,20 +520,7 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
 
         # symbols از trades یا کش — پویا برای هر تعداد کوین
         if trades_by_sym:
-            raw_symbols = set(k for k in trades_by_sym.keys() if "_" not in k or k in trades_by_sym)
-            # فقط کلیدهای تک‌نماد (بدون _ یا همان نام کوین‌ها مثل BTCUSDT)
-            # trades_by_sym حاوی هم تک‌نمادها هم ترکیب‌ها است؛ تک‌نمادها را جدا می‌کنیم
-            single_syms = set()
-            for k in trades_by_sym.keys():
-                parts = k.split("_")
-                # اگر همه اجزاء به USDT ختم می‌شوند، ترکیب است؛ وگرنه تک‌نماد
-                # راه ساده: اگر k دقیقاً یک نماد است (در groups اصلی موجود بوده)
-                single_syms.add(k)
-            # بازسازی: process_file کلیدهای تک‌نماد و ترکیب را هر دو ذخیره می‌کند
-            # تک‌نمادها: کوین‌هایی که combo_label آن‌ها فقط یک عنصر دارد
-            # ترکیب‌ها: بقیه
-            # برای تشخیص: اگر کلید در trades_by_sym موجود باشد و ترکیب آن در trades_by_sym هم باشد
-            # ساده‌ترین رویکرد: همه کلیدها را به عنوان "combo" بپذیریم
+            # process_file هم تک‌نمادها هم ترکیب‌ها را مستقیم ذخیره می‌کند
             combos_in_file = list(trades_by_sym.keys())
         else:
             # از کش: پیدا کردن همه کلیدهایی که با folder_ شروع می‌شوند
@@ -604,7 +596,7 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                     inv_pl = profit_loss_ratio(inv_trades)
                     inv_wins = sum(1 for t in inv_trades if t["profitPercent"] > 0)
                     inv_losses = sum(1 for t in inv_trades if t["profitPercent"] < 0)
-                    inv_wr = (inv_wins / len(inv_trades) * 100) if inv_trades else 100.0 - wr
+                    inv_wr = (inv_wins / len(inv_trades) * 100) if inv_trades else 0.0
                 else:
                     inv_mc_count = 0
                     inv_mc_loss = None
@@ -642,10 +634,17 @@ def _score(returns_ge_1, returns_gt_0, avg_max_loss, total_files):
         return 0, "بدون داده"
     s = (returns_ge_1 / total_files) * 40 + (returns_gt_0 / total_files) * 30
     la = abs(avg_max_loss)
-    if la <= 5:   s += 30
-    elif la <= 10: s += 30 * (10 - la) / 5
-    elif la <= 15: s += 15 * (15 - la) / 5
-    else:          s += max(0, 5 * (20 - la) / 5)
+    # باگ ۱۴: امتیازدهی پیوسته برای جلوگیری از پرش ناگهانی در مرزها
+    if la <= 5:
+        s += 30
+    elif la <= 10:
+        s += 30 * (10 - la) / 5
+    elif la <= 20:
+        # ادغام بازه ۱۰-۱۵ و ۱۵-۲۰ به یک تابع خطی پیوسته
+        # در la=10: امتیاز=30، در la=20: امتیاز=0
+        s += 30 * (20 - la) / 10
+    else:
+        s += 0
     s = round(s, 1)
     rating = ("عالی ★★★★★" if s >= 80 else "خوب ★★★★" if s >= 60
               else "متوسط ★★★" if s >= 40 else "ضعیف ★★" if s >= 20 else "بسیار ضعیف ★")
@@ -797,6 +796,7 @@ def _monthly_records(recs, group):
             continue
         total_ret = sum(f["special_rounded_return"] for f in sel) if group == "1" else sum(f["real_return"] for f in sel)
         max_l = min((f["max_consecutive_loss"] for f in sel if f.get("max_consecutive_loss") is not None), default=0)
+        # باگ ۴ (حل‌شده با باگ ۳): چون max_consecutive_loss همیشه منفی است، min بدترین را انتخاب می‌کند
         out.append({"year_month": ym, "total_return": total_ret, "max_loss": max_l,
                     "files": [f["file_name"] for f in sel], "file_objects": sel})
     out.sort(key=lambda x: x["year_month"])
@@ -807,19 +807,24 @@ def _monthly_report(all_results, out_dir, top_n=3):
     strat_files = defaultdict(list)
     strat_scores = {}
     for r in all_results:
-        strat_files[(r["folder_name"], r["group"])].append(r)
+        strat_files[(r["period_name"], r["group"])].append(r)
     for k, files in strat_files.items():
-        n = len(files)
-        ge1 = sum(1 for f in files if f["special_rounded_return"] >= 1)
-        gt0 = sum(1 for f in files if f["special_rounded_return"] > 0)
-        ml = [f["max_consecutive_loss"] for f in files if f.get("max_consecutive_loss") is not None]
+        # باگ ۱۲: فقط رکوردهای غیر معکوس در امتیازدهی شرکت می‌کنند
+        non_inv = [f for f in files if not f.get("is_inverse")]
+        n = len(non_inv)
+        if not n:
+            continue
+        ge1 = sum(1 for f in non_inv if f["special_rounded_return"] >= 1)
+        gt0 = sum(1 for f in non_inv if f["special_rounded_return"] > 0)
+        ml = [f["max_consecutive_loss"] for f in non_inv if f.get("max_consecutive_loss") is not None]
         avg_l = statistics.mean(ml) if ml else 0
         sc, _ = _score(ge1, gt0, avg_l, n)
         strat_scores[k] = sc
 
     top = sorted(strat_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
-    for (folder, group), _ in top:
-        recs = [f for f in strat_files[(folder, group)] if not f.get("is_inverse")]
+    for (period, group), _ in top:
+        # باگ ۱۱: فیلتر بر اساس period_name (استراتژی پایه)
+        recs = [f for f in strat_files[(period, group)] if not f.get("is_inverse")]
         monthly = _monthly_records(recs, group)
         if not monthly:
             continue
@@ -830,16 +835,16 @@ def _monthly_report(all_results, out_dir, top_n=3):
             sc, rt = _score(ge1, gt0, rec["max_loss"], n)
             rec["score"] = sc; rec["rating"] = rt
 
-        sp = os.path.join(out_dir, group, folder)
+        sp = os.path.join(out_dir, group, period)
         os.makedirs(sp, exist_ok=True)
         path = os.path.join(sp, "گزارش_ماهانه_برترین.csv")
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow([f"📊 گزارش ماهانه: {folder} (گروه {group})"])
+            w.writerow([f"📊 گزارش ماهانه: {period} (گروه {group})"])
             w.writerow(["تاریخ تولید", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
             w.writerow([])
             w.writerow(["رتبه", "ماه", "بازده(%)", "وین‌ریت(%)", "حداکثر ضرر(%)", "شارپ", "امتیاز", "وضعیت", "فایل‌ها"])
-            for i, rec in enumerate(sorted(monthly, key=lambda x: x["score"]), 1):
+            for i, rec in enumerate(sorted(monthly, key=lambda x: x["score"], reverse=True), 1):
                 fobjs = rec["file_objects"]
                 tt = sum(f["total_trades"] for f in fobjs)
                 wt = sum(f["win_trades"] for f in fobjs)
@@ -849,20 +854,21 @@ def _monthly_report(all_results, out_dir, top_n=3):
                 w.writerow([i, rec["year_month"], f"{rec['total_return']:.4f}", f"{wr:.2f}",
                             f"{rec['max_loss']:.2f}", f"{avg_sh:.3f}",
                             f"{rec['score']:.1f}/100", rec["rating"], "; ".join(rec["files"])])
-        log.info("گزارش ماهانه %s → %s", folder, path)
+        log.info("گزارش ماهانه %s → %s", period, path)
 
 
 def _complementary(all_results, news_events, out_dir):
     strat_map = defaultdict(list)
     for r in all_results:
         if not r.get("is_inverse"):
-            strat_map[(r["folder_name"], r["group"])].append(r)
-    for (folder, group), recs in strat_map.items():
+            strat_map[(r["period_name"], r["group"])].append(r)
+    for (period, group), recs in strat_map.items():
         monthly = _monthly_records(recs, group)
         if not monthly:
             continue
         events_data = []
         for rec in monthly:
+            # باگ ۱۰: file_objects از _monthly_records قبلاً مرتب‌شده (ترتیب day=1,11,21)
             start = _extract_start(rec["file_objects"][0].get("period_name", ""))
             end = _extract_end(rec["file_objects"][-1].get("period_name", ""))
             if not start or not end:
@@ -876,11 +882,11 @@ def _complementary(all_results, news_events, out_dir):
                     })
         if not events_data:
             continue
-        path = os.path.join(out_dir, group, folder, "تحلیل_تکمیلی_استراتژی.txt")
+        path = os.path.join(out_dir, group, period, "تحلیل_تکمیلی_استراتژی.txt")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write("=" * 70 + "\n")
-            f.write(f"📈 تحلیل تکمیلی: {folder} (گروه {group})\n")
+            f.write(f"📈 تحلیل تکمیلی: {period} (گروه {group})\n")
             f.write(f"تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 70 + "\n\n")
             for ind in sorted(set(e["indicator"] for e in events_data)):
@@ -890,7 +896,7 @@ def _complementary(all_results, news_events, out_dir):
                     diffs = [e["diff"] for e in evs]
                     avg = f"{statistics.mean(diffs):.4f}" if diffs else "---"
                     f.write(f"\n📌 {ind} | ماه‌های {label}: تعداد={len(evs)}  avg_diff={avg}\n")
-        log.info("تحلیل تکمیلی %s → %s", folder, path)
+        log.info("تحلیل تکمیلی %s → %s", period, path)
 
 
 # ══════════════════════════════════════════════════════════════
