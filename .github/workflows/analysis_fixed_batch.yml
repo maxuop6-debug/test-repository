@@ -646,13 +646,21 @@ jobs:
             fi
 
             if [[ "$MODULE" == "combo_10day" || "$MODULE" == "combo_monthly" ]]; then
-              # این ماژول‌ها CSV نمی‌دهند — معیار موفقیت وجود و پر بودن JSONL است
-              if [ -f "$SIG_OUT" ] && [ -s "$SIG_OUT" ]; then
+              # این ماژول‌ها CSV نمی‌دهند — معیار موفقیت «اجرای بدون خطا + ساخته‌شدن فایل JSONL» است،
+              # نه «غیرخالی بودن» آن. EXIT_CODE=0 (چک‌شده در بالا) یعنی اسکریپت پایتون به‌درستی
+              # تا انتها اجرا شده و _write_jsonl همیشه فایل را می‌سازد — حتی وقتی به‌خاطر
+              # فیلتر --min-sample-count هیچ دوره‌ای واجد شرایط نبوده (نتیجه‌ی قطعی و معتبر، نه خرابی).
+              # رفتار قبلی (چک -s) این موارد را همیشگی fail می‌کرد و باعث اجرای دوباره و دوباره‌ی
+              # همان ترکیبات بی‌نتیجه در هر بچ بعدی می‌شد، بدون این‌که هرگز از all_combinations حذف شوند.
+              if [ -f "$SIG_OUT" ]; then
+                if [ ! -s "$SIG_OUT" ]; then
+                  echo "   ℹ️ JSONL خروجی خالی است (دوره‌ای واجد شرط min-sample-count نبود) — نتیجه‌ی معتبر، علامت‌گذاری به‌عنوان انجام‌شده."
+                fi
                 jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
                   '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
                   /tmp/done_items.json > /tmp/done_items.json.tmp && mv /tmp/done_items.json.tmp /tmp/done_items.json
               else
-                echo "   ⚠️ فایل JSONL خروجی $SIG_OUT یافت نشد یا خالی است."
+                echo "   ⚠️ فایل JSONL خروجی $SIG_OUT یافت نشد (اسکریپت آن را نساخت با وجود EXIT_CODE=0)."
                 jq --arg m "$MODULE" --arg s "$STRAT" --arg c "$COIN" --arg iv "$INTERVAL" --arg mo "$MODEL" \
                   '. + [{"module":$m,"strat":$s,"coin":$c,"interval":$iv,"model":$mo}]' \
                   /tmp/failed_items.json > /tmp/failed_items.json.tmp && mv /tmp/failed_items.json.tmp /tmp/failed_items.json
