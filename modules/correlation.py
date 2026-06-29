@@ -31,6 +31,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("correlation")
 
+# Force immediate flush for GitHub Actions
+import functools as _functools
+_orig_print = print
+print = _functools.partial(_orig_print, flush=True)
+
+def _log(msg: str) -> None:
+    """Checkpoint log that always flushes immediately (visible in GitHub Actions)."""
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    _orig_print(f"[{ts}] [CHECKPOINT] {msg}", flush=True)
+    logger.info(msg)
+
 # --------------------------------------------------------------------------
 # ثابت‌ها
 # --------------------------------------------------------------------------
@@ -86,12 +98,14 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
     coin_composition و signature باشد. برای سازگاری با نسخه‌های قبلی، آیتم‌هایی
     با کلید path (یا رشته‌های خام) نیز پشتیبانی می‌شوند.
     """
+    _log(f"load_signatures: شروع از {signatures_dir}")
     signatures_path = Path(signatures_dir)
     if not signatures_path.exists():
         raise FileNotFoundError(f"مسیر signatures پیدا نشد: {signatures_dir}")
 
     records: List[Dict[str, Any]] = []
     jsonl_files = sorted(signatures_path.rglob("*.jsonl"))
+    _log(f"load_signatures: {len(jsonl_files)} فایل .jsonl پیدا شد")
     if not jsonl_files:
         logger.warning("هیچ فایل .jsonl در %s پیدا نشد.", signatures_dir)
 
@@ -114,6 +128,7 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
         return pd.DataFrame()
 
     df = pd.DataFrame(records)
+    _log(f"load_signatures: {len(df)} رکورد از {len(jsonl_files)} فایل بارگذاری شد")
     logger.info("تعداد %d رکورد از %d فایل signatures بارگذاری شد.", len(df), len(jsonl_files))
 
     # اگر ستون signature وجود نداشت، آن را از فیلدهای موجود بساز
@@ -166,9 +181,12 @@ def load_signatures(signatures_dir: str, signatures_filter: Optional[str] = None
 
 def load_golden_scores(golden_scores_path: Optional[str]) -> Optional[pd.DataFrame]:
     """فایل golden_scores.parquet را بارگذاری کن (در صورت وجود)."""
+    _log(f"load_golden_scores: شروع - مسیر={golden_scores_path}")
     if not golden_scores_path or not os.path.exists(golden_scores_path):
+        _log("load_golden_scores: فایل وجود ندارد، رد شد")
         return None
     df = pd.read_parquet(golden_scores_path)
+    _log(f"load_golden_scores: {len(df)} رکورد بارگذاری شد")
     logger.info("golden_scores.parquet با %d رکورد بارگذاری شد.", len(df))
     return df
 
@@ -249,12 +267,14 @@ def load_news(
     ۱. news_pickle_path — فایل pickle (در صورت وجود، اولویت اول)
     ۲. news_dir  — فایل‌های CSV پوشه اخبار با پشتیبانی از ساختار واقعی
     """
+    _log(f"load_news: شروع - pickle={news_pickle_path}, dir={news_dir}")
     # --- اولویت اول: pickle ---
     if news_pickle_path and os.path.exists(news_pickle_path):
         with open(news_pickle_path, "rb") as f:
             news_obj = pickle.load(f)
         df = pd.DataFrame(news_obj) if not isinstance(news_obj, pd.DataFrame) else news_obj
         df["date"] = pd.to_datetime(df["date"])
+        _log(f"load_news: news.pickle با {len(df)} رکورد بارگذاری شد")
         logger.info("news.pickle با %d رکورد بارگذاری شد.", len(df))
         return df
 
@@ -391,7 +411,9 @@ def apply_golden_prefilter(
     df: pd.DataFrame, golden_df: Optional[pd.DataFrame], threshold: float = GOLDEN_SCORE_THRESHOLD
 ) -> pd.DataFrame:
     """فقط استراتژی‌های با امتیاز Golden >= threshold را نگه دار."""
+    _log(f"apply_golden_prefilter: شروع - {len(df)} رکورد ورودی، threshold={threshold}")
     if golden_df is None or golden_df.empty:
+        _log("apply_golden_prefilter: golden_df خالی است، پیش‌فیلتر رد شد")
         return df
 
     score_col = None
@@ -499,6 +521,7 @@ def enrich_with_news_features(df: pd.DataFrame, news_df: Optional[pd.DataFrame])
                     df["distance_days"], errors="coerce"
                 ).fillna(parsed.apply(lambda d: d.get("distance_days")))
 
+    _log(f"enrich_with_news_features: شروع - {len(df)} رکورد")
     needed_cols = ["diff_avg", "diff_std", "event_count", "indicator_diversity"]
     missing_any = any(c not in df.columns or df[c].isna().any() for c in needed_cols)
 
@@ -874,6 +897,7 @@ def save_summary(
 def compute_global_correlations(
     df: pd.DataFrame, min_sample_count: int
 ) -> List[Dict[str, Any]]:
+    _log(f"compute_global_correlations: شروع - {len(df)} رکورد")
     results = []
     if "coin_composition" not in df.columns:
         logger.warning("ستون coin_composition وجود ندارد؛ سطح ۱ رد شد.")
@@ -903,6 +927,7 @@ def compute_global_correlations(
                 }
             )
 
+    _log(f"compute_global_correlations: پایان - {len(results)} همبستگی معنی‌دار")
     logger.info("سطح ۱ (global): %d همبستگی معنی‌دار پیدا شد.", len(results))
     return results
 
@@ -964,6 +989,7 @@ def compute_conditional_correlations(
 # ==========================================================================
 
 def compute_lag_correlations(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    _log("compute_lag_correlations: شروع")
     results = []
     required = {"strategy_folder", "coin_composition", "period_start", "total_return"}
     if not required.issubset(df.columns):
@@ -1030,6 +1056,7 @@ def compute_lag_correlations(df: pd.DataFrame) -> List[Dict[str, Any]]:
                     }
                 )
 
+    _log(f"compute_lag_correlations: پایان - {len(results)} همبستگی معنی‌دار")
     logger.info("سطح ۴ (lag): %d همبستگی معنی‌دار پیدا شد.", len(results))
     return results
 
@@ -1141,21 +1168,28 @@ def run_correlation_pipeline(
     status_file = status_file or default_status_path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
+    _log("run_correlation_pipeline: === شروع پایپ‌لاین ===")
     # ---- گام ۱: بارگذاری داده‌ها ----
+    _log("run_correlation_pipeline: گام ۱ - بارگذاری signatures")
     df = load_signatures(signatures_dir, signatures_filter)
     if df.empty:
         raise ValueError("هیچ داده‌ای از signatures بارگذاری نشد؛ پایپ‌لاین متوقف شد.")
 
+    _log("run_correlation_pipeline: بارگذاری golden_scores")
     golden_df = load_golden_scores(golden_scores_path)
+    _log("run_correlation_pipeline: بارگذاری news")
     news_df = load_news(news_pickle_path=news_pickle_path, news_dir=news_dir)
+    _log("run_correlation_pipeline: بارگذاری strategies_metadata و version_schema")
     _strategies_meta = load_strategies_metadata(strategies_json_path)
     version_schema = load_version_schema(version_schema_path)
 
+    _log("run_correlation_pipeline: اعمال golden prefilter")
     df = apply_golden_prefilter(df, golden_df)
     if df.empty:
         raise ValueError("پس از پیش‌فیلتر Golden، هیچ رکوردی باقی نماند.")
 
     # ---- گام ۲: استخراج/تکمیل ویژگی‌های خبری ----
+    _log("run_correlation_pipeline: گام ۲ - enrich_with_news_features")
     df = enrich_with_news_features(df, news_df)
 
     # ---- گام ۰: بارگذاری وضعیت قبلی (در صورت --resume) ----
@@ -1169,6 +1203,7 @@ def run_correlation_pipeline(
     all_results: List[Dict[str, Any]] = load_partial_results(output_dir) if prev_status else []
 
     # ---- گام ۳: لیست امضاهای منحصربه‌فرد و تقسیم به چانک ----
+    _log("run_correlation_pipeline: گام ۳ - استخراج امضاها و تقسیم به چانک")
     all_signatures = get_unique_signatures(df)
     total_signatures = len(all_signatures)
     remaining_signatures = [s for s in all_signatures if s not in processed_set]
@@ -1182,6 +1217,7 @@ def run_correlation_pipeline(
     )
 
     # ---- سطح ۱ (Global): فقط یک بار در کل اجرا ----
+    _log("run_correlation_pipeline: سطح ۱ - Global correlations")
     already_has_global = any(r.get("level") == "global" for r in all_results)
     if not already_has_global:
         if check_interrupt_flag(output_dir, interrupt_flag_path):
@@ -1194,6 +1230,7 @@ def run_correlation_pipeline(
         save_partial_results(output_dir, all_results)
 
     # ---- سطح ۴ (Lag): فقط یک بار در کل اجرا ----
+    _log("run_correlation_pipeline: سطح ۴ - Lag correlations")
     already_has_lag = any(r.get("level") == "lag" for r in all_results)
     if not already_has_lag:
         if check_interrupt_flag(output_dir, interrupt_flag_path):
@@ -1206,6 +1243,7 @@ def run_correlation_pipeline(
         save_partial_results(output_dir, all_results)
 
     # ---- سطح ۲ (Conditional): پردازش چانک به چانک ----
+    _log(f"run_correlation_pipeline: سطح ۲ - Conditional - {len(chunks)} چانک برای پردازش")
     interrupted = False
     current_chunk_index = start_chunk_index - 1
     for offset, chunk in enumerate(chunks):
@@ -1235,9 +1273,11 @@ def run_correlation_pipeline(
         return ""
 
     # ---- پس از اتمام همه چانک‌ها ----
+    _log("run_correlation_pipeline: ساخت DataFrame خروجی نهایی")
     output_df = build_output_dataframe(all_results, version_schema)
     output_path = save_output(output_df, output_dir)
 
+    _log("run_correlation_pipeline: ذخیره وضعیت و خلاصه")
     save_status(status_file, processed_signatures, current_chunk_index, total_chunks, "completed", chunk_size)
     save_summary(
         output_dir=output_dir,
@@ -1249,6 +1289,7 @@ def run_correlation_pipeline(
         version_schema=version_schema,
     )
 
+    _log("run_correlation_pipeline: === پایپ‌لاین با موفقیت تمام شد ===")
     print_summary_report(output_df)
     return output_path
 
@@ -1311,6 +1352,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+    _log("main: شروع اجرای correlation.py")
+    _log(f"main: آرگومان‌ها = {vars(args)}")
     try:
         run_correlation_pipeline(
             signatures_dir=args.signatures_dir,
@@ -1327,8 +1370,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             interrupt_flag_path=args.interrupt_flag,
             signatures_filter=args.signatures_filter,
         )
+        _log("main: اجرا با موفقیت پایان یافت - کد خروج 0")
         return 0
     except Exception as e:
+        _log(f"main: خطای غیرمنتظره - {type(e).__name__}: {e}")
         logger.error("اجرای پایپ‌لاین با خطا متوقف شد: %s", e, exc_info=True)
         return 1
 
