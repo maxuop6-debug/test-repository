@@ -26,14 +26,13 @@ generate_correlation_chunks.py
 
 FIX (2026-06):
   - build_jsonl_index اکنون همه سطوح مسیر نسبی را index می‌کند نه فقط یه سطح parent.
-    این مشکل miss شدن آیتم‌هایی مثل combo_10day/Best_15m/Best_15m_chunk_0_... را برطرف می‌کند.
-  - find_jsonl_for_item با روش‌های متعدد match می‌کند:
-      1. stem دقیق
-      2. basename آخر sig (بعد از آخرین /)
-      3. sig کامل در rel_paths
-      4. هر زیرمسیر sig در rel_paths
-      5. coin/sig و coin/basename
-      6. نسخه بدون پسوند .jsonl
+  - normalize_item فرمت B: کل signature_path در signature نگه داشته می‌شه (نه فقط base_name)
+    تا combo paths مثل combo_10day/Best_15m/Best_15m_chunk_0_... قابل match باشند.
+  - find_jsonl_for_item دو مرحله match دارد:
+      1. exact match (فایل): بررسی stems و rel_paths برای non-combo
+      2. prefix match (دایرکتوری): برای combo chunks که sig یه chunk-name است
+         و فایل‌های individual داخلش در index هستن — اگر هر rel_path با
+         sig (بدون timestamp) شروع بشه، chunk موجود تلقی می‌شه.
 """
 
 import argparse
@@ -97,10 +96,14 @@ def build_jsonl_index(signatures_dir: Path) -> tuple:
     return stems, rel_paths
 
 
-def find_jsonl_for_item(item: dict, stems: set, rel_paths: set) -> bool:
+def find_jsonl_for_item(item: dict, stems: set, rel_paths: set,
+                        rel_paths_list: list = None) -> bool:
     """
     بررسی می‌کند که فایل .jsonl متناظر آیتم در index وجود دارد.
-    چندین روش match برای پوشش ساختارهای مختلف sig.
+    چندین روش match برای پوشش ساختارهای مختلف sig:
+      - match دقیق فایل (non-combo)
+      - match prefix دایرکتوری (combo): sig یه chunk-name هست که
+        فایل‌های individual داخلش در index هستن
     """
     sig = item.get("signature", "")
     coin = item.get("coin_composition", "")
@@ -113,9 +116,11 @@ def find_jsonl_for_item(item: dict, stems: set, rel_paths: set) -> bool:
     # basename آخر sig (بعد از آخرین /)
     sig_basename = sig_no_ext.split("/")[-1]
     sig_basename_no_ts = strip_ts(sig_basename)
+    sig_parts = sig_no_ext.split("/")
+    sig_no_ts = "/".join(sig_parts[:-1] + [strip_ts(sig_parts[-1])]) if sig_parts else sig_no_ext
 
     candidates_stems = {sig_no_ext, sig_basename, sig_basename_no_ts}
-    candidates_rel = {sig_no_ext, sig_basename, sig_basename_no_ts}
+    candidates_rel = {sig_no_ext, sig_no_ts, sig_basename, sig_basename_no_ts}
 
     if coin:
         candidates_rel.add(f"{coin}/{sig_no_ext}")
@@ -123,7 +128,6 @@ def find_jsonl_for_item(item: dict, stems: set, rel_paths: set) -> bool:
         candidates_rel.add(f"{coin}/{sig_basename_no_ts}")
 
     # همه زیرمسیرهای sig برای match در rel_paths
-    sig_parts = sig_no_ext.split("/")
     for i in range(len(sig_parts)):
         sub = "/".join(sig_parts[i:])
         candidates_rel.add(sub)
@@ -131,17 +135,34 @@ def find_jsonl_for_item(item: dict, stems: set, rel_paths: set) -> bool:
         if sub_no_ts != sub:
             candidates_rel.add(sub_no_ts)
 
-    # بررسی در stems
+    # بررسی در stems (match دقیق فایل)
     for c in candidates_stems:
         if c and c in stems:
             return True
 
-    # بررسی در rel_paths
+    # بررسی در rel_paths (match دقیق فایل)
     for c in candidates_rel:
         if c and c in rel_paths:
             return True
 
-    return False
+    # ── PREFIX CHECK برای combo chunks ──────────────────────────────
+    # sig یه chunk-name هست مثل: combo_10day/Best_15m/Best_15m_chunk_0_20260628T224502Z
+    # فایل‌های individual در index: combo_10day/Best_15m/BTCUSDT/monthly_fibonacci_full
+    # prefix مشترک = parent dir sig = combo_10day/Best_15m
+    #
+    # ⚠️ این روش فقط وقتی sig حداقل ۲ سطح داشته باشه و basename شامل "chunk" باشه
+    #    فعال می‌شه تا false positive جلوگیری بشه.
+    if rel_paths_list is None:
+        rel_paths_list = list(rel_paths)
+
+    if len(sig_parts) >= 2 and "chunk" in sig_basename.lower():
+        # parent = همه parts به جز آخری (chunk-name)
+        parent = "/".join(sig_parts[:-1])
+        if len(parent) >= 3:
+            prefix_slash = parent + "/"
+            for rp in rel_paths_list:
+                if rp.startswith(prefix_slash):
+                    return True
 
 
 def normalize_item(raw_item: dict):
@@ -169,9 +190,12 @@ def normalize_item(raw_item: dict):
         base_name = parts[-1] if parts else sig_path
         # coin_composition = اولین قسمت base_name قبل از اولین "_"
         coin = base_name.split("_")[0] if "_" in base_name else base_name
+        # FIX: کل مسیر رو در signature نگه می‌داریم تا find_jsonl_for_item
+        # بتونه combo paths مثل combo_10day/Best_15m/Best_15m_chunk_0_... رو پیدا کنه.
+        # base_name فقط برای coin_composition استفاده می‌شه.
         return {
             **raw_item,
-            "signature": base_name,
+            "signature": sig_path,
             "coin_composition": coin,
         }
 
@@ -252,8 +276,9 @@ def main():
         before_filter = len(deduped)
         matched = []
         missed = []
+        rel_paths_list = list(rel_paths)  # یک‌بار list می‌کنیم برای prefix check کارآمد
         for item in deduped:
-            if find_jsonl_for_item(item, stems, rel_paths):
+            if find_jsonl_for_item(item, stems, rel_paths, rel_paths_list):
                 matched.append(item)
             else:
                 missed.append(item)
