@@ -751,7 +751,7 @@ jobs:
 
   # ============================================================
   # Job 4: بررسی اینکه کدام فیلتر باید اجرا شود (skip cascade gate)
-  # منطق: fixed > golden > correlation > portfolios
+  # منطق: fixed > golden > portfolios
   # هر فیلتر فقط وقتی اجرا میشه که همه فیلترهای قبلی خالی باشن
   # ============================================================
   check-queues:
@@ -760,7 +760,6 @@ jobs:
     outputs:
       run_fixed: ${{ steps.gate.outputs.run_fixed }}
       run_golden: ${{ steps.gate.outputs.run_golden }}
-      run_correlation: ${{ steps.gate.outputs.run_correlation }}
       run_portfolios: ${{ steps.gate.outputs.run_portfolios }}
     steps:
       - uses: actions/checkout@v5
@@ -781,7 +780,6 @@ jobs:
               echo "⚠️ interrupt.flag فعال است — همه فیلترها skip."
               echo "run_fixed=false" >> $GITHUB_OUTPUT
               echo "run_golden=false" >> $GITHUB_OUTPUT
-              echo "run_correlation=false" >> $GITHUB_OUTPUT
               echo "run_portfolios=false" >> $GITHUB_OUTPUT
               exit 0
             fi
@@ -799,41 +797,30 @@ jobs:
 
             LEN_FIXED=$(get_len "all_combinations.json")
             LEN_GOLDEN=$(get_len "all_combinations_golden.json")
-            LEN_CORR=$(get_len "all_combinations_correlation.json")
             LEN_PORT=$(get_len "all_combinations_portfolios.json")
 
-            echo "[DEBUG] fixed=$LEN_FIXED  golden=$LEN_GOLDEN  correlation=$LEN_CORR  portfolios=$LEN_PORT"
+            echo "[DEBUG] fixed=$LEN_FIXED  golden=$LEN_GOLDEN  portfolios=$LEN_PORT"
 
             # منطق cascade: اولین صف غیر‌خالی اجرا میشه، بقیه skip
             if [ "$LEN_FIXED" -gt 0 ]; then
               echo "▶ fixed کار دارد ($LEN_FIXED) — بقیه skip."
               echo "run_fixed=true"  >> $GITHUB_OUTPUT
               echo "run_golden=false" >> $GITHUB_OUTPUT
-              echo "run_correlation=false" >> $GITHUB_OUTPUT
               echo "run_portfolios=false" >> $GITHUB_OUTPUT
             elif [ "$LEN_GOLDEN" -gt 0 ]; then
               echo "▶ golden کار دارد ($LEN_GOLDEN) — fixed خالی، بقیه skip."
               echo "run_fixed=false" >> $GITHUB_OUTPUT
               echo "run_golden=true"  >> $GITHUB_OUTPUT
-              echo "run_correlation=false" >> $GITHUB_OUTPUT
-              echo "run_portfolios=false" >> $GITHUB_OUTPUT
-            elif [ "$LEN_CORR" -gt 0 ]; then
-              echo "▶ correlation کار دارد ($LEN_CORR) — fixed/golden خالی، portfolios skip."
-              echo "run_fixed=false" >> $GITHUB_OUTPUT
-              echo "run_golden=false" >> $GITHUB_OUTPUT
-              echo "run_correlation=true"  >> $GITHUB_OUTPUT
               echo "run_portfolios=false" >> $GITHUB_OUTPUT
             elif [ "$LEN_PORT" -gt 0 ]; then
               echo "▶ portfolios کار دارد ($LEN_PORT) — بقیه خالی."
               echo "run_fixed=false" >> $GITHUB_OUTPUT
               echo "run_golden=false" >> $GITHUB_OUTPUT
-              echo "run_correlation=false" >> $GITHUB_OUTPUT
               echo "run_portfolios=true"  >> $GITHUB_OUTPUT
             else
               echo "ℹ️ همه صف‌ها خالی هستند — loop ادامه می‌یابد."
               echo "run_fixed=false" >> $GITHUB_OUTPUT
               echo "run_golden=false" >> $GITHUB_OUTPUT
-              echo "run_correlation=false" >> $GITHUB_OUTPUT
               echo "run_portfolios=false" >> $GITHUB_OUTPUT
             fi
           }
@@ -924,61 +911,6 @@ jobs:
             done
             if [ "$SUCCESS" = "false" ]; then
               echo "❌ هر سه تلاش برای dispatch-golden ناموفق بود."
-              exit 1
-            fi
-          }
-
-  # ============================================================
-  # Job 6: ساخت صف correlation + اجرا (فیلتر ۳)
-  # ============================================================
-  dispatch-correlation:
-    needs: [prepare-dispatch, check-queues]
-    if: needs.check-queues.outputs.run_correlation == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
-          ref: main
-      - name: راه‌اندازی پایتون
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: ساخت و به‌روزرسانی all_combinations_correlation.json
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          {
-            echo "🚀 اجرای build_all_queues.py برای ساخت صف correlation..."
-            python scripts/build_all_queues.py               --progress /tmp/dummy               --output-dir /tmp/dummy               --batch-size 500 2>&1
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "❌ build_all_queues.py (correlation queue) با خطا مواجه شد (کد $EXIT_CODE)"
-              exit $EXIT_CODE
-            fi
-            echo "✅ build_all_queues.py (correlation queue) با موفقیت اجرا شد."
-          }
-      - name: فراخوانی analysis_correlation.yml
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          {
-            echo "🔄 فراخوانی analysis_correlation.yml..."
-            SUCCESS=false
-            for attempt in 1 2 3; do
-              if gh workflow run analysis_correlation.yml --ref main 2>&1; then
-                echo "✅ فراخوانی correlation موفق بود (تلاش $attempt)."
-                SUCCESS=true
-                break
-              else
-                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
-                sleep 5
-              fi
-            done
-            if [ "$SUCCESS" = "false" ]; then
-              echo "❌ هر سه تلاش برای dispatch-correlation ناموفق بود."
               exit 1
             fi
           }
