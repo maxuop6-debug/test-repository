@@ -209,33 +209,42 @@ jobs:
 
           # ================================================================
           # گسترش صف: از «نام آرشیو» به «فایل‌های JSONL واقعی»
-          # برای هر آیتم صف:
-          #   MODULE = بخش اول signature (مثلاً combo_10day)
-          #   STRAT  = بخش دوم signature (مثلاً Best_15m)
-          #   COIN   = coin_composition (با علامت + ، بدون تبدیل به _)
-          #   مسیر:  /tmp/signatures/{MODULE}/{STRAT}/{COIN}/*.jsonl
+          # signature همان مسیر کامل فایل داخل /tmp است
+          # (مثلاً signatures/combo_10day/Best_15m/BTCUSDT/fixed_5d_simple_hybrid.jsonl)
+          # پیاده‌سازی در پایتون به‌جای bash برای جلوگیری از spawn هزاران subprocess
           # ================================================================
-          SIG_JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' 2>/dev/null | wc -l)
-          echo "[DIAG] تعداد فایل .jsonl موجود در /tmp/signatures قبل از گسترش صف = $SIG_JSONL_COUNT"
+          python3 - <<'PYEOF'
+          import json
+          import os
 
-          > /tmp/expanded_queue.jsonl
-          while IFS= read -r ITEM; do
-            COIN=$(echo "$ITEM" | jq -r '.coin_composition')
-            SIG=$(echo "$ITEM" | jq -r '.signature')
-            MODULE=$(echo "$SIG" | cut -d'/' -f2)
-            STRAT=$(echo "$SIG" | cut -d'/' -f3)
-            DIR="/tmp/signatures/${MODULE}/${STRAT}/${COIN}"
-            if [ -d "$DIR" ]; then
-              find "$DIR" -maxdepth 1 -name '*.jsonl' -print0 2>/dev/null | while IFS= read -r -d '' FPATH; do
-                FNAME=$(basename "$FPATH")
-                jq -nc --arg coin "$COIN" --arg sig "${MODULE}/${STRAT}/${COIN}/${FNAME}" \
-                  '{coin_composition: $coin, signature: $sig}'
-              done >> /tmp/expanded_queue.jsonl
-            fi
-          done < <(jq -c '.[]' /tmp/all_combinations_correlation.json)
+          with open('/tmp/all_combinations_correlation.json') as f:
+              items = json.load(f)
 
-          EXPANDED_COUNT=$(wc -l < /tmp/expanded_queue.jsonl | tr -d ' ')
-          echo "[DEBUG] تعداد آیتم‌های صف گسترش‌یافته (فایل‌های JSONL واقعی): $EXPANDED_COUNT"
+          sig_count = 0
+          for root, dirs, files in os.walk('/tmp/signatures'):
+              sig_count += sum(1 for fn in files if fn.endswith('.jsonl'))
+          print(f"[DIAG] تعداد فایل .jsonl موجود در /tmp/signatures قبل از گسترش صف = {sig_count}")
+
+          expanded = []
+          missing = 0
+          for item in items:
+              sig = item.get('signature', '')
+              coin = item.get('coin_composition', '')
+              full_path = os.path.join('/tmp', sig)
+              if os.path.isfile(full_path):
+                  expanded.append({'coin_composition': coin, 'signature': sig})
+              else:
+                  missing += 1
+
+          with open('/tmp/expanded_queue.json', 'w') as f:
+              json.dump(expanded, f, ensure_ascii=False)
+
+          print(f"[DEBUG] تعداد آیتم‌های صف گسترش‌یافته (فایل‌های JSONL واقعی): {len(expanded)}")
+          if missing:
+              print(f"[DIAG] تعداد آیتم‌هایی که فایلشان پیدا نشد: {missing}")
+          PYEOF
+
+          EXPANDED_COUNT=$(jq length /tmp/expanded_queue.json)
 
           if [ "$EXPANDED_COUNT" -eq 0 ]; then
             echo "[DIAG] 🔴 صف گسترش‌یافته خالی است — هیچ پوشه/فایل JSONL منطبقی برای آیتم‌های صف یافت نشد."
@@ -244,14 +253,11 @@ jobs:
             exit 0
           fi
 
-          jq -s '.' /tmp/expanded_queue.jsonl > /tmp/expanded_queue.json
-          rm -f /tmp/expanded_queue.jsonl
-
           # ================================================================
           # چانک‌بندی ۵۰۰ تایی صف گسترش‌یافته
           # ================================================================
           CHUNK_SIZE=500
-          TOTAL=$(jq length /tmp/expanded_queue.json)
+          TOTAL=$EXPANDED_COUNT
           NUM_CHUNKS=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           for ((i=0; i<NUM_CHUNKS; i++)); do
             START=$((i*CHUNK_SIZE))
