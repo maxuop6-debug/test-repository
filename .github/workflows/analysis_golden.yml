@@ -22,185 +22,56 @@ concurrency:
 
 jobs:
   # ================================================================
-  # generate-reports: تولید گزارش‌های جامع نسخه ۵ و commit به مخزن سوم
-  # ================================================================
-  generate-reports:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 1. Checkout مخزن اصلی
-        uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 2. نصب پایتون و کتابخانه‌ها
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: نصب وابستگی‌ها
-        run: pip install pandas numpy scipy pyarrow
-
-      - name: 3. Clone مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          git clone \
-            --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/${THIRD_REPO}.git" \
-            /tmp/third_repo
-
-      - name: 4. اجرای loader.py
-        run: |
-          python modules/loader.py \
-            --news-dir data/news \
-            --results-dir /tmp/third_repo/aggregated \
-            --strategies-dir /tmp/third_repo/strategies \
-            --output-news /tmp/news.pickle \
-            --output-strategies /tmp/strategies.json
-
-      - name: 5. اجرای calculator_stoploss.py
-        run: |
-          python modules/calculator_stoploss.py \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --strategies-dir /tmp/third_repo/strategies \
-            --output /tmp/stoploss.json
-
-      - name: 6. اجرای calculators.py returns
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py returns \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --output /tmp/returns.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 7. اجرای calculators.py risk
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py risk \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/risk.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 8. اجرای calculators.py inverse
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py inverse \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/inverse.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 9. اجرای calculators.py report
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          mkdir -p /tmp/reports
-          python modules/calculators.py report \
-            --returns-cache /tmp/returns.json \
-            --strategies-json /tmp/strategies.json \
-            --risk-cache /tmp/risk.json \
-            --inverse-cache /tmp/inverse.json \
-            --results-base /tmp/third_repo/aggregated \
-            --news-pickle /tmp/news.pickle \
-            --output-dir /tmp/reports \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 10. رمزنگاری reports و آماده‌سازی برای commit
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          tar -czf /tmp/reports.tar.gz -C /tmp reports
-          echo "✅ فشرده‌سازی reports انجام شد ($(du -sh /tmp/reports.tar.gz | cut -f1))"
-          node -e "
-            const crypto = require('crypto'), fs = require('fs');
-            const pass = process.env.RESULTS_PASSWORD;
-            const data = fs.readFileSync('/tmp/reports.tar.gz');
-            const key  = crypto.scryptSync(pass, 'salt', 32);
-            const iv   = crypto.randomBytes(16);
-            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-            const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
-            fs.writeFileSync('/tmp/reports.tar.gz.enc', enc);
-          "
-          echo "✅ رمزنگاری reports.tar.gz.enc انجام شد"
-          rm -rf /tmp/reports /tmp/reports.tar.gz
-
-      - name: 11. Commit و Push reports.tar.gz.enc به مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          cd /tmp/third_repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # باگ P fix: pull --rebase با بررسی واقعی خطا — اگر conflict داشت retry می‌کنه
-          PUSH_RETRY=0; PUSH_MAX=5
-          while [ $PUSH_RETRY -lt $PUSH_MAX ]; do
-            git fetch origin main 2>/dev/null
-            git rebase origin/main 2>/dev/null
-            REBASE_STATUS=$?
-            if [ $REBASE_STATUS -ne 0 ]; then
-              echo "⚠️ rebase conflict — abort و retry ($((PUSH_RETRY+1))/$PUSH_MAX)"
-              git rebase --abort 2>/dev/null || true
-              PUSH_RETRY=$((PUSH_RETRY+1))
-              sleep $(( (RANDOM % 5) + 3 ))
-              continue
-            fi
-            git rm -rf reports/ 2>/dev/null || true
-            cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
-            git add -f reports.tar.gz.enc
-            git commit -m "update reports encrypted (run ${{ github.run_id }})" 2>/dev/null || true
-            git push origin main && break
-            echo "⚠️ push ناموفق — تلاش مجدد ($((PUSH_RETRY+1))/$PUSH_MAX)"
-            PUSH_RETRY=$((PUSH_RETRY+1))
-            sleep $(( (RANDOM % 5) + 3 ))
-          done
-          if [ $PUSH_RETRY -ge $PUSH_MAX ]; then
-            echo "ERROR: push پس از $PUSH_MAX تلاش ناموفق."
-            exit 1
-          fi
-          exit 0
-
-  # ================================================================
   # golden-generate-matrix: تولید صف کار برای ماژول golden
   # ================================================================
   golden-generate-matrix:
-    needs: [generate-reports]
     runs-on: ubuntu-latest
     outputs:
-      matrix_items: ${{ steps.gen.outputs.matrix_items }}
-      empty: ${{ steps.gen.outputs.empty }}
+      matrix_items: ${{ steps.gen.outputs.matrix_items || '[]' }}
+      empty: ${{ steps.fetch_queue.outputs.queue_valid == 'false' || steps.gen.outputs.empty == 'true' }}
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: دانلود و استخراج یک‌باره همه archiveهای signature (فقط جدید)
+      - name: دانلود صف all_combinations_golden.json از مخزن سوم
+        id: fetch_queue
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/all_combinations_golden.json -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_golden.json")
+          echo "[DEBUG] HTTP_CODE=$HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ] || ! jq -e 'type == "array"' /tmp/all_combinations_golden.json > /dev/null 2>&1; then
+            echo "⚠️ صف خالی یا نامعتبر است (HTTP $HTTP_CODE) — matrix خالی برمی‌گردد."
+            echo "queue_valid=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          TOTAL=$(jq length /tmp/all_combinations_golden.json)
+          echo "[DEBUG] تعداد آیتم‌های صف: $TOTAL"
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "⚠️ صف خالی است — matrix خالی برمی‌گردد."
+            echo "queue_valid=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "queue_valid=true" >> $GITHUB_OUTPUT
+
+      - name: استخراج آرشیوهای signature و ساخت artifact مشترک all-signatures
         id: extract
+        if: steps.fetch_queue.outputs.queue_valid == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
+          # نکته: این استخراج فقط برای ساخت artifact مشترک all-signatures است که
+          # مرحله‌ی golden-batch از آن برای کپی فایل‌های هر چانک استفاده می‌کند.
+          # چانک‌بندی صف (مرحله بعدی) از روی خود صف all_combinations_golden.json
+          # انجام می‌شود، نه از روی این استخراج.
           mkdir -p /tmp/all_signatures
-
-          # دریافت لیست signatureهای قبلاً پردازش‌شده برای جلوگیری از تکرار
-          COMPLETED_RAW=$(curl -s \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden.json" 2>/dev/null || echo "[]")
-          # normalize: هر عنصر ممکن است string یا object با فیلد signature_path باشد
-          COMPLETED_SET=$(echo "$COMPLETED_RAW" | jq -c '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' 2>/dev/null || echo "[]")
-          COMPLETED_COUNT=$(echo "$COMPLETED_SET" | jq 'length')
-          echo "[DEBUG] تعداد signatureهای قبلاً پردازش‌شده: $COMPLETED_COUNT"
 
           TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
@@ -209,15 +80,12 @@ jobs:
           ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
           echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
 
-          # باگ W fix: بررسی صحیح DL_URL — فقط URLهای معتبر https:// پذیرفته می‌شن
           EXTRACTED=0
-          : > /tmp/archive_map_parts.jsonl
           while IFS= read -r ARCH_PATH; do
             [ -z "$ARCH_PATH" ] && continue
             API_RESP=$(curl -s -H "Authorization: token $GH_TOKEN" \
               "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH")
             DL_URL=$(echo "$API_RESP" | jq -r '.download_url // empty' 2>/dev/null || echo "")
-            # باگ W fix: به جای چک null/empty، URL رو validate کن
             if [[ ! "$DL_URL" =~ ^https:// ]]; then
               echo "⚠️ DL_URL نامعتبر برای $ARCH_PATH: '$DL_URL' — رد می‌شود."
               continue
@@ -236,103 +104,51 @@ jobs:
               fs.writeFileSync('${ENC_FILE%.enc}',dec);
             " 2>/dev/null
             if [ -f "${ENC_FILE%.enc}" ]; then
-              # باگ dedup ریشه‌ای fix: صف (all_combinations_golden.json) در سطح
-              # "archive" کار می‌کند (signature_path = مسیر archive بدون پسوند)،
-              # نه در سطح فایل .jsonl. بعد از extract هیچ ردی از نام archive در
-              # مسیر فایل‌های استخراج‌شده باقی نمی‌ماند، پس تنها لحظه‌ای که می‌توان
-              # فهمید «این archive شامل کدام فایل‌هاست» همین‌جاست — قبل از extract.
-              ARCH_KEY="${ARCH_PATH#signature_archives/}"
-              ARCH_KEY="${ARCH_KEY%.tar.gz.enc}"
-              ARCH_FILES_JSON=$(tar -tzf "${ENC_FILE%.enc}" 2>/dev/null \
-                | sed 's#^\./##' \
-                | grep '\.jsonl$' \
-                | jq -R -s -c 'split("\n") | map(select(length > 0))')
-              jq -n --arg key "$ARCH_KEY" --argjson files "$ARCH_FILES_JSON" \
-                '{($key): $files}' >> /tmp/archive_map_parts.jsonl
               tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures && EXTRACTED=$((EXTRACTED+1))
             fi
             rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
           done < <(echo "$ARCHIVES" | jq -r '.[]')
 
-          # ادغام نگاشت archive -> فایل‌ها در یک فایل JSON واحد (object)
-          if [ -s /tmp/archive_map_parts.jsonl ]; then
-            jq -s 'add' /tmp/archive_map_parts.jsonl > /tmp/archive_map.json 2>/dev/null \
-              || echo '{}' > /tmp/archive_map.json
-          else
-            echo '{}' > /tmp/archive_map.json
-          fi
-          echo "[DEBUG] تعداد archiveهای نگاشته‌شده در archive_map.json: $(jq 'keys | length' /tmp/archive_map.json)"
-
-          # باگ ۳ fix: فیلتر completed روی مسیرهای واقعی .jsonl (نه basename archive)
-          SKIPPED=0
-          if [ "$(echo "$COMPLETED_SET" | jq 'length')" -gt 0 ]; then
-            while IFS= read -r REL_JSONL; do
-              [ -z "$REL_JSONL" ] && continue
-              TARGET="/tmp/all_signatures/$REL_JSONL"
-              if [ -f "$TARGET" ]; then
-                rm -f "$TARGET"
-                SKIPPED=$((SKIPPED+1))
-              fi
-            done < <(echo "$COMPLETED_SET" | jq -r '.[]')
-            echo "[DEBUG] $SKIPPED فایل JSONL که قبلاً پردازش شده بودند از صف حذف شدند."
-          fi
-
           JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
-          echo "✅ استخراج: $JSONL_TOTAL فایل JSONL باقی‌مانده از $EXTRACTED archive (فیلترشده: $SKIPPED)"
+          echo "✅ استخراج: $JSONL_TOTAL فایل JSONL از $EXTRACTED archive"
           echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
 
-      - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
-        if: steps.extract.outputs.jsonl_total != '0'
+      - name: آپلود artifact مشترک all-signatures
+        if: steps.fetch_queue.outputs.queue_valid == 'true' && steps.extract.outputs.jsonl_total != '0'
         uses: actions/upload-artifact@v4
         with:
           name: all-signatures-${{ github.run_id }}
           path: /tmp/all_signatures/
           retention-days: 1
 
-      - name: آپلود نگاشت archive → فایل‌های jsonl (لازم برای تشخیص archiveهای کامل‌شده)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: archive-map-${{ github.run_id }}
-          path: /tmp/archive_map.json
-          retention-days: 1
-
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰۰۰۰۰ تایی با محدودیت ۵۰۰۰۰۰
+      - name: اعمال محدودیت ۵۰۰۰۰۰ و تقسیم صف به چانک‌های ۵۰۰۰۰۰ تایی
         id: gen
+        if: steps.fetch_queue.outputs.queue_valid == 'true'
         run: |
           mkdir -p /tmp/golden_chunks
-          SIG_FILES=$(find /tmp/all_signatures -name '*.jsonl' | sed 's#^/tmp/all_signatures/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          TOTAL=$(echo "$SIG_FILES" | jq 'length')
+          TOTAL=$(jq length /tmp/all_combinations_golden.json)
 
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "empty=true" >> $GITHUB_OUTPUT
-            echo "matrix_items=[]" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # محدودیت کل امضاها (حداکثر در هر اجرا)
+          # محدودیت کل آیتم‌ها (حداکثر ۵۰۰٬۰۰۰ در هر اجرا) — فقط ۵۰۰٬۰۰۰ تای اول
+          # signature_path از هر آیتم استخراج می‌شود تا با ساختار all-signatures سازگار بماند
           if [ "$TOTAL" -gt 500000 ]; then
-            echo "$SIG_FILES" | jq '.[:500000]' > /tmp/golden_chunks/signatures_capped.json
+            jq '[.[:500000][] | (if type == "object" then .signature_path else . end)]' \
+              /tmp/all_combinations_golden.json > /tmp/golden_chunks/signatures_capped.json
             TOTAL=500000
           else
-            echo "$SIG_FILES" > /tmp/golden_chunks/signatures_capped.json
+            jq '[.[] | (if type == "object" then .signature_path else . end)]' \
+              /tmp/all_combinations_golden.json > /tmp/golden_chunks/signatures_capped.json
           fi
           SIG_FILES_CAPPED=$(cat /tmp/golden_chunks/signatures_capped.json)
 
           CHUNK_SIZE=500000
           CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-          if [ "$CHUNK_COUNT" -gt 256 ]; then
-            CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
-            CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-          fi
+          [ "$CHUNK_COUNT" -lt 1 ] && CHUNK_COUNT=1
 
           # باگ M fix: chunk_start و chunk_end از workflow inputs برای محدود کردن matrix
           INPUT_START="${{ github.event.inputs.chunk_start }}"
           INPUT_END="${{ github.event.inputs.chunk_end }}"
-          # اگر خالی بود، کل range رو بگیر
           [ -z "$INPUT_START" ] && INPUT_START=0
           [ -z "$INPUT_END" ]   && INPUT_END=$((CHUNK_COUNT - 1))
-          # باگ O fix: اگر مقدار غیرعددی بود، به default برگرد
           if ! [[ "$INPUT_START" =~ ^[0-9]+$ ]]; then
             echo "⚠️ chunk_start غیرعددی ('$INPUT_START') — به 0 تنظیم شد."
             INPUT_START=0
@@ -341,10 +157,8 @@ jobs:
             echo "⚠️ chunk_end غیرعددی ('$INPUT_END') — به $((CHUNK_COUNT - 1)) تنظیم شد."
             INPUT_END=$((CHUNK_COUNT - 1))
           fi
-          # clamp به محدوده معتبر
           [ "$INPUT_START" -lt 0 ] && INPUT_START=0
           [ "$INPUT_END" -ge "$CHUNK_COUNT" ] && INPUT_END=$((CHUNK_COUNT - 1))
-          # باگ O fix: اگر بعد از clamp بازه خالی شد (start > end)، matrix خالی بده
           if [ "$INPUT_START" -gt "$INPUT_END" ]; then
             echo "⚠️ بازه chunk خالی است (start=$INPUT_START > end=$INPUT_END) — matrix خالی."
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
@@ -358,7 +172,6 @@ jobs:
             START=$((i * CHUNK_SIZE))
             END=$((START + CHUNK_SIZE))
             echo "$SIG_FILES_CAPPED" | jq ".[$START:$END]" > /tmp/golden_chunks/chunk_${i}.json
-            # فقط chunk‌های داخل بازه input را به matrix اضافه کن
             if [ "$i" -ge "$INPUT_START" ] && [ "$i" -le "$INPUT_END" ]; then
               if [ "${#INDICES}" -gt 1 ]; then INDICES+=", "; fi
               INDICES+="$i"
@@ -367,10 +180,10 @@ jobs:
           INDICES+="]"
           echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
           echo "empty=false" >> $GITHUB_OUTPUT
-          echo "✅ $TOTAL امضا در $CHUNK_COUNT چانک — اجرای chunk‌های $INPUT_START تا $INPUT_END."
+          echo "✅ $TOTAL آیتم در $CHUNK_COUNT چانک — اجرای chunk‌های $INPUT_START تا $INPUT_END."
 
       - name: آپلود چانک‌های golden
-        if: steps.gen.outputs.empty == 'false'
+        if: steps.fetch_queue.outputs.queue_valid == 'true' && steps.gen.outputs.empty == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: golden-chunks-${{ github.run_id }}
@@ -381,7 +194,7 @@ jobs:
   # golden-batch: پردازش موازی چانک‌های golden
   # ================================================================
   golden-batch:
-    needs: [generate-reports, golden-generate-matrix]
+    needs: [golden-generate-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     if: ${{ needs.golden-generate-matrix.outputs.empty == 'false' }}
@@ -618,12 +431,73 @@ jobs:
           path: /tmp/done_artifacts_raw
           merge-multiple: false
 
-      - name: دانلود نگاشت archive → فایل‌های jsonl
+      - name: دانلود golden_scores (روش اول)
+        id: dl1
         uses: actions/download-artifact@v4
         with:
-          name: archive-map-${{ github.run_id }}
-          path: /tmp/archive_map_dl
+          pattern: golden-scores-*-${{ github.run_id }}
+          path: /tmp/golden_scores_parts
+          merge-multiple: false
         continue-on-error: true
+
+      - name: گزارش نتیجه روش اول
+        run: |
+          FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' 2>/dev/null | wc -l)
+          echo "[DEBUG] روش اول (download-artifact@v4) outcome=${{ steps.dl1.outcome }} — $FOUND فایل یافت شد."
+
+      - name: دانلود golden_scores (روش دوم)
+        id: dl2
+        if: steps.dl1.outcome != 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          mkdir -p /tmp/golden_scores_parts
+          echo "[DEBUG] روش اول ناموفق بود — تلاش با gh run download (روش دوم)..."
+          if gh run download ${{ github.run_id }} \
+            --pattern "golden-scores-*-${{ github.run_id }}" \
+            --dir /tmp/golden_scores_parts; then
+            FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
+            echo "[DEBUG] روش دوم: $FOUND فایل دریافت شد."
+            if [ "$FOUND" -gt 0 ]; then
+              echo "success=true" >> $GITHUB_OUTPUT
+            else
+              echo "success=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ روش دوم (gh run download) شکست خورد."
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: دانلود golden_scores (روش سوم)
+        id: dl3
+        if: steps.dl1.outcome != 'success' && steps.dl2.outputs.success != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          mkdir -p /tmp/golden_scores_parts
+          echo "[DEBUG] روش دوم هم ناموفق بود — تلاش با فراخوانی مستقیم GitHub API (روش سوم)..."
+          ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
+          URLS=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | startswith("golden-scores-")) | .archive_download_url')
+          if [ -z "$URLS" ]; then
+            echo "ERROR: هیچ artifact ای با نام golden-scores- یافت نشد — همه روش‌های دانلود ناموفق بودند."
+            exit 1
+          fi
+          COUNT=0
+          while read -r url; do
+            [ -z "$url" ] && continue
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "/tmp/artifact_${COUNT}.zip" "$url"
+            unzip -o -d /tmp/golden_scores_parts "/tmp/artifact_${COUNT}.zip" 2>/dev/null
+            rm -f "/tmp/artifact_${COUNT}.zip"
+            COUNT=$((COUNT+1))
+          done <<< "$URLS"
+          FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
+          echo "[DEBUG] روش سوم: $FOUND فایل دریافت شد (از $COUNT artifact)."
+          if [ "$FOUND" -eq 0 ]; then
+            echo "ERROR: روش سوم هم هیچ golden_scores.parquet ای پیدا نکرد — همه روش‌های دانلود ناموفق بودند."
+            exit 1
+          fi
 
       - name: دانلود و ادغام golden_scores از همه چانک‌ها + رمزنگاری و آپلود
         env:
@@ -632,19 +506,14 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
+        run: |
           mkdir -p /tmp/golden_scores_parts
-
-          echo "[DEBUG] شروع دانلود artifact های golden_scores برای run ${{ github.run_id }}"
-          gh run download ${{ github.run_id }} \
-            --pattern "golden-scores-*-${{ github.run_id }}" \
-            --dir /tmp/golden_scores_parts 2>/dev/null || true
 
           echo "[DEBUG] ساختار دایرکتوری golden_scores_parts:"
           find /tmp/golden_scores_parts -type f | head -30 || echo "(خالی)"
 
           PARQUET_COUNT=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
           echo "[DEBUG] تعداد golden_scores.parquet یافت‌شده: $PARQUET_COUNT"
-
           if [ "$PARQUET_COUNT" -eq 0 ]; then
             echo "⚠️ هیچ golden_scores.parquet یافت نشد — رد می‌شویم."
           else
@@ -768,7 +637,6 @@ jobs:
                 /tmp/golden_scores_b64.txt /tmp/payload_gs.json
             fi
           fi
-
       - name: ادغام لیست‌های done و حذف از all_combinations_golden.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -877,33 +745,13 @@ jobs:
             echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_golden (تجمعی): $MERGED_COMP_COUNT"
             rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json /tmp/new_sigs.json
 
-            # باگ dedup ریشه‌ای fix: صف (all_combinations_golden.json) در سطح
-            # "archive" است (signature_path = نام archive، بدون پسوند/prefix)، نه
-            # در سطح فایل .jsonl. done_items/processed_files که از golden.py می‌آید
-            # همیشه در سطح فایل .jsonl است — این دو هیچ‌وقت با تطبیق رشته‌ای مستقیم
-            # یکی نمی‌شوند (به همین خاطر تا الان همیشه ۰ تا حذف می‌شد، فارغ از
-            # اینکه چقدر فایل واقعاً پردازش شده باشد).
-            # راه‌حل: با archive_map.json (نگاشت archive -> فایل‌های داخلش، که در
-            # مرحله extract ساخته شده) بررسی می‌کنیم؛ یک archive فقط وقتی "کامل"
-            # است که همه‌ی فایل‌های .jsonl آن در مجموعه‌ی تجمعی completed_golden.json
-            # حضور داشته باشند.
-            ARCHIVE_MAP_FILE="/tmp/archive_map_dl/archive_map.json"
-            if [ ! -s "$ARCHIVE_MAP_FILE" ] || ! jq -e 'type == "object"' "$ARCHIVE_MAP_FILE" > /dev/null 2>&1; then
-              echo "⚠️ archive_map.json یافت نشد یا نامعتبر بود — هیچ archiveای این run از صف حذف نمی‌شود."
-              echo "[]" > /tmp/fully_done_archives.json
-            else
-              jq --slurpfile done /tmp/completed_golden.json '
-                ($done[0] | unique) as $done_set
-                | [ to_entries[]
-                    | select((.value | length) > 0)
-                    | select(.value | all(. as $f | $done_set | index($f) != null))
-                    | .key
-                  ]
-              ' "$ARCHIVE_MAP_FILE" > /tmp/fully_done_archives.json 2>/dev/null \
-                || echo "[]" > /tmp/fully_done_archives.json
-            fi
-            FULLY_DONE_COUNT=$(jq length /tmp/fully_done_archives.json)
-            echo "[DEBUG] archiveهایی که کاملاً پردازش شده‌اند (قابل حذف از صف): $FULLY_DONE_COUNT"
+            # باگ dedup ریشه‌ای fix: صف (all_combinations_golden.json) اکنون در سطح
+            # فایل .jsonl است (signature_path = مسیر کامل فایل JSONL)، که دقیقاً با
+            # مسیرهای موجود در done_items / completed_golden.json یکی است. بنابراین
+            # دیگر نیازی به archive_map.json یا محاسبه‌ی «archiveهای کاملاً پردازش‌شده»
+            # نیست — حذف از صف مستقیماً بر اساس signature_path انجام می‌شود.
+            DONE_SET_COUNT=$(jq length /tmp/completed_golden.json)
+            echo "[DEBUG] تعداد کل signatureهای موجود در مجموعه‌ی تجمعی completed_golden: $DONE_SET_COUNT"
 
             RETRY=0; MAX=10000
             while [ $RETRY -lt $MAX ]; do
@@ -932,14 +780,14 @@ jobs:
               mv /tmp/current_clean.json /tmp/current.json
 
               QUEUE_COUNT=$(jq length /tmp/current.json)
-              echo "[DEBUG] archiveهای کامل‌شده: $FULLY_DONE_COUNT | صف: $QUEUE_COUNT"
+              echo "[DEBUG] signatureهای پردازش‌شده (تجمعی): $DONE_SET_COUNT | صف: $QUEUE_COUNT"
               jq -s '.[0] as $c | .[1] as $d
                 | ($d | unique) as $done_set
                 | $c | map(
                     (if type == "object" then .signature_path else . end) as $key
                     | select(($done_set | index($key)) == null)
                   )
-              ' /tmp/current.json /tmp/fully_done_archives.json > /tmp/new_content.json
+              ' /tmp/current.json /tmp/completed_golden.json > /tmp/new_content.json
 
               BEFORE=$(jq length /tmp/current.json)
               AFTER=$(jq length /tmp/new_content.json)
@@ -1010,72 +858,9 @@ jobs:
             done
             [ $COMP_RETRY -ge $COMP_MAX ] && echo "ERROR: پس از $COMP_MAX تلاش، completed_golden.json به‌روز نشد."
 
-            # ── گزینه A fix: push تجمعی completed_golden_archives.json (سطح archive) ──
-            # build_all_queues.py برای تصمیم‌گیری «آیا این archive قبلاً پردازش شده»
-            # از completed_golden_archives.json استفاده می‌کند (نه completed_golden.json
-            # که در سطح .jsonl است). بنابراین باید این فایل را هم اینجا به‌روز کنیم.
-            echo "✅ به‌روزرسانی completed_golden_archives.json با archiveهای کامل‌شده این run..."
-
-            # دریافت completed_golden_archives.json فعلی از مخزن سوم
-            curl -s \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden_archives.json" \
-              2>/dev/null > /tmp/current_arch_raw.json
-            if ! jq -e 'type == "array"' /tmp/current_arch_raw.json > /dev/null 2>&1; then
-              echo "[]" > /tmp/current_arch_raw.json
-            fi
-
-            # ادغام با fully_done_archives (همان archive path‌هایی که این run کامل شدند)
-            jq -s '.[0] + .[1] | unique' \
-              /tmp/current_arch_raw.json /tmp/fully_done_archives.json \
-              > /tmp/completed_golden_archives.json 2>/dev/null \
-              || cat /tmp/current_arch_raw.json > /tmp/completed_golden_archives.json
-
-            NEW_ARCH_COUNT=$(jq length /tmp/completed_golden_archives.json)
-            echo "[DEBUG] تعداد کل archiveهای ثبت‌شده در completed_golden_archives (تجمعی): $NEW_ARCH_COUNT"
-
-            ARCH_RETRY=0; ARCH_MAX=10000
-            while [ $ARCH_RETRY -lt $ARCH_MAX ]; do
-              SHA_ARCH=$(gh api "repos/$THIRD_REPO/contents/completed_golden_archives.json" -q '.sha' 2>/dev/null || echo "")
-              base64 -w0 /tmp/completed_golden_archives.json > /tmp/arch_base64.txt
-              if [ -n "$SHA_ARCH" ]; then
-                jq -n \
-                  --arg msg "update completed_golden_archives ($NEW_ARCH_COUNT archives, run ${{ github.run_id }})" \
-                  --rawfile content /tmp/arch_base64.txt \
-                  --arg sha "$SHA_ARCH" \
-                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
-                  > /tmp/payload_arch.json
-              else
-                jq -n \
-                  --arg msg "update completed_golden_archives ($NEW_ARCH_COUNT archives, run ${{ github.run_id }})" \
-                  --rawfile content /tmp/arch_base64.txt \
-                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
-                  > /tmp/payload_arch.json
-              fi
-              ARCH_HTTP=$(curl -s -o /tmp/arch_upload_resp.txt -w "%{http_code}" -X PUT \
-                -H "Authorization: token $GH_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data-binary @/tmp/payload_arch.json \
-                "https://api.github.com/repos/$THIRD_REPO/contents/completed_golden_archives.json")
-              if [ "$ARCH_HTTP" = "200" ] || [ "$ARCH_HTTP" = "201" ]; then
-                echo "✅ completed_golden_archives.json با $NEW_ARCH_COUNT archive به‌روز شد."
-                break
-              elif [ "$ARCH_HTTP" = "409" ] || [ "$ARCH_HTTP" = "422" ]; then
-                echo "⚠️ تداخل SHA در completed_golden_archives (HTTP $ARCH_HTTP) — تلاش مجدد..."
-                ARCH_RETRY=$((ARCH_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
-              else
-                echo "⚠️ به‌روزرسانی completed_golden_archives.json ناموفق (HTTP $ARCH_HTTP): $(cat /tmp/arch_upload_resp.txt | head -c 200)"
-                break
-              fi
-            done
-            [ $ARCH_RETRY -ge $ARCH_MAX ] && echo "ERROR: پس از $ARCH_MAX تلاش، completed_golden_archives.json به‌روز نشد."
-
             rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt \
               /tmp/payload.json /tmp/payload_comp.json /tmp/upload_response.txt \
-              /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json \
-              /tmp/fully_done_archives.json /tmp/current_arch_raw.json \
-              /tmp/arch_base64.txt /tmp/payload_arch.json /tmp/arch_upload_resp.txt
+              /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
 
           fi  # پایان بلوک MERGED_COUNT -gt 0
 
