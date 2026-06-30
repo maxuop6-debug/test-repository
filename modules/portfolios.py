@@ -589,7 +589,7 @@ def evaluate_group(
 
 def run(
     signatures_dir: Path,
-    golden_scores_path: Path,
+    golden_scores_path: Optional[Path],
     strategies_json_path: Optional[Path],
     version_schema_path: Optional[Path],
     output_dir: Path,
@@ -631,17 +631,25 @@ def run(
 
     # ---- گام ۱: بارگذاری داده‌ها ----
     signatures = load_signatures(signatures_dir, signatures_filter)
-    golden = load_golden_scores(golden_scores_path)
     _strategies_meta = load_strategies_metadata(strategies_json_path)
     version_id = load_version_schema(version_schema_path)
 
-    # ---- گام ۲: پیش‌فیلتر ----
-    candidates = prefilter_candidates(signatures, golden)
-    if candidates.empty:
+    # ---- گام ۲: پیش‌فیلتر (در صورت موجود بودن golden_scores) ----
+    if golden_scores_path is not None:
+        golden = load_golden_scores(golden_scores_path)
+        candidates = prefilter_candidates(signatures, golden)
+        if candidates.empty:
+            log.warning(
+                "هیچ استراتژی واجد شرایط (Golden score >= %s) یافت نشد.",
+                GOLDEN_SCORE_THRESHOLD
+            )
+    else:
         log.warning(
-            "هیچ استراتژی واجد شرایط (Golden score >= %s) یافت نشد.",
-            GOLDEN_SCORE_THRESHOLD
+            "golden_scores ارائه نشده — پیش‌فیلتر Golden رد می‌شود و همه‌ی "
+            "%d رکورد signatures به‌عنوان candidate در نظر گرفته می‌شوند.",
+            len(signatures)
         )
+        candidates = signatures
 
     # ---- گام ۳: استخراج لیست امضاهای منحصربه‌فرد ----
     all_sig_keys: list[tuple[str, str]] = (
@@ -836,8 +844,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="مسیر پوشه‌ی فایل‌های .jsonl signatures",
     )
     parser.add_argument(
-        "--golden-scores", required=True, type=Path,
-        help="مسیر فایل golden_scores.parquet",
+        "--golden-scores", required=False, type=Path, default=None,
+        help="مسیر فایل golden_scores.parquet (اختیاری — اگر داده نشود، بدون "
+             "پیش‌فیلتر Golden روی همه‌ی signatureها اجرا می‌شود)",
     )
     parser.add_argument(
         "--strategies-json", required=False, type=Path, default=None,
