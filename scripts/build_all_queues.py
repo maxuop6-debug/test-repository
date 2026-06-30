@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# build_all_queues.py - ترکیب چهار اسکریپت صف‌ساز با لاگ‌گیری دقیق
-# مراحل: work → golden → correlation → portfolios
+# build_all_queues.py - ترکیب سه اسکریپت صف‌ساز با لاگ‌گیری دقیق
+# مراحل: work → golden → portfolios
+# (ماژول correlation به‌طور کامل حذف شده است)
 
 import os
 import sys
@@ -574,107 +575,7 @@ def build_golden_queue(repo, token, password):
     log(f"✅ تعداد {len(new_signatures)} signature جدید به all_combinations_golden.json اضافه شد")
     return len(new_signatures)
 
-# ================================ مرحله ۳: Correlation Queue ================================
 
-def build_correlation_queue(repo, token, password):
-    log("=" * 60)
-    log("🔄 مرحله ۳: ساخت صف correlation")
-    log("=" * 60)
-
-    # دانلود completed_correlation.json
-    log("  دانلود completed_correlation.json...")
-    completed_content = gh_api_get(repo, "completed_correlation.json")
-    if completed_content is not None:
-        try:
-            completed_correlation = json.loads(completed_content)
-            if not isinstance(completed_correlation, list):
-                completed_correlation = []
-        except Exception:
-            completed_correlation = []
-    else:
-        completed_correlation = []
-
-    completed_set = set(completed_correlation)
-    log(f"  تعداد signatureهایی که قبلاً در completed_correlation.json ثبت شده‌اند: {len(completed_set)}")
-
-    # دریافت signatures در سطح فایل .jsonl — با فرمت {coin_composition, signature}
-    all_signatures_raw = get_all_signatures_from_archives(repo, password, key_name="signature")
-    log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures_raw)}")
-
-    if not all_signatures_raw:
-        log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
-        return 0
-
-    # coin_composition باید از قسمت پوشه (SAFE_COIN، یعنی parts[-2] مسیر) استخراج شود،
-    # نه از نام فایل. مسیر نمونه:
-    # signatures/{module}/{strategy}/{SAFE_COIN}/{interval}_{model}.jsonl
-    def _extract_coin_composition(sig_path):
-        parts = sig_path.split('/')
-        if len(parts) >= 2:
-            return parts[-2]
-        return sig_path
-
-    all_signatures = []
-    for raw in all_signatures_raw:
-        sig_value = raw["signature"]
-        coin_comp = _extract_coin_composition(sig_value)
-        all_signatures.append({"coin_composition": coin_comp, "signature": sig_value})
-
-    new_signatures = [s for s in all_signatures if s["signature"] not in completed_set]
-    log(f"  تعداد signatureهای جدید (نه در completed_correlation): {len(new_signatures)}")
-
-    if not new_signatures:
-        log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
-        return 0
-
-    # دانلود صف موجود
-    log("  دانلود all_combinations_correlation.json...")
-    combos_content = gh_api_get(repo, "all_combinations_correlation.json")
-    if combos_content is not None:
-        try:
-            existing_combos = json.loads(combos_content)
-            if not isinstance(existing_combos, list):
-                existing_combos = []
-        except Exception:
-            existing_combos = []
-    else:
-        existing_combos = []
-    log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
-
-    existing_sigs_in_queue = {
-        c.get("signature") for c in existing_combos if isinstance(c, dict)
-    }
-    new_signatures = [s for s in new_signatures if s["signature"] not in existing_sigs_in_queue]
-    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
-
-    if not new_signatures:
-        log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
-        return 0
-
-    updated_combos = existing_combos + new_signatures
-
-    tmp_file = "/tmp/all_combinations_correlation.json"
-    with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(updated_combos, f, indent=2, ensure_ascii=False)
-
-    sha_combos = get_file_sha(repo, "all_combinations_correlation.json")
-    if not upload_file_with_curl(repo, "all_combinations_correlation.json", tmp_file, sha_combos, "update correlation queue"):
-        raise RuntimeError("آپلود all_combinations_correlation.json ناموفق بود")
-
-    new_sig_paths = [s["signature"] for s in new_signatures]
-    updated_completed = completed_correlation + new_sig_paths
-    tmp_completed = "/tmp/completed_correlation.json"
-    with open(tmp_completed, "w", encoding="utf-8") as f:
-        json.dump(updated_completed, f, indent=2, ensure_ascii=False)
-
-    sha_completed = get_file_sha(repo, "completed_correlation.json")
-    if not upload_file_with_curl(repo, "completed_correlation.json", tmp_completed, sha_completed, "update completed correlation"):
-        raise RuntimeError("آپدیت completed_correlation.json ناموفق بود")
-
-    log(f"✅ تعداد {len(new_signatures)} signature جدید به all_combinations_correlation.json اضافه شد")
-    return len(new_signatures)
-
-# ================================ مرحله ۴: Portfolios Queue ================================
 
 def _install_pandas():
     log("  نصب pandas و pyarrow...")
@@ -749,7 +650,7 @@ def _get_qualified_signatures(parquet_path, min_score=45):
 
 def build_portfolios_queue(repo, token, password, min_score=45.0):
     log("=" * 60)
-    log("🔄 مرحله ۴: ساخت صف portfolios")
+    log("🔄 مرحله ۳: ساخت صف portfolios")
     log("=" * 60)
 
     # دانلود completed_portfolios.json
@@ -773,7 +674,7 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     dec_path = "/tmp/golden_scores.parquet"
 
     log("  دانلود golden_scores.parquet.enc...")
-    if not gh_api_get_binary(repo, "analysis_results/golden_scores.parquet.enc", enc_path):
+    if not gh_api_get_binary(repo, "golden_scores.parquet.enc", enc_path):
         log("  golden_scores.parquet.enc یافت نشد — احتمالاً golden هنوز اجرا نشده. رد می‌شویم.", 'WARNING')
         return 0
 
@@ -865,7 +766,7 @@ def main():
 
     log(f"  THIRD_REPO: {'✅ ' + third_repo if third_repo else '❌ تنظیم نشده'}")
     log(f"  GH_TOKEN: {'✅ تنظیم شده' if gh_token else '❌ تنظیم نشده'}")
-    log(f"  RESULTS_PASSWORD: {'✅ تنظیم شده' if results_password else '⚠️ تنظیم نشده (golden/correlation/portfolios نیاز دارند)'}")
+    log(f"  RESULTS_PASSWORD: {'✅ تنظیم شده' if results_password else '⚠️ تنظیم نشده (golden/portfolios نیاز دارند)'}")
 
     if not third_repo or not gh_token:
         log("THIRD_REPO یا GH_TOKEN تنظیم نشده است. خروج.", 'ERROR')
@@ -882,11 +783,10 @@ def main():
         log(f"❌ مرحله ۱ (work) با خطا مواجه شد: {e}", 'ERROR')
         sys.exit(1)
 
-    # مرحله ۲ و ۳ (golden, correlation) نیازمند رمزگشایی آرشیوها هستند
+    # مرحله ۲ و ۳ (golden, portfolios) نیازمند رمزگشایی آرشیوها هستند
     if not results_password:
-        log("⚠️ RESULTS_PASSWORD تنظیم نشده — مراحل golden، correlation و portfolios رد می‌شوند", 'WARNING')
+        log("⚠️ RESULTS_PASSWORD تنظیم نشده — مراحل golden و portfolios رد می‌شوند", 'WARNING')
         results['golden'] = 0
-        results['correlation'] = 0
         results['portfolios'] = 0
     else:
         # مرحله ۲: golden
@@ -898,22 +798,13 @@ def main():
             log(f"❌ مرحله ۲ (golden) با خطا مواجه شد: {e}", 'ERROR')
             sys.exit(1)
 
-        # مرحله ۳: correlation
-        try:
-            count = build_correlation_queue(third_repo, gh_token, results_password)
-            results['correlation'] = count
-            log(f"✅ مرحله ۳ (correlation) با موفقیت تمام شد — {count} signature جدید")
-        except Exception as e:
-            log(f"❌ مرحله ۳ (correlation) با خطا مواجه شد: {e}", 'ERROR')
-            sys.exit(1)
-
-        # مرحله ۴: portfolios
+        # مرحله ۳: portfolios
         try:
             count = build_portfolios_queue(third_repo, gh_token, results_password)
             results['portfolios'] = count
-            log(f"✅ مرحله ۴ (portfolios) با موفقیت تمام شد — {count} signature جدید")
+            log(f"✅ مرحله ۳ (portfolios) با موفقیت تمام شد — {count} signature جدید")
         except Exception as e:
-            log(f"❌ مرحله ۴ (portfolios) با خطا مواجه شد: {e}", 'ERROR')
+            log(f"❌ مرحله ۳ (portfolios) با خطا مواجه شد: {e}", 'ERROR')
             sys.exit(1)
 
     # خلاصه نهایی
@@ -921,7 +812,6 @@ def main():
     log("📊 خلاصه کل عملیات:")
     log(f"   work        → {results.get('work', 0)} ترکیب جدید")
     log(f"   golden      → {results.get('golden', 0)} signature جدید")
-    log(f"   correlation → {results.get('correlation', 0)} signature جدید")
     log(f"   portfolios  → {results.get('portfolios', 0)} signature جدید")
     log("✅ همه‌ی صف‌ها با موفقیت ساخته شدند")
     log(f"📄 فایل لاگ: {LOG_FILE}")
