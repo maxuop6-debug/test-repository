@@ -28,6 +28,7 @@ import argparse
 import itertools
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -121,6 +122,7 @@ def _default_status() -> dict:
         "total_chunks": 0,
         "chunk_size": DEFAULT_CHUNK_SIZE,
         "status": "running",
+        "total_raw_portfolios": 0,  # ========== باگ ۷: شمارش کاندیدهای پیش از فیلتر مطلق ==========
         "last_updated": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -215,15 +217,36 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         with open(signatures_filter, "r", encoding="utf-8") as f:
             _filter_data = json.load(f)
         # filter.json ممکن است آرایه‌ای از dict (با کلید path) یا آرایه‌ای از string باشد
-        if _filter_data and isinstance(_filter_data[0], dict):
-            allowed_signatures = set(item["path"] for item in _filter_data)
-        else:
-            allowed_signatures = set(_filter_data)
+        # ========== باگ ۵ رفع شد: "path" باید با مسیر/نام فایل JSONL مقایسه شود نه data["signature"] ==========
+        allowed_raw = []
+        for item in _filter_data:
+            if isinstance(item, dict):
+                val = item.get("path") or item.get("signature")
+            else:
+                val = item
+            if val:
+                allowed_raw.append(str(val))
+
+        # برای هر مقدار مجاز، هم خود رشته و هم stem (بدون مسیر/پسوند) را نگه می‌داریم
+        # تا با فرمت‌های مختلف (مسیر کامل، فقط نام فایل، یا خود امضا) تطبیق یابد.
+        allowed_signatures: set[str] = set()
+        allowed_stems: set[str] = set()
+        for val in allowed_raw:
+            allowed_signatures.add(val)
+            allowed_stems.add(Path(val).stem)
+
+        data["__source_stem"] = data["__source_file"].apply(lambda x: Path(str(x)).stem)
+
         before = len(data)
-        data = data[data["signature"].isin(allowed_signatures)].copy()
+        mask = (
+            data["signature"].isin(allowed_signatures)
+            | data["__source_file"].isin(allowed_signatures)
+            | data["__source_stem"].isin(allowed_stems)
+        )
+        data = data[mask].drop(columns="__source_stem").copy()
         log.info(
-            "اعمال signatures-filter: %d -> %d رکورد (%d امضای مجاز).",
-            before, len(data), len(allowed_signatures),
+            "اعمال signatures-filter: %d -> %d رکورد (%d مورد مجاز).",
+            before, len(data), len(allowed_raw),
         )
     elif signatures_filter is not None:
         log.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
@@ -381,33 +404,61 @@ def compensation_ratio(returns: pd.DataFrame) -> float:
     """
     نرخ جبران‌سازی: مجموع سودهای جبران‌کننده / مجموع زیان‌های جبران‌شده.
     اگر مخرج ۰ باشد = ۱.
+
+    ========== باگ ۳ رفع شد ==========
+    دوره‌های کاملاً زیان‌ده (همه‌ی اعضا هم‌زمان ضرر کرده‌اند) نیز به‌عنوان
+    زیان جبران‌نشده در مخرج لحاظ می‌شوند، نه فقط دوره‌های mixed.
     """
     gains, losses = 0.0, 0.0
     for _, row in returns.iterrows():
         losers = row[row < 0]
         gainers = row[row > 0]
         if len(losers) > 0 and len(gainers) > 0:
+            # دوره‌ی mixed: زیان توسط سود برخی اعضا جبران شده
             losses += float(-losers.sum())
             gains += float(gainers.sum())
+        elif len(losers) > 0 and len(gainers) == 0:
+            # دوره‌ی کاملاً زیان‌ده: جبران‌سازی کاملاً شکست خورده — فقط در مخرج
+            losses += float(-losers.sum())
     if losses == 0:
         return 1.0
     return gains / losses
 
 
 def survival_rate(returns: pd.DataFrame) -> float:
-    """درصد دوره‌هایی که مجموع بازده سبد مثبت بوده است."""
-    period_sums = returns.sum(axis=1)
-    if len(period_sums) == 0:
+    """
+    درصد دوره‌هایی که سبد عملکرد مثبت داشته است.
+
+    ========== باگ ۲ رفع شد ==========
+    معیار مجموع (sum) به‌تنهایی به‌نفع سبدهای ۳عضوی سوگیری دارد (صرفاً به‌خاطر
+    تعداد اعضای بیشتر، نه کیفیت ترکیب). برای عدالت در مقایسه‌ی سبدهای ۲ و ۳تایی
+    هم نرخ بقا بر اساس مجموع (قدرت تجمعی سبد) و هم بر اساس میانگین هر عضو
+    (بی‌اثر از اندازه‌ی سبد) محاسبه و ترکیب می‌شوند.
+    """
+    if len(returns) == 0:
         return 0.0
-    return float((period_sums > 0).sum()) / float(len(period_sums)) * 100.0
+    period_sums = returns.sum(axis=1)
+    period_means = returns.mean(axis=1)
+    sr_sum = float((period_sums > 0).sum()) / float(len(period_sums)) * 100.0
+    sr_mean = float((period_means > 0).sum()) / float(len(period_means)) * 100.0
+    return (sr_sum + sr_mean) / 2.0
 
 
 def avg_return(returns: pd.DataFrame) -> float:
-    """میانگین مجموع بازده سبد در دوره‌های معتبر."""
-    period_sums = returns.sum(axis=1)
-    if len(period_sums) == 0:
+    """
+    میانگین بازده سبد در دوره‌های معتبر.
+
+    ========== باگ ۲ رفع شد ==========
+    هم میانگینِ مجموع بازده (قدرت تجمعی سبد) و هم میانگینِ بازده هر عضو
+    (عادلانه میان سبدهای با اندازه‌های متفاوت) محاسبه و ترکیب می‌شوند.
+    """
+    if len(returns) == 0:
         return 0.0
-    return float(period_sums.mean())
+    period_sums = returns.sum(axis=1)
+    period_means = returns.mean(axis=1)
+    avg_sum = float(period_sums.mean())
+    avg_mean = float(period_means.mean())
+    return (avg_sum + avg_mean) / 2.0
 
 
 def avg_correlation(members: tuple, corr_lookup: dict) -> float:
@@ -439,28 +490,32 @@ def evaluate_group(
     signature: str,
     group: pd.DataFrame,
     top_n: int,
-) -> list[dict]:
-    """ارزیابی و رتبه‌بندی سبدهای ۲ و ۳ استراتژی برای یک گروه."""
+) -> tuple[list[dict], int]:
+    """ارزیابی و رتبه‌بندی سبدهای ۲ و ۳ استراتژی برای یک گروه.
+
+    خروجی: (لیست سبدهای برتر تا top_n، تعداد کل سبدهای کاندید بررسی‌شده پیش از فیلتر مطلق)
+    """
     group = build_release_dates(group)
 
     corr_df, valid_periods = compute_correlation_matrix(group)
     if corr_df.empty:
-        return []
+        return [], 0
 
     kept_pairs, _threshold = filter_pairs_by_correlation(corr_df)
     if kept_pairs.empty:
-        return []
+        return [], 0
 
     corr_lookup = {(r.a, r.b): r.correlation for r in kept_pairs.itertuples()}
     candidate_strategies = sorted(set(kept_pairs["a"]) | set(kept_pairs["b"]))
     if len(candidate_strategies) < 2:
-        return []
+        return [], 0
 
     pivot = group.pivot_table(
         index="release_date", columns="strategy_id", values="total_return", aggfunc="mean"
     )
 
     portfolios = []
+    raw_candidate_count = 0  # ========== باگ ۷ رفع شد: شمارش کاندیدها پیش از فیلتر مطلق ==========
     for size in PORTFOLIO_SIZES:
         for members in itertools.combinations(candidate_strategies, size):
             pairs = list(itertools.combinations(sorted(members), 2))
@@ -477,6 +532,8 @@ def evaluate_group(
             comp = compensation_ratio(returns)
             ar = avg_return(returns)
             ac = avg_correlation(members, corr_lookup)
+
+            raw_candidate_count += 1
 
             # گام ۸: فیلتر مطلق قبل از رنکینگ
             if sr < ABS_MIN_SURVIVAL_RATE:
@@ -498,27 +555,32 @@ def evaluate_group(
             })
 
     if not portfolios:
-        return []
+        return [], raw_candidate_count
 
     pf_df = pd.DataFrame(portfolios)
 
     # گام ۹: نرمال‌سازی و امتیازدهی
+    # ========== باگ ۴ رفع شد: survival_rate نیز با percentile_rank نرمال شود تا
+    # هم‌مقیاس با سه مؤلفه‌ی دیگر باشد و وزن‌دهی واقعی با SCORE_WEIGHTS مطابقت داشته باشد ==========
+    pf_df["survival_norm"] = percentile_rank(pf_df["survival_rate"])
     pf_df["comp_norm"] = percentile_rank(pf_df["compensation_ratio"])
     pf_df["return_norm"] = percentile_rank(pf_df["avg_return"])
     pf_df["corr_norm"] = percentile_rank(-pf_df["avg_correlation"])  # کمتر=بهتر
 
     pf_df["score"] = (
-        SCORE_WEIGHTS["survival"] * pf_df["survival_rate"]
+        SCORE_WEIGHTS["survival"] * pf_df["survival_norm"]
         + SCORE_WEIGHTS["compensation"] * pf_df["comp_norm"]
         + SCORE_WEIGHTS["correlation"] * pf_df["corr_norm"]
         + SCORE_WEIGHTS["return"] * pf_df["return_norm"]
     )
 
-    # حذف محدودیت Top-N: همه‌ی سبدهای امتیازدهی‌شده بدون محدودیت برگردانده می‌شوند.
+    # ========== باگ ۱ رفع شد: محدودیت top_n روی بهترین سبدها (بر اساس score) اعمال می‌شود ==========
     pf_df = pf_df.sort_values("score", ascending=False)
-    pf_df = pf_df.drop(columns=["comp_norm", "corr_norm", "return_norm"])
+    if top_n is not None and top_n > 0:
+        pf_df = pf_df.head(top_n)
+    pf_df = pf_df.drop(columns=["survival_norm", "comp_norm", "corr_norm", "return_norm"])
 
-    return pf_df.to_dict("records")
+    return pf_df.to_dict("records"), raw_candidate_count
 
 
 # -----------------------------------------------------------------------------
@@ -539,12 +601,30 @@ def run(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # مسیر پایه‌ی فایل موقت (بدون پسوند) — پسوند واقعی بسته به وجود pyarrow/fastparquet تعیین می‌شود
+    temp_results_base = output_dir / "_portfolios_temp"
+    temp_parquet_path = temp_results_base.with_suffix(".parquet")
+    temp_csv_path = temp_results_base.with_suffix(".csv")
+
+    # ========== باگ ۹ رفع شد ==========
+    # در اجرای غیر-resume، فایل موقت باقی‌مانده از اجرای قبلی باید پاک شود تا با
+    # داده‌های ران جدید (در صورت --resume بعدی) اشتباهاً ترکیب نشود.
+    if not resume:
+        for stale in (temp_parquet_path, temp_csv_path):
+            if stale.exists():
+                try:
+                    stale.unlink()
+                    log.info("فایل موقت قدیمی پاک شد: %s", stale)
+                except OSError as exc:
+                    log.warning("خطا در پاک‌کردن فایل موقت قدیمی %s: %s", stale, exc)
+
     # ---- گام ۰: بارگذاری وضعیت قبلی ----
     status = load_status(status_file) if resume else _default_status()
     processed_set: set[tuple] = {
         tuple(sig) if isinstance(sig, list) else sig
         for sig in status.get("processed_signatures", [])
     }
+    total_raw_portfolios = int(status.get("total_raw_portfolios", 0)) if resume else 0
 
     if resume and processed_set:
         log.info("ادامه از آخرین وقفه — %d امضا قبلاً پردازش شده‌اند.", len(processed_set))
@@ -583,7 +663,14 @@ def run(
         pending_keys[i: i + chunk_size]
         for i in range(0, len(pending_keys), chunk_size)
     ]
-    total_chunks = len(chunks)
+    total_chunks = len(chunks)  # تعداد chunk‌های باقی‌مانده در همین اجرا (برای پیشرفت لاگ)
+
+    # ========== باگ ۶ رفع شد ==========
+    # total_chunks کل (برای گزارش در status) باید مستقل از تعداد chunk‌های باقی‌مانده
+    # محاسبه شود: از روی تعداد کل گروه‌های (coin_composition, signature) و chunk_size.
+    total_chunks_overall = (
+        math.ceil(len(all_sig_keys) / chunk_size) if chunk_size > 0 else 0
+    )
 
     # start_chunk_index: اگر resume فعال باشد و قبلاً chunk‌هایی پردازش شده باشند
     start_chunk_index = 0
@@ -591,17 +678,17 @@ def run(
         # چون pending_keys قبلاً پردازش‌شده‌ها را حذف کرده، از ۰ شروع می‌کنیم
         start_chunk_index = 0
 
-    status["total_chunks"] = total_chunks + (status.get("last_chunk_index", -1) + 1 if resume else 0)
+    status["total_chunks"] = total_chunks_overall
     status["chunk_size"] = chunk_size
     status["status"] = "running"
     save_status(status_file, status)
 
     # بارگذاری نتایج قبلی از فایل موقت اگر resume فعال است
-    temp_results_path = output_dir / "_portfolios_temp.parquet"
+    # ========== باگ ۸ رفع شد: هم .parquet و هم .csv بررسی می‌شوند ==========
     all_portfolios: list[dict] = []
-    if resume and temp_results_path.exists():
+    if resume and (temp_parquet_path.exists() or temp_csv_path.exists()):
         try:
-            prev_df = _read_parquet_or_csv(temp_results_path)
+            prev_df = _read_parquet_or_csv(temp_results_base)
             all_portfolios = prev_df.to_dict("records")
             log.info("نتایج قبلی بارگذاری شد: %d سبد", len(all_portfolios))
         except Exception as exc:
@@ -622,7 +709,7 @@ def run(
             # ذخیره نتایج موقت
             if all_portfolios:
                 temp_df = pd.DataFrame(all_portfolios)
-                _save_dataframe(temp_df, temp_results_path.with_suffix(""))
+                _save_dataframe(temp_df, temp_results_base)
             save_status(status_file, status)
             break
 
@@ -643,8 +730,9 @@ def run(
                 processed_set.add(key)
                 continue
 
-            result = evaluate_group(coin_composition, signature, group, top_n)
+            result, raw_count = evaluate_group(coin_composition, signature, group, top_n)
             chunk_results.extend(result)
+            total_raw_portfolios += raw_count
             processed_set.add(key)
 
         all_portfolios.extend(chunk_results)
@@ -652,12 +740,13 @@ def run(
         # ---- به‌روزرسانی وضعیت پس از هر chunk ----
         status["last_chunk_index"] = chunk_idx
         status["processed_signatures"] = [list(k) for k in processed_set]
+        status["total_raw_portfolios"] = total_raw_portfolios
         status["status"] = "running"
 
         # ذخیره نتایج موقت
         if all_portfolios:
             temp_df = pd.DataFrame(all_portfolios)
-            _save_dataframe(temp_df, temp_results_path.with_suffix(""))
+            _save_dataframe(temp_df, temp_results_base)
 
         save_status(status_file, status)
         log.info(
@@ -674,11 +763,15 @@ def run(
     columns = [
         "coin_composition", "signature", "members", "survival_rate",
         "compensation_ratio", "avg_return", "avg_correlation", "score",
-        "sample_count",  # ========== باگ ۲ رفع شد: sample_count اضافه شد ==========
+        "sample_count",
         "version_id", "created_at",
     ]
 
-    total_before_filter = len(all_portfolios)
+    # ========== باگ ۷ رفع شد ==========
+    # total_before_filter اکنون واقعاً تعداد سبدهای کاندید پیش از اعمال فیلترهای
+    # مطلق (ABS_MIN_*) را نشان می‌دهد، نه تعداد بعد از فیلتر.
+    total_before_filter = total_raw_portfolios
+    total_after_filter = len(all_portfolios)
 
     if not all_portfolios:
         log.warning("هیچ سبدی شرایط لازم را احراز نکرد. فایل خروجی خالی ساخته می‌شود.")
@@ -695,7 +788,7 @@ def run(
 
     # پاک‌کردن فایل موقت
     for suffix in (".parquet", ".csv"):
-        candidate = temp_results_path.with_suffix(suffix)
+        candidate = temp_results_base.with_suffix(suffix)
         if candidate.exists():
             try:
                 candidate.unlink()
@@ -705,6 +798,7 @@ def run(
     # ---- وضعیت نهایی ----
     status["status"] = "completed"
     status["processed_signatures"] = [list(k) for k in processed_set]
+    status["total_raw_portfolios"] = total_raw_portfolios
     save_status(status_file, status)
 
     # ---- تولید فایل خلاصه ----
@@ -713,7 +807,7 @@ def run(
         "total_signatures": len(all_sig_keys),
         "processed_signatures": len(processed_set),
         "total_portfolios_before_filter": total_before_filter,
-        "total_portfolios_after_filter": len(out_df),
+        "total_portfolios_after_filter": total_after_filter,
         "output_files": [str(final_path.name)],
         "version_id": version_id,
         "completed_at": datetime.now(timezone.utc).isoformat(),
