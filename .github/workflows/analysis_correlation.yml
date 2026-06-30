@@ -178,12 +178,7 @@ jobs:
           path: /tmp/signatures/
           retention-days: 1
 
-      - name: نصب پایتون برای تولید چانک‌های signature-based
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: تولید چانک‌های مبتنی بر signature یکتا و فیلتر با all_combinations_correlation.json
+      - name: تولید صف گسترش‌یافته (فایل‌های JSONL واقعی) و چانک‌بندی ۵۰۰ تایی در Bash
         id: gen
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -205,7 +200,7 @@ jobs:
           fi
 
           QUEUE_COUNT=$(jq length /tmp/all_combinations_correlation.json)
-          echo "[DEBUG] تعداد آیتم‌های صف: $QUEUE_COUNT"
+          echo "[DEBUG] تعداد آیتم‌های صف اصلی (سطح آرشیو): $QUEUE_COUNT"
           if [ "$QUEUE_COUNT" -eq 0 ]; then
             echo "empty=true" >> $GITHUB_OUTPUT
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
@@ -213,36 +208,58 @@ jobs:
           fi
 
           # ================================================================
-          # [DIAG] بررسی وضعیت /tmp/all_signatures قبل از فیلتر
+          # گسترش صف: از «نام آرشیو» به «فایل‌های JSONL واقعی»
+          # برای هر آیتم صف:
+          #   MODULE = بخش اول signature (مثلاً combo_10day)
+          #   STRAT  = بخش دوم signature (مثلاً Best_15m)
+          #   COIN   = coin_composition (با علامت + ، بدون تبدیل به _)
+          #   مسیر:  /tmp/signatures/signatures/{MODULE}/{STRAT}/{COIN}/*.jsonl
           # ================================================================
           SIG_JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' 2>/dev/null | wc -l)
-          echo "[DIAG] تعداد فایل .jsonl موجود در /tmp/signatures قبل از فراخوانی generate_correlation_chunks.py = $SIG_JSONL_COUNT"
-          if [ "$SIG_JSONL_COUNT" -eq 0 ]; then
-            echo "[DIAG] 🔴 /tmp/signatures خالی است → تمام $QUEUE_COUNT آیتم صف به‌خاطر نبود فایل .jsonl حذف خواهند شد."
-          fi
+          echo "[DIAG] تعداد فایل .jsonl موجود در /tmp/signatures قبل از گسترش صف = $SIG_JSONL_COUNT"
 
-          # [NOTE] منطق نرمال‌سازی timestamp و symlink دیگر نیازی به اجرای inline نیست.
-          # generate_correlation_chunks.py مستقیماً strip_ts و build_jsonl_index را
-          # اجرا می‌کند و هم basename دقیق و هم نسخه بدون timestamp را match می‌کند.
+          > /tmp/expanded_queue.jsonl
+          while IFS= read -r ITEM; do
+            COIN=$(echo "$ITEM" | jq -r '.coin_composition')
+            SIG=$(echo "$ITEM" | jq -r '.signature')
+            MODULE=$(echo "$SIG" | cut -d'/' -f1)
+            STRAT=$(echo "$SIG" | cut -d'/' -f2)
+            DIR="/tmp/signatures/signatures/${MODULE}/${STRAT}/${COIN}"
+            if [ -d "$DIR" ]; then
+              find "$DIR" -maxdepth 1 -name '*.jsonl' -print0 2>/dev/null | while IFS= read -r -d '' FPATH; do
+                FNAME=$(basename "$FPATH")
+                jq -nc --arg coin "$COIN" --arg sig "signatures/${MODULE}/${STRAT}/${COIN}/${FNAME}" \
+                  '{coin_composition: $coin, signature: $sig}'
+              done >> /tmp/expanded_queue.jsonl
+            fi
+          done < <(jq -c '.[]' /tmp/all_combinations_correlation.json)
 
-          # [DIAG] نمونه آیتم صف vs نمونه stem موجود برای تأیید تطبیق
-          echo "[DIAG] نمونه sig از صف:"
-          jq -r '.[0:3] | .[] | .signature // .sig // "N/A"' /tmp/all_combinations_correlation.json 2>/dev/null || true
-          echo "[DIAG] نمونه stems موجود در /tmp/all_signatures:"
-          find /tmp/signatures -name '*.jsonl' | head -5 | xargs -I{} basename {} .jsonl 2>/dev/null || true
+          EXPANDED_COUNT=$(wc -l < /tmp/expanded_queue.jsonl | tr -d ' ')
+          echo "[DEBUG] تعداد آیتم‌های صف گسترش‌یافته (فایل‌های JSONL واقعی): $EXPANDED_COUNT"
 
-          python modules/generate_correlation_chunks.py \
-            --signatures-dir /tmp/signatures \
-            --queue-file /tmp/all_combinations_correlation.json \
-            --output-dir /tmp/correlation_chunks
-
-          if [ -f /tmp/correlation_chunks/empty.flag ]; then
+          if [ "$EXPANDED_COUNT" -eq 0 ]; then
+            echo "[DIAG] 🔴 صف گسترش‌یافته خالی است — هیچ پوشه/فایل JSONL منطبقی برای آیتم‌های صف یافت نشد."
             echo "empty=true" >> $GITHUB_OUTPUT
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          NUM_CHUNKS=$(cat /tmp/correlation_chunks/num_chunks.txt)
+          jq -s '.' /tmp/expanded_queue.jsonl > /tmp/expanded_queue.json
+          rm -f /tmp/expanded_queue.jsonl
+
+          # ================================================================
+          # چانک‌بندی ۵۰۰ تایی صف گسترش‌یافته
+          # ================================================================
+          CHUNK_SIZE=500
+          TOTAL=$(jq length /tmp/expanded_queue.json)
+          NUM_CHUNKS=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+          for ((i=0; i<NUM_CHUNKS; i++)); do
+            START=$((i*CHUNK_SIZE))
+            jq ".[$START:$((START+CHUNK_SIZE))]" /tmp/expanded_queue.json > /tmp/correlation_chunks/chunk_${i}.json
+          done
+          echo "$NUM_CHUNKS" > /tmp/correlation_chunks/num_chunks.txt
+          echo "[DEBUG] تعداد چانک‌های ساخته‌شده (۵۰۰ تایی): $NUM_CHUNKS از مجموع $TOTAL آیتم"
+
           INDICES="["
           for ((i=0; i<NUM_CHUNKS; i++)); do
             [ $i -gt 0 ] && INDICES+=", "
@@ -585,13 +602,90 @@ jobs:
             rm -f /tmp/current.json /tmp/new_content.json /tmp/new_content_base64.txt /tmp/payload.json /tmp/upload_response.txt /tmp/completed_*.json /tmp/completed_base64.txt /tmp/payload_completed.json
           fi
 
-      - name: دانلود artifact های correlations.parquet رمزنگاری‌شده
+      - name: "دانلود artifact های correlations.parquet رمزنگاری‌شده (روش ۱ - actions/download-artifact)"
+        id: dl_method1
         uses: actions/download-artifact@v4
         with:
           pattern: corr-parquet-*-${{ github.run_id }}
           path: /tmp/corr_artifacts
           merge-multiple: false
         continue-on-error: true
+
+      - name: بررسی نتیجه روش ۱ و اجرای روش ۲ در صورت شکست (gh run download)
+        id: dl_method2
+        if: steps.dl_method1.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⚠️ روش ۱ (actions/download-artifact) ناموفق بود — تلاش با روش ۲ (gh run download)..."
+          mkdir -p /tmp/corr_artifacts
+          if gh run download ${{ github.run_id }} \
+              --repo ${{ github.repository }} \
+              --pattern "corr-parquet-*-${{ github.run_id }}" \
+              --dir /tmp/corr_artifacts; then
+            FOUND=$(find /tmp/corr_artifacts -name 'correlations.tar.gz.enc' 2>/dev/null | wc -l)
+            if [ "$FOUND" -gt 0 ]; then
+              echo "✅ روش ۲ موفق بود — $FOUND فایل دریافت شد."
+              echo "success=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ روش ۲ اجرا شد ولی هیچ فایلی یافت نشد."
+              echo "success=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "⚠️ روش ۲ (gh run download) ناموفق بود."
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: بررسی نتیجه روش ۲ و اجرای روش ۳ در صورت شکست (curl + GitHub API)
+        id: dl_method3
+        if: steps.dl_method1.outcome != 'success' && steps.dl_method2.outputs.success != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⚠️ روش ۲ (gh run download) ناموفق بود — تلاش با روش ۳ (curl + GitHub API)..."
+          mkdir -p /tmp/corr_artifacts
+
+          ARTIFACTS_JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100")
+
+          MATCHED=$(echo "$ARTIFACTS_JSON" | jq -c --arg run "${{ github.run_id }}" \
+            '[.artifacts[] | select(.name | startswith("corr-parquet-") and endswith("-" + $run))]')
+          MATCHED_COUNT=$(echo "$MATCHED" | jq 'length')
+          echo "[DEBUG] تعداد artifact های منطبق یافت‌شده از API: $MATCHED_COUNT"
+
+          DOWNLOADED=0
+          if [ "$MATCHED_COUNT" -gt 0 ]; then
+            echo "$MATCHED" | jq -c '.[]' | while IFS= read -r ART; do
+              ART_ID=$(echo "$ART" | jq -r '.id')
+              ART_NAME=$(echo "$ART" | jq -r '.name')
+              DEST_DIR="/tmp/corr_artifacts/$ART_NAME"
+              mkdir -p "$DEST_DIR"
+              ZIP_PATH="/tmp/corr_artifacts/${ART_NAME}.zip"
+              HTTP_CODE=$(curl -s -L -o "$ZIP_PATH" -w "%{http_code}" \
+                -H "Authorization: token $GH_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/${ART_ID}/zip")
+              if [ "$HTTP_CODE" = "200" ] && [ -s "$ZIP_PATH" ]; then
+                unzip -o -q "$ZIP_PATH" -d "$DEST_DIR" && rm -f "$ZIP_PATH"
+              else
+                echo "⚠️ دانلود artifact $ART_NAME ناموفق بود (HTTP $HTTP_CODE)."
+              fi
+            done
+          fi
+
+          FOUND=$(find /tmp/corr_artifacts -name 'correlations.tar.gz.enc' 2>/dev/null | wc -l)
+          if [ "$FOUND" -gt 0 ]; then
+            echo "✅ روش ۳ موفق بود — $FOUND فایل دریافت شد."
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "🔴 روش ۳ نیز ناموفق بود — هیچ فایلی دریافت نشد."
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: توقف Workflow در صورت شکست هر سه روش دانلود
+        if: steps.dl_method1.outcome != 'success' && steps.dl_method2.outputs.success != 'true' && steps.dl_method3.outputs.success != 'true'
+        run: |
+          echo "🔴 هر سه روش دانلود artifact های corr-parquet ناموفق بودند."
+          exit 1
 
       - name: آپلود نهایی correlations.parquet.enc به مخزن سوم
         env:
