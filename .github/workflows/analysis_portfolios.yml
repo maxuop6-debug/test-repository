@@ -22,156 +22,10 @@ concurrency:
 
 jobs:
   # ================================================================
-  # generate-reports: تولید گزارش‌های جامع نسخه ۵ و commit به مخزن سوم
-  # ================================================================
-  generate-reports:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 1. Checkout مخزن اصلی
-        uses: actions/checkout@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 2. نصب پایتون و کتابخانه‌ها
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: نصب وابستگی‌ها
-        run: pip install pandas numpy scipy pyarrow
-
-      - name: 3. Clone مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          git clone \
-            --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/${THIRD_REPO}.git" \
-            /tmp/third_repo
-
-      - name: 4. اجرای loader.py
-        run: |
-          python modules/loader.py \
-            --news-dir data/news \
-            --results-dir /tmp/third_repo/aggregated \
-            --strategies-dir /tmp/third_repo/strategies \
-            --output-news /tmp/news.pickle \
-            --output-strategies /tmp/strategies.json
-
-      - name: 5. اجرای calculator_stoploss.py
-        run: |
-          python modules/calculator_stoploss.py \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --strategies-dir /tmp/third_repo/strategies \
-            --output /tmp/stoploss.json
-
-      - name: 6. اجرای calculators.py returns
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py returns \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --output /tmp/returns.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 7. اجرای calculators.py risk
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py risk \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/risk.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 8. اجرای calculators.py inverse
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          python modules/calculators.py inverse \
-            --strategies-json /tmp/strategies.json \
-            --results-base /tmp/third_repo/aggregated \
-            --stoploss-cache /tmp/stoploss.json \
-            --output /tmp/inverse.json \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 9. اجرای calculators.py report
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          mkdir -p /tmp/reports
-          python modules/calculators.py report \
-            --returns-cache /tmp/returns.json \
-            --strategies-json /tmp/strategies.json \
-            --risk-cache /tmp/risk.json \
-            --inverse-cache /tmp/inverse.json \
-            --results-base /tmp/third_repo/aggregated \
-            --news-pickle /tmp/news.pickle \
-            --output-dir /tmp/reports \
-            --password "$RESULTS_PASSWORD"
-
-      - name: 10. رمزنگاری reports و آماده‌سازی برای commit
-        env:
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
-        run: |
-          tar -czf /tmp/reports.tar.gz -C /tmp reports
-          echo "✅ فشرده‌سازی reports انجام شد ($(du -sh /tmp/reports.tar.gz | cut -f1))"
-          node -e "
-            const crypto = require('crypto'), fs = require('fs');
-            const pass = process.env.RESULTS_PASSWORD;
-            const data = fs.readFileSync('/tmp/reports.tar.gz');
-            const key  = crypto.scryptSync(pass, 'salt', 32);
-            const iv   = crypto.randomBytes(16);
-            const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-            const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
-            fs.writeFileSync('/tmp/reports.tar.gz.enc', enc);
-          "
-          echo "✅ رمزنگاری reports.tar.gz.enc انجام شد"
-          rm -rf /tmp/reports /tmp/reports.tar.gz
-
-      - name: 11. Commit و Push reports.tar.gz.enc به مخزن سوم
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-        run: |
-          cd /tmp/third_repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          PUSH_RETRY=0; PUSH_MAX=5
-          while [ $PUSH_RETRY -lt $PUSH_MAX ]; do
-            git fetch origin main 2>/dev/null
-            git rebase origin/main 2>/dev/null
-            REBASE_STATUS=$?
-            if [ $REBASE_STATUS -ne 0 ]; then
-              echo "⚠️ rebase conflict — abort و retry ($((PUSH_RETRY+1))/$PUSH_MAX)"
-              git rebase --abort 2>/dev/null || true
-              PUSH_RETRY=$((PUSH_RETRY+1))
-              sleep $(( (RANDOM % 5) + 3 ))
-              continue
-            fi
-            git rm -rf reports/ 2>/dev/null || true
-            cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
-            git add -f reports.tar.gz.enc
-            git commit -m "update reports encrypted (run ${{ github.run_id }})" 2>/dev/null || true
-            git push origin main && break
-            echo "⚠️ push ناموفق — تلاش مجدد ($((PUSH_RETRY+1))/$PUSH_MAX)"
-            PUSH_RETRY=$((PUSH_RETRY+1))
-            sleep $(( (RANDOM % 5) + 3 ))
-          done
-          if [ $PUSH_RETRY -ge $PUSH_MAX ]; then
-            echo "ERROR: push پس از $PUSH_MAX تلاش ناموفق."
-            exit 1
-          fi
-
-  # ================================================================
   # portfolios-generate-matrix: تولید صف کار برای ماژول portfolios
   # ================================================================
   portfolios-generate-matrix:
-    needs: [generate-reports]
+    needs: []
     runs-on: ubuntu-latest
     outputs:
       matrix_items: ${{ steps.gen.outputs.matrix_items }}
@@ -181,8 +35,35 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: دانلود و استخراج یک‌باره همه archiveهای signature
+      - name: دانلود صف all_combinations_portfolios.json از مخزن سوم
+        id: queue
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/all_combinations_portfolios.json -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json")
+
+          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/all_combinations_portfolios.json ] || \
+             ! jq -e 'type == "array"' /tmp/all_combinations_portfolios.json > /dev/null 2>&1; then
+            echo "⚠️ صف all_combinations_portfolios.json نامعتبر یا یافت نشد (HTTP $HTTP_CODE) — matrix خالی."
+            echo "queue_empty=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          QUEUE_TOTAL=$(jq 'length' /tmp/all_combinations_portfolios.json)
+          echo "[DEBUG] تعداد آیتم‌های صف portfolios: $QUEUE_TOTAL"
+          if [ "$QUEUE_TOTAL" -eq 0 ]; then
+            echo "queue_empty=true" >> $GITHUB_OUTPUT
+          else
+            echo "queue_empty=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: دانلود و استخراج آرشیوهای signature برای ساخت artifact all-signatures
         id: extract
+        if: steps.queue.outputs.queue_empty == 'false'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -221,33 +102,29 @@ jobs:
           echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
 
       - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
-        if: steps.extract.outputs.jsonl_total != '0'
+        if: steps.queue.outputs.queue_empty == 'false' && steps.extract.outputs.jsonl_total != '0'
         uses: actions/upload-artifact@v4
         with:
           name: all-signatures-${{ github.run_id }}
           path: /tmp/all_signatures/
           retention-days: 1
 
-      - name: استخراج لیست امضاها و تقسیم به چانک‌های ۵۰۰ تایی با محدودیت ۱۳۰۰۰
+      - name: تقسیم صف به چانک‌های ۵۰۰ تایی بر اساس signature_path
         id: gen
+        if: steps.queue.outputs.queue_empty != 'true'
         run: |
           mkdir -p /tmp/portfolios_chunks
-          SIG_FILES=$(find /tmp/all_signatures -name '*.jsonl' | sed 's#^/tmp/all_signatures/##' | jq -R -s -c 'split("\n") | map(select(length > 0))')
-          TOTAL=$(echo "$SIG_FILES" | jq 'length')
+
+          # استخراج signature_path از صف (بدون اعمال هیچ محدودیت کلّی روی تعداد آیتم‌ها)
+          jq -c '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null))' \
+            /tmp/all_combinations_portfolios.json > /tmp/portfolios_chunks/queue_paths.json
+          TOTAL=$(jq 'length' /tmp/portfolios_chunks/queue_paths.json)
 
           if [ "$TOTAL" -eq 0 ]; then
             echo "empty=true" >> $GITHUB_OUTPUT
             echo "matrix_items=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          if [ "$TOTAL" -gt 13000 ]; then
-            echo "$SIG_FILES" | jq '.[:13000]' > /tmp/portfolios_chunks/signatures_capped.json
-            TOTAL=13000
-          else
-            echo "$SIG_FILES" > /tmp/portfolios_chunks/signatures_capped.json
-          fi
-          SIG_FILES_CAPPED=$(cat /tmp/portfolios_chunks/signatures_capped.json)
 
           CHUNK_SIZE=500
           CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
@@ -276,22 +153,23 @@ jobs:
             echo "empty=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          echo "[DEBUG] پردازش chunk‌های $INPUT_START تا $INPUT_END از مجموع $CHUNK_COUNT"
+          echo "[DEBUG] پردازش chunk‌های $INPUT_START تا $INPUT_END از مجموع $CHUNK_COUNT (TOTAL=$TOTAL)"
 
           INDICES="["
           for ((i=0; i<CHUNK_COUNT; i++)); do
             START=$((i * CHUNK_SIZE))
             END=$((START + CHUNK_SIZE))
-            echo "$SIG_FILES_CAPPED" | jq ".[$START:$END]" > /tmp/portfolios_chunks/chunk_${i}.json
+            jq ".[$START:$END]" /tmp/portfolios_chunks/queue_paths.json > /tmp/portfolios_chunks/chunk_${i}.json
             if [ "$i" -ge "$INPUT_START" ] && [ "$i" -le "$INPUT_END" ]; then
               if [ "${#INDICES}" -gt 1 ]; then INDICES+=", "; fi
               INDICES+="$i"
             fi
           done
           INDICES+="]"
+          rm -f /tmp/portfolios_chunks/queue_paths.json
           echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
           echo "empty=false" >> $GITHUB_OUTPUT
-          echo "✅ $TOTAL امضا در $CHUNK_COUNT چانک — اجرای chunk‌های $INPUT_START تا $INPUT_END."
+          echo "✅ $TOTAL signature در $CHUNK_COUNT چانک — اجرای chunk‌های $INPUT_START تا $INPUT_END."
 
       - name: آپلود چانک‌های portfolios
         if: steps.gen.outputs.empty == 'false'
@@ -305,7 +183,7 @@ jobs:
   # portfolios-batch: پردازش موازی چانک‌های portfolios
   # ================================================================
   portfolios-batch:
-    needs: [generate-reports, portfolios-generate-matrix]
+    needs: [portfolios-generate-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     if: ${{ needs.portfolios-generate-matrix.outputs.empty == 'false' }}
@@ -744,6 +622,64 @@ jobs:
               /tmp/completed_base64.txt /tmp/payload_completed.json
           fi
 
+      - name: دانلود portfolios_scores (روش اول)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: portfolios-scores-*-${{ github.run_id }}
+          path: /tmp/portfolios_scores_parts
+          merge-multiple: false
+        continue-on-error: true
+        id: dl1
+
+      - name: گزارش نتیجه روش اول
+        run: |
+          if [ "${{ steps.dl1.outcome }}" = "success" ]; then
+            COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
+            echo "✅ روش اول موفق بود — $COUNT فایل parquet دریافت شد."
+          else
+            echo "⚠️ روش اول (download-artifact) ناموفق بود — تلاش با روش دوم..."
+          fi
+
+      - name: دانلود portfolios_scores (روش دوم)
+        if: steps.dl1.outcome != 'success'
+        id: dl2
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          mkdir -p /tmp/portfolios_scores_parts
+          gh run download ${{ github.run_id }} \
+            --pattern "portfolios-scores-*-${{ github.run_id }}" \
+            --dir /tmp/portfolios_scores_parts
+          COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "⚠️ روش دوم (gh run download) هیچ فایلی پیدا نکرد."
+            exit 1
+          fi
+          echo "✅ روش دوم موفق بود — $COUNT فایل parquet دریافت شد."
+
+      - name: دانلود portfolios_scores (روش سوم)
+        if: steps.dl1.outcome != 'success' && steps.dl2.outcome != 'success'
+        id: dl3
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          mkdir -p /tmp/portfolios_scores_parts
+          ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
+          echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | startswith("portfolios-scores-")) | .archive_download_url' | while read -r url; do
+            curl -L -H "Authorization: token $GH_TOKEN" -o /tmp/artifact.zip "$url"
+            unzip -o -d /tmp/portfolios_scores_parts /tmp/artifact.zip
+            rm -f /tmp/artifact.zip
+          done
+          COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ روش سوم (GitHub API + curl) نیز هیچ فایلی پیدا نکرد."
+            echo "ERROR: هر سه روش دانلود portfolios_scores ناموفق بودند."
+            exit 1
+          fi
+          echo "✅ روش سوم موفق بود — $COUNT فایل parquet دریافت شد."
+
       - name: آپلود portfolios.parquet به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -751,12 +687,9 @@ jobs:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
           # جمع‌آوری و ادغام portfolios parquet از artifactهای batch
+          # (دانلود artifactها قبلاً در یکی از سه مرحله قبل با موفقیت انجام شده است)
           pip install pyarrow pandas --quiet --break-system-packages 2>/dev/null || \
             pip install pyarrow pandas --quiet 2>/dev/null || true
-
-          gh run download ${{ github.run_id }} \
-            --pattern "portfolios-scores-*-${{ github.run_id }}" \
-            --dir /tmp/portfolios_scores_parts 2>/dev/null || true
 
           PARQUET_COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
           if [ "$PARQUET_COUNT" -eq 0 ]; then
