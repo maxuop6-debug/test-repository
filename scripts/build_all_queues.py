@@ -196,60 +196,69 @@ def check_file_exists(repo, path):
 
 # ================================ تابع مشترک دریافت signatures از آرشیوها ================================
 
-def _list_jsonl_inside_archive(repo, archive_repo_path, password):
+# ================================ تابع مشترک دریافت signatures از آرشیوها ================================
+
+def _list_jsonl_inside_archive(repo, archive_path, password):
     """
-    یک آرشیو .tar.gz.enc را دانلود+دیکریپت می‌کند و فقط لیست مسیرهای .jsonl
-    داخل آن را برمی‌گرداند (بدون extract کامل — با tar -tzf روی استریم).
-    در صورت خطا، لیست خالی برمی‌گرداند (caller باید fallback به اسم آرشیو بزند).
+    آرشیو tar.gz.enc را دانلود، رمزگشایی و فهرست فایل‌های .jsonl داخل آن را برمی‌گرداند.
+
+    خروجی:
+    - لیستی از مسیرهای نسبی .jsonl همان‌طور که داخل tar هستند (مثلاً
+      "signatures/combo_10day/Best_15m/BTCUSDT/fixed_5d_simple_hybrid.jsonl")
+    - در صورت بروز هرگونه خطا (دانلود، رمزگشایی یا tar)، None برمی‌گرداند تا
+      caller این آرشیو را کاملاً نادیده بگیرد (هیچ‌گاه نام آرشیو را به عنوان
+      signature استفاده نکند).
     """
-    base = os.path.basename(archive_repo_path)
-    enc_path = f"/tmp/_arch_{base}"
-    dec_path = enc_path[:-len(".enc")] if enc_path.endswith(".enc") else enc_path + ".dec"
+    enc_path = "/tmp/_archive_list_tmp.tar.gz.enc"
+    dec_path = "/tmp/_archive_list_tmp.tar.gz"
 
-    try:
-        if not gh_api_get_binary(repo, archive_repo_path, enc_path):
-            return []
-        if not password:
-            log(f"  [ARCHIVES] رمز عبور برای دیکریپت {base} تنظیم نشده — رد می‌شود", 'WARNING')
-            return []
-        if not decrypt_file(enc_path, dec_path, password):
-            return []
+    for p in (enc_path, dec_path):
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
 
-        result = subprocess.run(
-            ["tar", "-tzf", dec_path], capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            log(f"  [ARCHIVES] tar -tzf ناموفق برای {base}: {result.stderr[:200]}", 'WARNING')
-            return []
+    if not gh_api_get_binary(repo, archive_path, enc_path):
+        log(f"  [ARCHIVES] دانلود ناموفق: {archive_path}", 'ERROR')
+        return None
 
-        return [
-            line.strip() for line in result.stdout.splitlines()
-            if line.strip().endswith(".jsonl")
-        ]
-    finally:
+    if not decrypt_file(enc_path, dec_path, password):
+        log(f"  [ARCHIVES] رمزگشایی ناموفق: {archive_path}", 'ERROR')
         for p in (enc_path, dec_path):
             try:
                 os.unlink(p)
             except Exception:
                 pass
+        return None
+
+    result = subprocess.run(["tar", "-tzf", dec_path], capture_output=True, text=True)
+    for p in (enc_path, dec_path):
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
+
+    if result.returncode != 0:
+        log(f"  [ARCHIVES] tar -tzf ناموفق برای {archive_path}: {result.stderr[:200]}", 'ERROR')
+        return None
+
+    entries = [ln.strip() for ln in result.stdout.split('\n') if ln.strip()]
+    jsonl_entries = [e for e in entries if e.endswith('.jsonl')]
+
+    if not jsonl_entries:
+        log(f"  [ARCHIVES] هیچ فایل .jsonl داخل {archive_path} یافت نشد", 'WARNING')
+
+    return jsonl_entries
 
 
-def get_all_signatures_from_archives(repo, key_name="signature_path", password=None, expand_contents=False):
+def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
     """
-    لیست تمام signatureهای موجود در signature_archives/ را برمی‌گرداند.
-    key_name: نام کلید دیکشنری خروجی ('signature_path' برای golden/portfolios، 'signature' برای correlation)
+    تمام آرشیوهای signature_archives/{module}/{strategy}/*.tar.gz.enc را پیدا کرده،
+    هرکدام را دانلود/رمزگشایی/استخراج‌لیست می‌کند و برای هر فایل .jsonl داخل آن
+    یک آیتم {key_name: <مسیر کامل jsonl شامل 'signatures/'>} می‌سازد.
 
-    از دو ساختار پشتیبانی می‌کند:
-    - ساختار استاندارد: signature_archives/{module}/{strategy}/{coin}/{base_name}.tar.gz.enc
-    - ساختار مسطح: signature_archives/{filename}.tar.gz.enc (فایل‌ها مستقیماً در ریشه)
-
-    FIX (2026-06): قبلاً signature مستقیماً از اسم خودِ آرشیو (chunk_N_timestamp)
-    ساخته می‌شد. اما بعد از extract، هیچ فایلی با این اسم وجود نداره — هر آرشیو
-    شامل چندین فایل .jsonl واقعی (coin-level) است که در یک پوشه‌ی مشترک با سایر
-    آرشیوهای همان strategy ادغام می‌شوند. اگر expand_contents=True باشد، به‌جای
-    اسم آرشیو، محتوای واقعی داخل هر آرشیو (دانلود+دیکریپت+tar -tzf، بدون extract
-    کامل) خوانده می‌شود و برای هر فایل .jsonl داخلی یک signature واقعی و
-    قابل-match ساخته می‌شود.
+    آرشیوهای خراب یا بدون .jsonl به‌طور کامل نادیده گرفته می‌شوند — هیچ‌گاه
+    نام آرشیو به عنوان signature بازگردانده نمی‌شود.
     """
     log("  [ARCHIVES] دریافت لیست محتوای signature_archives/...")
     cmd = f"gh api repos/{repo}/contents/signature_archives --jq '.[].name' 2>/dev/null"
@@ -261,63 +270,48 @@ def get_all_signatures_from_archives(repo, key_name="signature_path", password=N
     top_level_names = [m.strip() for m in result.stdout.strip().split('\n') if m.strip()]
     log(f"  [ARCHIVES] محتوای سطح اول: {top_level_names}")
 
-    # بررسی ساختار: اگر combo_10day یا combo_monthly وجود داشت → ساختار استاندارد
     standard_modules = {"combo_10day", "combo_monthly"}
     found_modules = [n for n in top_level_names if n in standard_modules]
 
-    all_signatures = []
+    if not found_modules:
+        log("  [ARCHIVES] هیچ ماژول استانداردی (combo_10day/combo_monthly) یافت نشد", 'ERROR')
+        return []
 
-    if found_modules:
-        # ساختار واقعی: module/strategy/file.tar.gz.enc  (۳ سطح، نه ۴)
-        log(f"  [ARCHIVES] ساختار استاندارد شناسایی شد — ماژول‌ها: {found_modules}")
-        for module in found_modules:
-            cmd = f"gh api repos/{repo}/contents/signature_archives/{module} --jq '.[].name' 2>/dev/null"
+    archive_paths = []
+    for module in found_modules:
+        cmd = f"gh api repos/{repo}/contents/signature_archives/{module} --jq '.[].name' 2>/dev/null"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if result.returncode != 0 or not result.stdout.strip():
+            log(f"  [ARCHIVES] ماژول {module}: استراتژی‌ای یافت نشد", 'WARNING')
+            continue
+        strategies = [s.strip() for s in result.stdout.strip().split('\n') if s.strip()]
+        log(f"  [ARCHIVES] {module}: {len(strategies)} استراتژی")
+
+        for strategy in strategies:
+            path = f"signature_archives/{module}/{strategy}"
+            cmd = f"gh api repos/{repo}/contents/{path} --jq '.[].name' 2>/dev/null"
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode != 0 or not result.stdout.strip():
-                log(f"  [ARCHIVES] ماژول {module}: استراتژی‌ای یافت نشد", 'WARNING')
+                log(f"  [ARCHIVES] {module}/{strategy}: فایلی یافت نشد", 'WARNING')
                 continue
-            strategies = [s.strip() for s in result.stdout.strip().split('\n') if s.strip()]
-            log(f"  [ARCHIVES] {module}: {len(strategies)} استراتژی")
+            files = [fn.strip() for fn in result.stdout.strip().split('\n') if fn.strip()]
+            for fname in files:
+                if fname.endswith('.tar.gz.enc'):
+                    archive_paths.append(f"signature_archives/{module}/{strategy}/{fname}")
 
-            for strategy in strategies:
-                path = f"signature_archives/{module}/{strategy}"
-                cmd = f"gh api repos/{repo}/contents/{path} --jq '.[].name' 2>/dev/null"
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                if result.returncode != 0 or not result.stdout.strip():
-                    log(f"  [ARCHIVES] {module}/{strategy}: فایلی یافت نشد", 'WARNING')
-                    continue
-                files = [fn.strip() for fn in result.stdout.strip().split('\n') if fn.strip()]
-                log(f"  [ARCHIVES] {module}/{strategy}: {len([f for f in files if f.endswith('.tar.gz.enc')])} فایل .tar.gz.enc")
+    log(f"  [ARCHIVES] تعداد کل آرشیوهای .tar.gz.enc یافت‌شده: {len(archive_paths)}")
 
-                for fname in files:
-                    if fname.endswith('.tar.gz.enc'):
-                        archive_repo_path = f"signature_archives/{module}/{strategy}/{fname}"
+    all_signatures = []
+    skipped = 0
+    for archive_path in archive_paths:
+        jsonl_entries = _list_jsonl_inside_archive(repo, archive_path, password)
+        if not jsonl_entries:
+            skipped += 1
+            continue
+        for entry in jsonl_entries:
+            all_signatures.append({key_name: entry})
 
-                        if expand_contents:
-                            inner_files = _list_jsonl_inside_archive(repo, archive_repo_path, password)
-                            if inner_files:
-                                for inner in inner_files:
-                                    # inner مثلاً: "signatures/combo_10day/Best_15m/BTCUSDT_..._fibonacci_full.jsonl"
-                                    inner_no_ext = inner[:-len('.jsonl')] if inner.endswith('.jsonl') else inner
-                                    inner_base = inner_no_ext.split('/')[-1]
-                                    sig_path = f"{module}/{strategy}/{inner_base}"
-                                    all_signatures.append({key_name: sig_path})
-                                continue
-                            # اگر باز کردن آرشیو ناموفق بود، fallback به رفتار قبلی
-                            log(f"  [ARCHIVES] ⚠️ محتوای {fname} قابل خواندن نبود — fallback به اسم آرشیو", 'WARNING')
-
-                        base_name = fname[:-len('.tar.gz.enc')]
-                        sig_path = f"{module}/{strategy}/{base_name}"
-                        all_signatures.append({key_name: sig_path})
-    else:
-        # ساختار مسطح: فایل‌های tar.gz.enc مستقیماً در ریشه signature_archives/
-        log("  [ARCHIVES] ساختار مسطح شناسایی شد — فایل‌ها مستقیماً در ریشه signature_archives/")
-        for fname in top_level_names:
-            if fname.endswith('.tar.gz.enc'):
-                # sig_path همان نام فایل (بدون زیرپوشه)
-                all_signatures.append({key_name: fname})
-        log(f"  [ARCHIVES] تعداد فایل‌های tar.gz.enc در ریشه: {len(all_signatures)}")
-
+    log(f"  [ARCHIVES] آرشیوهای نادیده‌گرفته‌شده (خراب/خالی): {skipped}")
     log(f"  [ARCHIVES] تعداد کل signatureهای یافت‌شده: {len(all_signatures)}")
     return all_signatures
 
@@ -487,49 +481,39 @@ def build_work_queue(repo, token):
 
 # ================================ مرحله ۲: Golden Queue ================================
 
-def build_golden_queue(repo, token):
+def build_golden_queue(repo, token, password):
     log("=" * 60)
     log("🔄 مرحله ۲: ساخت صف golden")
     log("=" * 60)
 
-    # ── گزینه A fix: مقایسه در سطح archive، نه در سطح فایل .jsonl ──
-    # completed_golden.json توسط analysis_golden.yml در سطح فایل .jsonl آپدیت می‌شود
-    # (مثلاً "combo_10day/Best_5m/BTCUSDT_CPI_pre_1d_trades_0001.jsonl")، اما
-    # all_combinations_golden.json در سطح archive کار می‌کند
-    # (مثلاً {"signature_path": "combo_10day/Best_5m/BTCUSDT_CPI_pre_1d"}).
-    # این دو فرمت هیچ‌وقت با مقایسه‌ی رشته‌ای مستقیم match نمی‌شوند → archive
-    # کامل‌شده دوباره به صف اضافه می‌شود.
-    # راه‌حل: completed_golden_archives.json که توسط analysis_golden.yml (golden-cleanup)
-    # در سطح archive path نگه‌داری می‌شود، معیار اصلی چک است.
-    # fallback: اگر این فایل وجود نداشت (اولین بار) صف موجود هم بررسی می‌شود.
-
-    # دانلود completed_golden_archives.json (سطح archive)
-    log("  دانلود completed_golden_archives.json...")
-    completed_arch_content = gh_api_get(repo, "completed_golden_archives.json")
-    if completed_arch_content is not None:
+    # completed_golden.json در سطح فایل .jsonl (signature_path) نگه‌داری می‌شود
+    # و تنها معیار جلوگیری از تکرار است. دیگر نیازی به completed_golden_archives.json نیست.
+    log("  دانلود completed_golden.json...")
+    completed_content = gh_api_get(repo, "completed_golden.json")
+    if completed_content is not None:
         try:
-            completed_archives = json.loads(completed_arch_content)
-            if not isinstance(completed_archives, list):
-                completed_archives = []
+            completed_golden = json.loads(completed_content)
+            if not isinstance(completed_golden, list):
+                completed_golden = []
         except Exception:
-            completed_archives = []
+            completed_golden = []
     else:
-        completed_archives = []
+        completed_golden = []
 
-    completed_arch_set = set(completed_archives)
-    log(f"  تعداد archiveهایی که قبلاً در completed_golden_archives.json ثبت شده‌اند: {len(completed_arch_set)}")
+    completed_set = set(completed_golden)
+    log(f"  تعداد signatureهایی که قبلاً در completed_golden.json ثبت شده‌اند: {len(completed_set)}")
 
-    # دریافت signatures از آرشیوها (در سطح archive path)
-    all_signatures = get_all_signatures_from_archives(repo, key_name="signature_path")
+    # دریافت signatures در سطح فایل .jsonl (شامل 'signatures/' در ابتدای مسیر)
+    all_signatures = get_all_signatures_from_archives(repo, password, key_name="signature_path")
     log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures)}")
 
     if not all_signatures:
         log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
         return 0
 
-    # فیلتر ۱: حذف archiveهایی که قبلاً کامل شده‌اند (سطح archive)
-    new_signatures = [s for s in all_signatures if s["signature_path"] not in completed_arch_set]
-    log(f"  تعداد signatureهای جدید (نه در completed_golden_archives): {len(new_signatures)}")
+    # فیلتر ۱: حذف signatureهایی که قبلاً کامل شده‌اند
+    new_signatures = [s for s in all_signatures if s["signature_path"] not in completed_set]
+    log(f"  تعداد signatureهای جدید (نه در completed_golden): {len(new_signatures)}")
 
     if not new_signatures:
         log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
@@ -549,7 +533,7 @@ def build_golden_queue(repo, token):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # فیلتر ۲: حذف archiveهایی که هنوز در صف هستند (منتظر پردازش)
+    # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش)
     existing_in_queue = {
         s["signature_path"] if isinstance(s, dict) else s
         for s in existing_combos
@@ -558,7 +542,7 @@ def build_golden_queue(repo, token):
         s for s in new_signatures
         if s["signature_path"] not in existing_in_queue
     ]
-    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed_archives): {len(new_signatures)}")
+    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
 
     if not new_signatures:
         log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
@@ -576,23 +560,23 @@ def build_golden_queue(repo, token):
     if not upload_file_with_curl(repo, "all_combinations_golden.json", tmp_file, sha_combos, "update golden queue"):
         raise RuntimeError("آپلود all_combinations_golden.json ناموفق بود")
 
-    # آپدیت completed_golden_archives.json (فقط archive path — نه .jsonl)
-    new_arch_paths = [s["signature_path"] for s in new_signatures]
-    updated_archives = completed_archives + new_arch_paths
-    tmp_arch = "/tmp/completed_golden_archives.json"
-    with open(tmp_arch, "w", encoding="utf-8") as f:
-        json.dump(updated_archives, f, indent=2, ensure_ascii=False)
+    # آپدیت completed_golden.json (سطح فایل .jsonl)
+    new_sig_paths = [s["signature_path"] for s in new_signatures]
+    updated_completed = completed_golden + new_sig_paths
+    tmp_completed = "/tmp/completed_golden.json"
+    with open(tmp_completed, "w", encoding="utf-8") as f:
+        json.dump(updated_completed, f, indent=2, ensure_ascii=False)
 
-    sha_arch = get_file_sha(repo, "completed_golden_archives.json")
-    if not upload_file_with_curl(repo, "completed_golden_archives.json", tmp_arch, sha_arch, "update completed golden archives"):
-        raise RuntimeError("آپدیت completed_golden_archives.json ناموفق بود")
+    sha_completed = get_file_sha(repo, "completed_golden.json")
+    if not upload_file_with_curl(repo, "completed_golden.json", tmp_completed, sha_completed, "update completed golden"):
+        raise RuntimeError("آپدیت completed_golden.json ناموفق بود")
 
     log(f"✅ تعداد {len(new_signatures)} signature جدید به all_combinations_golden.json اضافه شد")
     return len(new_signatures)
 
 # ================================ مرحله ۳: Correlation Queue ================================
 
-def build_correlation_queue(repo, token, password=None):
+def build_correlation_queue(repo, token, password):
     log("=" * 60)
     log("🔄 مرحله ۳: ساخت صف correlation")
     log("=" * 60)
@@ -613,28 +597,22 @@ def build_correlation_queue(repo, token, password=None):
     completed_set = set(completed_correlation)
     log(f"  تعداد signatureهایی که قبلاً در completed_correlation.json ثبت شده‌اند: {len(completed_set)}")
 
-    # دریافت signatures — با فرمت {coin_composition, signature} (تفاوت با golden)
-    # FIX (2026-06): expand_contents=True یعنی به‌جای اسم آرشیو (chunk_N_timestamp)،
-    # محتوای واقعی .jsonl داخل هر آرشیو خونده و per-file signature ساخته می‌شه —
-    # تا correlation.py بتونه exact match کنه، نه prefix-guess خطرناک.
-    all_signatures_raw = get_all_signatures_from_archives(
-        repo, key_name="signature", password=password, expand_contents=True
-    )
+    # دریافت signatures در سطح فایل .jsonl — با فرمت {coin_composition, signature}
+    all_signatures_raw = get_all_signatures_from_archives(repo, password, key_name="signature")
     log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures_raw)}")
 
     if not all_signatures_raw:
         log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
         return 0
 
-    # ساخت آیتم‌های صف با کلیدهای coin_composition و signature
-    # coin_composition = قسمت قبل از اولین _ در نام فایل signature
-    def _extract_coin_composition(sig_value):
-        # sig_value ممکن است مسیر کامل (module/strategy/coin/base) یا فقط نام فایل باشد
-        filename = sig_value.split('/')[-1]  # آخرین قسمت مسیر
-        # اگر نام فایل با پسوند tar.gz.enc باشد، آن را حذف می‌کنیم
-        if filename.endswith('.tar.gz.enc'):
-            filename = filename[:-len('.tar.gz.enc')]
-        return filename.split('_')[0]
+    # coin_composition باید از قسمت پوشه (SAFE_COIN، یعنی parts[-2] مسیر) استخراج شود،
+    # نه از نام فایل. مسیر نمونه:
+    # signatures/{module}/{strategy}/{SAFE_COIN}/{interval}_{model}.jsonl
+    def _extract_coin_composition(sig_path):
+        parts = sig_path.split('/')
+        if len(parts) >= 2:
+            return parts[-2]
+        return sig_path
 
     all_signatures = []
     for raw in all_signatures_raw:
@@ -642,7 +620,6 @@ def build_correlation_queue(repo, token, password=None):
         coin_comp = _extract_coin_composition(sig_value)
         all_signatures.append({"coin_composition": coin_comp, "signature": sig_value})
 
-    completed_set = set(completed_correlation)
     new_signatures = [s for s in all_signatures if s["signature"] not in completed_set]
     log(f"  تعداد signatureهای جدید (نه در completed_correlation): {len(new_signatures)}")
 
@@ -663,6 +640,16 @@ def build_correlation_queue(repo, token, password=None):
     else:
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
+
+    existing_sigs_in_queue = {
+        c.get("signature") for c in existing_combos if isinstance(c, dict)
+    }
+    new_signatures = [s for s in new_signatures if s["signature"] not in existing_sigs_in_queue]
+    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
+
+    if not new_signatures:
+        log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
+        return 0
 
     updated_combos = existing_combos + new_signatures
 
@@ -878,7 +865,7 @@ def main():
 
     log(f"  THIRD_REPO: {'✅ ' + third_repo if third_repo else '❌ تنظیم نشده'}")
     log(f"  GH_TOKEN: {'✅ تنظیم شده' if gh_token else '❌ تنظیم نشده'}")
-    log(f"  RESULTS_PASSWORD: {'✅ تنظیم شده' if results_password else '⚠️ تنظیم نشده (portfolios نیاز دارد)'}")
+    log(f"  RESULTS_PASSWORD: {'✅ تنظیم شده' if results_password else '⚠️ تنظیم نشده (golden/correlation/portfolios نیاز دارند)'}")
 
     if not third_repo or not gh_token:
         log("THIRD_REPO یا GH_TOKEN تنظیم نشده است. خروج.", 'ERROR')
@@ -895,29 +882,32 @@ def main():
         log(f"❌ مرحله ۱ (work) با خطا مواجه شد: {e}", 'ERROR')
         sys.exit(1)
 
-    # مرحله ۲: golden
-    try:
-        count = build_golden_queue(third_repo, gh_token)
-        results['golden'] = count
-        log(f"✅ مرحله ۲ (golden) با موفقیت تمام شد — {count} signature جدید")
-    except Exception as e:
-        log(f"❌ مرحله ۲ (golden) با خطا مواجه شد: {e}", 'ERROR')
-        sys.exit(1)
-
-    # مرحله ۳: correlation
-    try:
-        count = build_correlation_queue(third_repo, gh_token, password=results_password)
-        results['correlation'] = count
-        log(f"✅ مرحله ۳ (correlation) با موفقیت تمام شد — {count} signature جدید")
-    except Exception as e:
-        log(f"❌ مرحله ۳ (correlation) با خطا مواجه شد: {e}", 'ERROR')
-        sys.exit(1)
-
-    # مرحله ۴: portfolios
+    # مرحله ۲ و ۳ (golden, correlation) نیازمند رمزگشایی آرشیوها هستند
     if not results_password:
-        log("⚠️ RESULTS_PASSWORD تنظیم نشده — مرحله portfolios رد می‌شود", 'WARNING')
+        log("⚠️ RESULTS_PASSWORD تنظیم نشده — مراحل golden، correlation و portfolios رد می‌شوند", 'WARNING')
+        results['golden'] = 0
+        results['correlation'] = 0
         results['portfolios'] = 0
     else:
+        # مرحله ۲: golden
+        try:
+            count = build_golden_queue(third_repo, gh_token, results_password)
+            results['golden'] = count
+            log(f"✅ مرحله ۲ (golden) با موفقیت تمام شد — {count} signature جدید")
+        except Exception as e:
+            log(f"❌ مرحله ۲ (golden) با خطا مواجه شد: {e}", 'ERROR')
+            sys.exit(1)
+
+        # مرحله ۳: correlation
+        try:
+            count = build_correlation_queue(third_repo, gh_token, results_password)
+            results['correlation'] = count
+            log(f"✅ مرحله ۳ (correlation) با موفقیت تمام شد — {count} signature جدید")
+        except Exception as e:
+            log(f"❌ مرحله ۳ (correlation) با خطا مواجه شد: {e}", 'ERROR')
+            sys.exit(1)
+
+        # مرحله ۴: portfolios
         try:
             count = build_portfolios_queue(third_repo, gh_token, results_password)
             results['portfolios'] = count
