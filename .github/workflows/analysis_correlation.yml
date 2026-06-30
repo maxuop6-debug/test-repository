@@ -213,7 +213,7 @@ jobs:
           #   MODULE = بخش اول signature (مثلاً combo_10day)
           #   STRAT  = بخش دوم signature (مثلاً Best_15m)
           #   COIN   = coin_composition (با علامت + ، بدون تبدیل به _)
-          #   مسیر:  /tmp/signatures/signatures/{MODULE}/{STRAT}/{COIN}/*.jsonl
+          #   مسیر:  /tmp/signatures/{MODULE}/{STRAT}/{COIN}/*.jsonl
           # ================================================================
           SIG_JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' 2>/dev/null | wc -l)
           echo "[DIAG] تعداد فایل .jsonl موجود در /tmp/signatures قبل از گسترش صف = $SIG_JSONL_COUNT"
@@ -224,11 +224,11 @@ jobs:
             SIG=$(echo "$ITEM" | jq -r '.signature')
             MODULE=$(echo "$SIG" | cut -d'/' -f1)
             STRAT=$(echo "$SIG" | cut -d'/' -f2)
-            DIR="/tmp/signatures/signatures/${MODULE}/${STRAT}/${COIN}"
+            DIR="/tmp/signatures/${MODULE}/${STRAT}/${COIN}"
             if [ -d "$DIR" ]; then
               find "$DIR" -maxdepth 1 -name '*.jsonl' -print0 2>/dev/null | while IFS= read -r -d '' FPATH; do
                 FNAME=$(basename "$FPATH")
-                jq -nc --arg coin "$COIN" --arg sig "signatures/${MODULE}/${STRAT}/${COIN}/${FNAME}" \
+                jq -nc --arg coin "$COIN" --arg sig "${MODULE}/${STRAT}/${COIN}/${FNAME}" \
                   '{coin_composition: $coin, signature: $sig}'
               done >> /tmp/expanded_queue.jsonl
             fi
