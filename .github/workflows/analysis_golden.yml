@@ -506,7 +506,6 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
-        run: |
           mkdir -p /tmp/golden_scores_parts
 
           echo "[DEBUG] ساختار دایرکتوری golden_scores_parts:"
