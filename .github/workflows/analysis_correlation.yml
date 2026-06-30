@@ -222,8 +222,8 @@ jobs:
           while IFS= read -r ITEM; do
             COIN=$(echo "$ITEM" | jq -r '.coin_composition')
             SIG=$(echo "$ITEM" | jq -r '.signature')
-            MODULE=$(echo "$SIG" | cut -d'/' -f1)
-            STRAT=$(echo "$SIG" | cut -d'/' -f2)
+            MODULE=$(echo "$SIG" | cut -d'/' -f2)
+            STRAT=$(echo "$SIG" | cut -d'/' -f3)
             DIR="/tmp/signatures/${MODULE}/${STRAT}/${COIN}"
             if [ -d "$DIR" ]; then
               find "$DIR" -maxdepth 1 -name '*.jsonl' -print0 2>/dev/null | while IFS= read -r -d '' FPATH; do
