@@ -8,6 +8,7 @@ import sys
 import json
 import subprocess
 import base64
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -706,8 +707,13 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     log(f"  تعداد signatureهای قبلاً ثبت‌شده: {len(completed_set)}")
 
     # دانلود و رمزگشایی golden_scores.parquet.enc
+    # نکته مهم: محتوای رمزگشایی‌شده یک فایل tar.gz است که golden_scores.parquet
+    # داخلش قرار دارد (نگاه کنید به analysis_golden.yml: قبل از رمزنگاری با
+    # `tar -czf golden_scores.tar.gz golden_scores.parquet` فشرده می‌شود).
+    # بدون استخراج tar، pandas با خطای "Parquet magic bytes not found" مواجه می‌شود.
     enc_path = "/tmp/golden_scores.parquet.enc"
-    dec_path = "/tmp/golden_scores.parquet"
+    targz_path = "/tmp/golden_scores.tar.gz"
+    extract_dir = "/tmp/golden_scores_extract"
 
     log("  دانلود golden_scores.parquet.enc...")
     if not gh_api_get_binary(repo, "golden_scores.parquet.enc", enc_path):
@@ -715,23 +721,45 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         return 0
 
     log("  رمزگشایی golden_scores.parquet.enc...")
-    if not decrypt_file(enc_path, dec_path, password):
+    if not decrypt_file(enc_path, targz_path, password):
         raise RuntimeError("رمزگشایی golden_scores.parquet.enc ناموفق بود")
 
-    if not os.path.exists(dec_path) or os.path.getsize(dec_path) == 0:
+    if not os.path.exists(targz_path) or os.path.getsize(targz_path) == 0:
         raise RuntimeError("فایل رمزگشایی‌شده خالی است")
 
-    log(f"  رمزگشایی موفق ({os.path.getsize(dec_path)} bytes) ✅")
+    log(f"  رمزگشایی موفق ({os.path.getsize(targz_path)} bytes) — استخراج tar.gz...")
+
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    os.makedirs(extract_dir, exist_ok=True)
+    tar_result = subprocess.run(
+        ["tar", "-xzf", targz_path, "-C", extract_dir],
+        capture_output=True, text=True
+    )
+    if tar_result.returncode != 0:
+        raise RuntimeError(f"استخراج tar.gz ناموفق بود: {tar_result.stderr[:300]}")
+
+    found_parquet = []
+    for root, _, files in os.walk(extract_dir):
+        for fn in files:
+            if fn.endswith('.parquet'):
+                found_parquet.append(os.path.join(root, fn))
+
+    if not found_parquet:
+        raise RuntimeError("هیچ فایل .parquet داخل tar.gz استخراج‌شده یافت نشد")
+
+    dec_path = found_parquet[0]
+    log(f"  فایل parquet استخراج شد: {dec_path} ({os.path.getsize(dec_path)} bytes) ✅")
 
     # فیلتر signatureهای واجد شرایط
     log(f"  فیلتر signatureها با score >= {min_score}...")
     qualified = _get_qualified_signatures(dec_path, min_score)
 
-    for fp in [enc_path, dec_path]:
+    for fp in [enc_path, targz_path]:
         try:
             os.unlink(fp)
         except Exception:
             pass
+    shutil.rmtree(extract_dir, ignore_errors=True)
 
     if not qualified:
         log("  هیچ signature واجد شرایطی یافت نشد ✅")
