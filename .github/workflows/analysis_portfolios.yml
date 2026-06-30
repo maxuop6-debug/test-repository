@@ -296,10 +296,11 @@ jobs:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           mkdir -p /tmp/golden_scores
+          # نکته: فایل در ریشه‌ی مخزن سوم است، نه زیر analysis_results/
           HTTP_CODE=$(curl -s -o /tmp/golden_scores.parquet.enc -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/analysis_results/golden_scores.parquet.enc")
+            "https://api.github.com/repos/$THIRD_REPO/contents/golden_scores.parquet.enc")
 
           # اصلاح: اگر فایل وجود نداشت (۴۰۴)، با موفقیت ادامه می‌دهیم (بدون golden_scores)
           if [ "$HTTP_CODE" = "404" ]; then
@@ -312,6 +313,9 @@ jobs:
             exit 1
           fi
 
+          # محتوای رمزگشایی‌شده یک tar.gz است (golden_scores.parquet داخل آن
+          # فشرده شده — نگاه کنید analysis_golden.yml) نه parquet خام، پس باید
+          # بعد از دیکریپت استخراج شود.
           node -e "
             const crypto=require('crypto'),fs=require('fs');
             const pass=process.env.RESULTS_PASSWORD;
@@ -320,12 +324,21 @@ jobs:
             const iv=data.slice(0,16),enc=data.slice(16);
             const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
             const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-            fs.writeFileSync('/tmp/golden_scores/golden_scores.parquet',dec);
+            fs.writeFileSync('/tmp/golden_scores.tar.gz',dec);
           "
-          if [ ! -f /tmp/golden_scores/golden_scores.parquet ]; then
-            echo "❌ رمزگشایی golden_scores.parquet ناموفق بود."; exit 1
+          if [ ! -s /tmp/golden_scores.tar.gz ]; then
+            echo "❌ رمزگشایی golden_scores.tar.gz ناموفق بود."; exit 1
           fi
-          echo "✅ golden_scores.parquet دریافت و رمزگشایی شد."
+
+          tar -xzf /tmp/golden_scores.tar.gz -C /tmp/golden_scores
+          FOUND_PARQUET=$(find /tmp/golden_scores -name '*.parquet' | head -1)
+          if [ -z "$FOUND_PARQUET" ]; then
+            echo "❌ استخراج tar.gz موفق بود ولی هیچ فایل .parquet داخلش یافت نشد."; exit 1
+          fi
+          if [ "$FOUND_PARQUET" != "/tmp/golden_scores/golden_scores.parquet" ]; then
+            mv "$FOUND_PARQUET" /tmp/golden_scores/golden_scores.parquet
+          fi
+          echo "✅ golden_scores.parquet دریافت، رمزگشایی و استخراج شد."
 
       - name: 6. اجرای portfolios.py برای این چانک
         if: |
