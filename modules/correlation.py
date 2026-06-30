@@ -1031,9 +1031,14 @@ def compute_conditional_correlations_for_signatures(
         return results
 
     sig_set = set(signatures)
-    subset = df[
-        df.apply(lambda r: (r["coin_composition"], r["signature"]) in sig_set, axis=1)
-    ]
+    # نسخهٔ وکتورایزشده: همان فیلتر قبلی (row-wise apply) ولی بدون فراخوانی
+    # تابع پایتون به ازای هر ردیف. نتیجه دقیقاً همان subset قبلی است،
+    # فقط چند صد برابر سریع‌تر چون در سطح C اجرا می‌شود نه interpreter.
+    pair_index = pd.MultiIndex.from_arrays(
+        [df["coin_composition"], df["signature"]]
+    )
+    mask = pair_index.isin(sig_set)
+    subset = df[mask]
     if subset.empty:
         return results
 
