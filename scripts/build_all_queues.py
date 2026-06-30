@@ -30,20 +30,56 @@ def log(message, level='INFO'):
 # ================================ توابع مشترک ================================
 
 def gh_api_get(repo, path):
-    """دریافت محتوای یک فایل از مخزن با gh api"""
+    """دریافت محتوای متنی یک فایل از مخزن.
+    برای فایل‌های بزرگ‌تر از ~1MB، GitHub Contents API فیلد .content را خالی
+    برمی‌گرداند (truncated=true)، پس باید از download_url استفاده شود — دقیقاً
+    مثل gh_api_get_binary. بدون این fallback، فایل‌های بزرگ (مثل
+    completed_golden.json بعد از رشد) همیشه «یافت نشد» در نظر گرفته می‌شدند و
+    completed_set همیشه خالی می‌ماند."""
     log(f"  [API GET] {repo}/{path}")
-    cmd = f"gh api repos/{repo}/contents/{path} --jq '.content' 2>/dev/null"
+    cmd = f"gh api repos/{repo}/contents/{path} 2>/dev/null"
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         log(f"  [API GET] نتیجه: یافت نشد (returncode={result.returncode})", 'WARNING')
         return None
+
     try:
-        content = base64.b64decode(result.stdout.strip()).decode('utf-8')
-        log(f"  [API GET] نتیجه: دریافت شد ({len(content)} کاراکتر)")
-        return content
+        meta = json.loads(result.stdout)
     except Exception as e:
-        log(f"  [API GET] خطا در decode: {e}", 'ERROR')
+        log(f"  [API GET] خطا در parse متادیتا: {e}", 'ERROR')
         return None
+
+    file_size = meta.get('size', 0)
+    content_b64 = meta.get('content', '')
+    truncated = meta.get('truncated', False)
+
+    if not truncated and content_b64:
+        try:
+            content = base64.b64decode(content_b64.replace('\n', '')).decode('utf-8')
+            log(f"  [API GET] نتیجه: دریافت شد ({len(content)} کاراکتر)")
+            return content
+        except Exception as e:
+            log(f"  [API GET] خطا در decode: {e}", 'ERROR')
+            return None
+
+    # فایل بزرگ — content خالی/truncated است، باید از download_url بخوانیم
+    log(f"  [API GET] فایل بزرگ است ({file_size} bytes, truncated={truncated}) — استفاده از download_url...")
+    download_url = meta.get('download_url', '')
+    token = os.environ.get('GH_TOKEN')
+    if not download_url:
+        log("  [API GET] download_url یافت نشد", 'ERROR')
+        return None
+
+    dl = subprocess.run(
+        ["curl", "-s", "-L", "-H", f"Authorization: token {token}", download_url],
+        capture_output=True, text=True
+    )
+    if dl.returncode != 0 or not dl.stdout:
+        log(f"  [API GET] دانلود از download_url ناموفق: {dl.stderr[:200]}", 'ERROR')
+        return None
+
+    log(f"  [API GET] نتیجه: دریافت شد از download_url ({len(dl.stdout)} کاراکتر)")
+    return dl.stdout
 
 def gh_api_get_binary(repo, path, dest_path):
     """دانلود فایل binary از مخزن (برای فایل‌های بزرگ از download_url استفاده می‌کند)"""
