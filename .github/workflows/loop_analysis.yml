@@ -705,9 +705,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
           {
-            echo "🚀 اجرای build_all_queues.py برای ساخت صف کارها..."
+            echo "🚀 اجرای build_all_queues.py برای ساخت صف کارها (و رفرش golden/portfolios)..."
+            pip install pandas pyarrow --quiet --break-system-packages 2>&1 || \
+              pip install pandas pyarrow --quiet 2>&1
             python scripts/build_all_queues.py \
               --progress /tmp/dummy \
               --strategies /tmp/strategies.txt \
