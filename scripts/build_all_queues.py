@@ -196,14 +196,60 @@ def check_file_exists(repo, path):
 
 # ================================ تابع مشترک دریافت signatures از آرشیوها ================================
 
-def get_all_signatures_from_archives(repo, key_name="signature_path"):
+def _list_jsonl_inside_archive(repo, archive_repo_path, password):
+    """
+    یک آرشیو .tar.gz.enc را دانلود+دیکریپت می‌کند و فقط لیست مسیرهای .jsonl
+    داخل آن را برمی‌گرداند (بدون extract کامل — با tar -tzf روی استریم).
+    در صورت خطا، لیست خالی برمی‌گرداند (caller باید fallback به اسم آرشیو بزند).
+    """
+    base = os.path.basename(archive_repo_path)
+    enc_path = f"/tmp/_arch_{base}"
+    dec_path = enc_path[:-len(".enc")] if enc_path.endswith(".enc") else enc_path + ".dec"
+
+    try:
+        if not gh_api_get_binary(repo, archive_repo_path, enc_path):
+            return []
+        if not password:
+            log(f"  [ARCHIVES] رمز عبور برای دیکریپت {base} تنظیم نشده — رد می‌شود", 'WARNING')
+            return []
+        if not decrypt_file(enc_path, dec_path, password):
+            return []
+
+        result = subprocess.run(
+            ["tar", "-tzf", dec_path], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            log(f"  [ARCHIVES] tar -tzf ناموفق برای {base}: {result.stderr[:200]}", 'WARNING')
+            return []
+
+        return [
+            line.strip() for line in result.stdout.splitlines()
+            if line.strip().endswith(".jsonl")
+        ]
+    finally:
+        for p in (enc_path, dec_path):
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+
+def get_all_signatures_from_archives(repo, key_name="signature_path", password=None, expand_contents=False):
     """
     لیست تمام signatureهای موجود در signature_archives/ را برمی‌گرداند.
-    key_name: نام کلید دیکشنری خروجی ('signature_path' برای golden/portfolios، 'path' برای correlation)
+    key_name: نام کلید دیکشنری خروجی ('signature_path' برای golden/portfolios، 'signature' برای correlation)
 
     از دو ساختار پشتیبانی می‌کند:
     - ساختار استاندارد: signature_archives/{module}/{strategy}/{coin}/{base_name}.tar.gz.enc
     - ساختار مسطح: signature_archives/{filename}.tar.gz.enc (فایل‌ها مستقیماً در ریشه)
+
+    FIX (2026-06): قبلاً signature مستقیماً از اسم خودِ آرشیو (chunk_N_timestamp)
+    ساخته می‌شد. اما بعد از extract، هیچ فایلی با این اسم وجود نداره — هر آرشیو
+    شامل چندین فایل .jsonl واقعی (coin-level) است که در یک پوشه‌ی مشترک با سایر
+    آرشیوهای همان strategy ادغام می‌شوند. اگر expand_contents=True باشد، به‌جای
+    اسم آرشیو، محتوای واقعی داخل هر آرشیو (دانلود+دیکریپت+tar -tzf، بدون extract
+    کامل) خوانده می‌شود و برای هر فایل .jsonl داخلی یک signature واقعی و
+    قابل-match ساخته می‌شود.
     """
     log("  [ARCHIVES] دریافت لیست محتوای signature_archives/...")
     cmd = f"gh api repos/{repo}/contents/signature_archives --jq '.[].name' 2>/dev/null"
@@ -245,6 +291,21 @@ def get_all_signatures_from_archives(repo, key_name="signature_path"):
 
                 for fname in files:
                     if fname.endswith('.tar.gz.enc'):
+                        archive_repo_path = f"signature_archives/{module}/{strategy}/{fname}"
+
+                        if expand_contents:
+                            inner_files = _list_jsonl_inside_archive(repo, archive_repo_path, password)
+                            if inner_files:
+                                for inner in inner_files:
+                                    # inner مثلاً: "signatures/combo_10day/Best_15m/BTCUSDT_..._fibonacci_full.jsonl"
+                                    inner_no_ext = inner[:-len('.jsonl')] if inner.endswith('.jsonl') else inner
+                                    inner_base = inner_no_ext.split('/')[-1]
+                                    sig_path = f"{module}/{strategy}/{inner_base}"
+                                    all_signatures.append({key_name: sig_path})
+                                continue
+                            # اگر باز کردن آرشیو ناموفق بود، fallback به رفتار قبلی
+                            log(f"  [ARCHIVES] ⚠️ محتوای {fname} قابل خواندن نبود — fallback به اسم آرشیو", 'WARNING')
+
                         base_name = fname[:-len('.tar.gz.enc')]
                         sig_path = f"{module}/{strategy}/{base_name}"
                         all_signatures.append({key_name: sig_path})
@@ -531,7 +592,7 @@ def build_golden_queue(repo, token):
 
 # ================================ مرحله ۳: Correlation Queue ================================
 
-def build_correlation_queue(repo, token):
+def build_correlation_queue(repo, token, password=None):
     log("=" * 60)
     log("🔄 مرحله ۳: ساخت صف correlation")
     log("=" * 60)
@@ -553,7 +614,12 @@ def build_correlation_queue(repo, token):
     log(f"  تعداد signatureهایی که قبلاً در completed_correlation.json ثبت شده‌اند: {len(completed_set)}")
 
     # دریافت signatures — با فرمت {coin_composition, signature} (تفاوت با golden)
-    all_signatures_raw = get_all_signatures_from_archives(repo, key_name="signature")
+    # FIX (2026-06): expand_contents=True یعنی به‌جای اسم آرشیو (chunk_N_timestamp)،
+    # محتوای واقعی .jsonl داخل هر آرشیو خونده و per-file signature ساخته می‌شه —
+    # تا correlation.py بتونه exact match کنه، نه prefix-guess خطرناک.
+    all_signatures_raw = get_all_signatures_from_archives(
+        repo, key_name="signature", password=password, expand_contents=True
+    )
     log(f"  تعداد signatureهای پیدا شده در signature_archives/: {len(all_signatures_raw)}")
 
     if not all_signatures_raw:
@@ -840,7 +906,7 @@ def main():
 
     # مرحله ۳: correlation
     try:
-        count = build_correlation_queue(third_repo, gh_token)
+        count = build_correlation_queue(third_repo, gh_token, password=results_password)
         results['correlation'] = count
         log(f"✅ مرحله ۳ (correlation) با موفقیت تمام شد — {count} signature جدید")
     except Exception as e:
