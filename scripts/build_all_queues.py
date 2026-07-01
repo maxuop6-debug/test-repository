@@ -48,14 +48,12 @@ def _normalize_completed_list(items, source_name=""):
             normalized.append(str(item["signature_path"]))
             bad_count += 1
         elif isinstance(item, (list, tuple)) and item:
-            # مثلاً یک آیتم آلوده به شکل [signature_path, ...] یا
-            # (coin_composition, signature) — اولین عنصر رشته‌ای را بردار
             candidate = next((x for x in item if isinstance(x, str)), None)
             if candidate is not None:
                 normalized.append(candidate)
             bad_count += 1
         else:
-            bad_count += 1  # آیتم قابل‌بازیابی نیست، نادیده گرفته می‌شود
+            bad_count += 1
 
     if bad_count:
         log(f"  ⚠️ {bad_count} آیتم غیرمعتبر/غیر-رشته‌ای در {source_name} یافت و نرمالایز/حذف شد", 'WARNING')
@@ -95,7 +93,6 @@ def gh_api_get(repo, path):
             log(f"  [API GET] خطا در decode: {e}", 'ERROR')
             return None
 
-    # فایل بزرگ — content خالی/truncated است، باید از download_url بخوانیم
     log(f"  [API GET] فایل بزرگ است ({file_size} bytes, truncated={truncated}) — استفاده از download_url...")
     download_url = meta.get('download_url', '')
     token = os.environ.get('GH_TOKEN')
@@ -266,8 +263,6 @@ def check_file_exists(repo, path):
 
 # ================================ تابع مشترک دریافت signatures از آرشیوها ================================
 
-# ================================ تابع مشترک دریافت signatures از آرشیوها ================================
-
 def _list_jsonl_inside_archive(repo, archive_path, password):
     """
     آرشیو tar.gz.enc را دانلود، رمزگشایی و فهرست فایل‌های .jsonl داخل آن را برمی‌گرداند.
@@ -360,7 +355,7 @@ def _upload_processed_archives_cache(repo, updated_archive_paths, max_retries=3)
     return False
 
 
-def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
+def get_all_signatures_from_archives(repo, password, key_name="signature_path", force_refresh=False):
     """
     تمام آرشیوهای signature_archives/{module}/{strategy}/*.tar.gz.enc را پیدا کرده،
     هرکدام را دانلود/رمزگشایی/استخراج‌لیست می‌کند و برای هر فایل .jsonl داخل آن
@@ -374,9 +369,16 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
     سوم) ثبت شده‌اند، اصلاً دانلود نمی‌شوند. فقط آرشیوهای جدید پردازش شده و
     بلافاصله به کش اضافه می‌شوند تا اجراهای بعدی مجبور به دانلود دوباره‌ی
     آرشیوهای قبلاً پردازش‌شده نباشند.
+
+    اگر force_refresh=True باشد، کش نادیده گرفته می‌شود و همه‌ی آرشیوها دوباره
+    پردازش می‌شوند (تازه‌سازی کامل). این حالت برای زمانی استفاده می‌شود که
+    نیاز به بازسازی کامل نگاشت signature_path -> archive_path داریم.
     """
-    processed_archives = _load_processed_archives_cache(repo)
+    processed_archives = _load_processed_archives_cache(repo) if not force_refresh else []
     processed_set = set(processed_archives)
+
+    if force_refresh:
+        log("  [ARCHIVES] force_refresh=True — کش نادیده گرفته می‌شود و همه‌ی آرشیوها دوباره پردازش می‌شوند.")
 
     log("  [ARCHIVES] دریافت لیست محتوای signature_archives/...")
     cmd = f"gh api repos/{repo}/contents/signature_archives --jq '.[].name' 2>/dev/null"
@@ -424,30 +426,28 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
     cached_skip = 0
     newly_processed = []
     for archive_path in archive_paths:
-        if archive_path in processed_set:
+        if archive_path in processed_set and not force_refresh:
             cached_skip += 1
             continue
 
         jsonl_entries = _list_jsonl_inside_archive(repo, archive_path, password)
         if not jsonl_entries:
-            # آرشیو خراب/خالی — به کش اضافه نمی‌شود تا در اجرای بعدی دوباره
-            # تلاش شود (ممکن است خطا موقتی/شبکه‌ای بوده باشد)
             skipped += 1
             continue
 
         for entry in jsonl_entries:
             all_signatures.append({key_name: entry, "archive_path": archive_path})
 
-        # بلافاصله پس از پردازش موفق، آرشیو به کش اضافه می‌شود
-        processed_set.add(archive_path)
-        newly_processed.append(archive_path)
+        if not force_refresh:
+            processed_set.add(archive_path)
+            newly_processed.append(archive_path)
 
     log(f"  [ARCHIVES] آرشیوهای رد شده به دلیل وجود در کش (بدون دانلود): {cached_skip}")
     log(f"  [ARCHIVES] آرشیوهای نادیده‌گرفته‌شده (خراب/خالی): {skipped}")
     log(f"  [ARCHIVES] آرشیوهای جدید پردازش‌شده در این اجرا: {len(newly_processed)}")
     log(f"  [ARCHIVES] تعداد کل signatureهای یافت‌شده: {len(all_signatures)}")
 
-    if newly_processed:
+    if newly_processed and not force_refresh:
         _upload_processed_archives_cache(repo, processed_archives + newly_processed)
 
     return all_signatures
@@ -484,7 +484,6 @@ def _migrate_legacy_queue_format(repo, remote_path, existing_combos, sig_to_arch
     missing_count = 0
     for item in existing_combos:
         if isinstance(item, str):
-            # آیتم صرفاً رشته‌ای (فرمت خیلی قدیمی) — به دیکشنری تبدیل می‌شود
             sig_path = item
             archive_path = sig_to_archive.get(sig_path)
             migrated.append({"signature_path": sig_path, "archive_path": archive_path})
@@ -506,7 +505,6 @@ def _migrate_legacy_queue_format(repo, remote_path, existing_combos, sig_to_arch
                 else:
                     missing_count += 1
         else:
-            # نوع ناشناخته — بدون تغییر نگه داشته می‌شود تا چیزی گم نشود
             migrated.append(item)
 
     log(f"  [MIGRATE] archive_path به {added_count} آیتم اضافه شد؛ "
@@ -532,26 +530,20 @@ def build_work_queue(repo, token):
     log("🔄 مرحله ۱: ساخت صف کاری (work queue)")
     log("=" * 60)
 
-    # تنظیمات ثابت
     fixed_modules = ["combo_10day", "combo_monthly"]
     coins = [
-        # تک‌ارزها (۵ عدد)
         "BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "PAXGUSDT",
-        # دوارز (۱۰ عدد)
         "BTCUSDT+ETHUSDT", "BTCUSDT+XRPUSDT", "BTCUSDT+SOLUSDT", "BTCUSDT+PAXGUSDT",
         "ETHUSDT+XRPUSDT", "ETHUSDT+SOLUSDT", "ETHUSDT+PAXGUSDT",
         "XRPUSDT+SOLUSDT", "XRPUSDT+PAXGUSDT", "SOLUSDT+PAXGUSDT",
-        # سه‌ارز (۱۰ عدد)
         "BTCUSDT+ETHUSDT+XRPUSDT", "BTCUSDT+ETHUSDT+SOLUSDT", "BTCUSDT+ETHUSDT+PAXGUSDT",
         "BTCUSDT+XRPUSDT+SOLUSDT", "BTCUSDT+XRPUSDT+PAXGUSDT",
         "BTCUSDT+SOLUSDT+PAXGUSDT", "ETHUSDT+XRPUSDT+SOLUSDT",
         "ETHUSDT+XRPUSDT+PAXGUSDT", "ETHUSDT+SOLUSDT+PAXGUSDT",
         "XRPUSDT+SOLUSDT+PAXGUSDT",
-        # چهارارز (۵ عدد)
         "BTCUSDT+ETHUSDT+XRPUSDT+SOLUSDT", "BTCUSDT+ETHUSDT+XRPUSDT+PAXGUSDT",
         "BTCUSDT+ETHUSDT+SOLUSDT+PAXGUSDT", "BTCUSDT+XRPUSDT+SOLUSDT+PAXGUSDT",
         "ETHUSDT+XRPUSDT+SOLUSDT+PAXGUSDT",
-        # پنج‌ارز (۱ عدد)
         "BTCUSDT+ETHUSDT+XRPUSDT+SOLUSDT+PAXGUSDT",
     ]
     intervals_10day = [
@@ -569,13 +561,6 @@ def build_work_queue(repo, token):
         "CPI_y_y_pre_1d","CPI_y_y_pre_2d","CPI_y_y_pre_3d","CPI_y_y_pre_5d",
         "CPI_y_y_post_1d","CPI_y_y_post_2d","CPI_y_y_post_3d","CPI_y_y_post_5d","CPI_y_y_post_7d","CPI_y_y_post_10d","CPI_y_y_post_15d"
     ]
-    # باگ تکرار fix: combo_monthly.py مقدار --interval را در محاسبه استفاده نمی‌کند
-    # (فقط در نام فایل خروجی درج می‌شود — تابع process_analysis حتی پارامتر interval
-    # نمی‌گیرد). بنابراین تولید ۷۰ ترکیب با همان intervals_10day برای combo_monthly
-    # باعث می‌شد به ازای هر استراتژی ۶۵۱۰ ترکیب ساخته شود در حالی که فقط
-    # ۳۱ کوین × ۳ مدل = ۹۳ ترکیب واقعاً متفاوت وجود دارد (مابقی اجرای کاملاً
-    # تکراری همان تحلیل با نام فایل متفاوت بودند). یک مقدار interval ثابت
-    # کافی است.
     intervals_monthly = ["monthly"]
     module_intervals = {
         "combo_10day": intervals_10day,
@@ -583,7 +568,6 @@ def build_work_queue(repo, token):
     }
     models = ["simple_hybrid", "fibonacci_full", "fibonacci_hybrid"]
 
-    # خواندن strategies.txt یا دریافت از API
     strategies_file = os.environ.get('STRATEGIES_FILE', '/tmp/strategies.txt')
     log(f"  خواندن استراتژی‌ها از: {strategies_file}")
     if os.path.exists(strategies_file):
@@ -605,7 +589,6 @@ def build_work_queue(repo, token):
         log("  هیچ استراتژی‌ای یافت نشد", 'WARNING')
         return 0
 
-    # دانلود completed_strategies.json
     log("  دانلود completed_strategies.json...")
     completed_content = gh_api_get(repo, "completed_strategies.json")
     if completed_content is not None:
@@ -619,7 +602,6 @@ def build_work_queue(repo, token):
         completed_strategies = []
     log(f"  تعداد استراتژی‌های قبلاً پردازش‌شده: {len(completed_strategies)}")
 
-    # دانلود all_combinations.json
     log("  دانلود all_combinations.json...")
     all_combos_content = gh_api_get(repo, "all_combinations.json")
     if all_combos_content is not None:
@@ -633,7 +615,6 @@ def build_work_queue(repo, token):
         existing_combos = []
     log(f"  تعداد ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # فیلتر استراتژی‌های جدید
     strategies_to_process = [s for s in strategies if s not in completed_strategies]
     log(f"  تعداد استراتژی‌های جدید (نه در completed): {len(strategies_to_process)}")
 
@@ -643,7 +624,6 @@ def build_work_queue(repo, token):
 
     log(f"  استراتژی‌های جدید: {strategies_to_process}")
 
-    # تولید ترکیب‌ها
     new_combos = []
     for strat in strategies_to_process:
         strat_combos = []
@@ -667,7 +647,6 @@ def build_work_queue(repo, token):
     updated_combos = existing_combos + new_combos
     log(f"  تعداد کل ترکیب‌ها پس از اضافه شدن: {len(updated_combos)}")
 
-    # آپلود all_combinations.json
     tmp_file = "/tmp/all_combinations.json"
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(updated_combos, f, indent=2, ensure_ascii=False)
@@ -676,7 +655,6 @@ def build_work_queue(repo, token):
     if not upload_file_with_curl(repo, "all_combinations.json", tmp_file, sha_all, "update work queue"):
         raise RuntimeError("آپلود all_combinations.json ناموفق بود")
 
-    # آپدیت completed_strategies.json
     updated_completed = completed_strategies + strategies_to_process
     tmp_completed = "/tmp/completed_strategies.json"
     with open(tmp_completed, "w", encoding="utf-8") as f:
@@ -696,8 +674,6 @@ def build_golden_queue(repo, token, password):
     log("🔄 مرحله ۲: ساخت صف golden")
     log("=" * 60)
 
-    # completed_golden.json در سطح فایل .jsonl (signature_path) نگه‌داری می‌شود
-    # و تنها معیار جلوگیری از تکرار است. دیگر نیازی به completed_golden_archives.json نیست.
     log("  دانلود completed_golden.json...")
     completed_content = gh_api_get(repo, "completed_golden.json")
     if completed_content is not None:
@@ -722,7 +698,6 @@ def build_golden_queue(repo, token, password):
         log("  هیچ signature‌ای در آرشیوها یافت نشد ✅")
         return 0
 
-    # فیلتر ۱: حذف signatureهایی که قبلاً کامل شده‌اند
     new_signatures = [s for s in all_signatures if s["signature_path"] not in completed_set]
     log(f"  تعداد signatureهای جدید (نه در completed_golden): {len(new_signatures)}")
 
@@ -730,7 +705,6 @@ def build_golden_queue(repo, token, password):
         log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
         return 0
 
-    # دانلود صف موجود
     log("  دانلود all_combinations_golden.json...")
     combos_content = gh_api_get(repo, "all_combinations_golden.json")
     if combos_content is not None:
@@ -744,10 +718,6 @@ def build_golden_queue(repo, token, password):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # سازگاری با صف‌های قدیمی: اگر آیتم‌های صف موجود فاقد archive_path باشند
-    # (فرمت قدیمی)، صف را با استفاده از نگاشت signature_path -> archive_path
-    # که از all_signatures (همین اجرا) به‌دست می‌آید، بازنویسی می‌کنیم. این کار
-    # غیرمخرب است و آیتم‌های موجود را حذف یا دوباره اضافه نمی‌کند.
     sig_to_archive = {
         s["signature_path"]: s.get("archive_path")
         for s in all_signatures
@@ -758,7 +728,6 @@ def build_golden_queue(repo, token, password):
         "migrate golden queue to include archive_path"
     )
 
-    # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش)
     existing_in_queue = {
         s["signature_path"] if isinstance(s, dict) else s
         for s in existing_combos
@@ -776,7 +745,6 @@ def build_golden_queue(repo, token, password):
     updated_combos = existing_combos + new_signatures
     log(f"  تعداد کل ترکیب‌ها پس از اضافه شدن: {len(updated_combos)}")
 
-    # آپلود all_combinations_golden.json
     tmp_file = "/tmp/all_combinations_golden.json"
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(updated_combos, f, indent=2, ensure_ascii=False)
@@ -785,7 +753,6 @@ def build_golden_queue(repo, token, password):
     if not upload_file_with_curl(repo, "all_combinations_golden.json", tmp_file, sha_combos, "update golden queue"):
         raise RuntimeError("آپلود all_combinations_golden.json ناموفق بود")
 
-    # آپدیت completed_golden.json (سطح فایل .jsonl)
     new_sig_paths = [s["signature_path"] for s in new_signatures]
     updated_completed = completed_golden + new_sig_paths
     tmp_completed = "/tmp/completed_golden.json"
@@ -798,7 +765,6 @@ def build_golden_queue(repo, token, password):
 
     log(f"✅ تعداد {len(new_signatures)} signature جدید به all_combinations_golden.json اضافه شد")
     return len(new_signatures)
-
 
 
 def _install_pandas():
@@ -877,7 +843,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     log("🔄 مرحله ۳: ساخت صف portfolios")
     log("=" * 60)
 
-    # دانلود completed_portfolios.json
     log("  دانلود completed_portfolios.json...")
     completed_content = gh_api_get(repo, "completed_portfolios.json")
     if completed_content is not None:
@@ -895,10 +860,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     log(f"  تعداد signatureهای قبلاً ثبت‌شده: {len(completed_set)}")
 
     # دانلود و رمزگشایی golden_scores.parquet.enc
-    # نکته مهم: محتوای رمزگشایی‌شده یک فایل tar.gz است که golden_scores.parquet
-    # داخلش قرار دارد (نگاه کنید به analysis_golden.yml: قبل از رمزنگاری با
-    # `tar -czf golden_scores.tar.gz golden_scores.parquet` فشرده می‌شود).
-    # بدون استخراج tar، pandas با خطای "Parquet magic bytes not found" مواجه می‌شود.
     enc_path = "/tmp/golden_scores.parquet.enc"
     targz_path = "/tmp/golden_scores.tar.gz"
     extract_dir = "/tmp/golden_scores_extract"
@@ -938,7 +899,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     dec_path = found_parquet[0]
     log(f"  فایل parquet استخراج شد: {dec_path} ({os.path.getsize(dec_path)} bytes) ✅")
 
-    # فیلتر signatureهای واجد شرایط
     log(f"  فیلتر signatureها با score >= {min_score}...")
     qualified = _get_qualified_signatures(dec_path, min_score)
 
@@ -953,7 +913,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         log("  هیچ signature واجد شرایطی یافت نشد ✅")
         return 0
 
-    # فیلتر جدید
     new_signatures = [s for s in qualified if s["signature_path"] not in completed_set]
     log(f"  تعداد signatureهای جدید (نه در completed_portfolios): {len(new_signatures)}")
 
@@ -961,7 +920,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
         return 0
 
-    # دانلود صف موجود
     log("  دانلود all_combinations_portfolios.json...")
     combos_content = gh_api_get(repo, "all_combinations_portfolios.json")
     if combos_content is not None:
@@ -975,29 +933,28 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # سازگاری با صف‌های قدیمی + تکمیل archive_path برای signatureهای جدید:
-    # ========== فیکس: new_signatures مستقیماً از golden_scores.parquet خوانده
-    # می‌شوند (فقط signature_path و score دارند) و هرگز archive_path ندارند.
-    # قبلاً این‌ها بدون archive_path مستقیم به صف append می‌شدند و باعث
-    # می‌شد در analysis_portfolios.yml فیلتر jq روی archive_path این آیتم‌ها
-    # را کامل حذف کند و /tmp/archives_extracted خالی بماند (FileNotFoundError
-    # در portfolios.py). حالا نگاشت signature_path -> archive_path هر بار که
-    # new_signatures غیرخالی باشد ساخته و به تک‌تک آن‌ها اعمال می‌شود، علاوه
-    # بر migrate کردن آیتم‌های قدیمیِ از قبل موجود در صف در صورت نیاز. به لطف
-    # کش processed_archives.json، اگر آرشیوها قبلاً در همین اجرا (مرحله‌ی
-    # golden) پردازش شده باشند، این فراخوانی عملاً بدون دانلود اضافی است. ==========
+    # ====================================================================
+    # رفع باگ: new_signatures از golden_scores.parquet می‌آیند و فقط
+    # signature_path دارند. برای تکمیل archive_path باید کش را نادیده بگیریم
+    # تا نگاشت کامل signature_path -> archive_path ساخته شود.
+    # ====================================================================
     needs_migration_check = any(
         isinstance(item, dict) and "archive_path" not in item
         for item in existing_combos
     )
     if needs_migration_check or new_signatures:
-        log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از آرشیوها...")
-        archive_signatures_for_map = get_all_signatures_from_archives(repo, password, key_name="signature_path")
+        log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از آرشیوها (force_refresh=True)...")
+        # force_refresh=True باعث می‌شود کش نادیده گرفته شود و همه‌ی آرشیوها
+        # دوباره پردازش شوند تا نگاشت کامل ساخته شود.
+        archive_signatures_for_map = get_all_signatures_from_archives(
+            repo, password, key_name="signature_path", force_refresh=True
+        )
         sig_to_archive = {
             s["signature_path"]: s.get("archive_path")
             for s in archive_signatures_for_map
             if isinstance(s, dict) and "signature_path" in s
         }
+        log(f"  [ARCHIVE-MAP] نگاشت ساخته شد: {len(sig_to_archive)} signature_path -> archive_path")
 
         if needs_migration_check:
             log("  [MIGRATE] فرمت قدیمی در صف portfolios شناسایی شد — migrate می‌شود...", 'WARNING')
@@ -1020,10 +977,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
                 'WARNING'
             )
 
-    # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش) —
-    # بدون این فیلتر، هر اجرای build_portfolios_queue قبل از آپدیت
-    # completed_portfolios.json می‌تونه همون signature رو دوباره به صف
-    # اضافه کنه و باعث duplicate entry بشه.
     existing_in_queue = {
         s["signature_path"] if isinstance(s, dict) else s
         for s in existing_combos
@@ -1064,7 +1017,6 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
 # ================================ تابع اصلی ================================
 
 def main():
-    # تنظیم فایل لاگ
     global LOG_FILE
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -1074,7 +1026,6 @@ def main():
     log("🚀 شروع build_all_queues.py")
     log("=" * 60)
 
-    # خواندن environment variables
     third_repo = os.environ.get('THIRD_REPO')
     gh_token = os.environ.get('GH_TOKEN')
     results_password = os.environ.get('RESULTS_PASSWORD') or os.environ.get('DATA_PASSWORD')
@@ -1089,7 +1040,6 @@ def main():
 
     results = {}
 
-    # مرحله ۱: work
     try:
         count = build_work_queue(third_repo, gh_token)
         results['work'] = count
@@ -1098,13 +1048,11 @@ def main():
         log(f"❌ مرحله ۱ (work) با خطا مواجه شد: {e}", 'ERROR')
         sys.exit(1)
 
-    # مرحله ۲ و ۳ (golden, portfolios) نیازمند رمزگشایی آرشیوها هستند
     if not results_password:
         log("⚠️ RESULTS_PASSWORD تنظیم نشده — مراحل golden و portfolios رد می‌شوند", 'WARNING')
         results['golden'] = 0
         results['portfolios'] = 0
     else:
-        # مرحله ۲: golden
         try:
             count = build_golden_queue(third_repo, gh_token, results_password)
             results['golden'] = count
@@ -1113,7 +1061,6 @@ def main():
             log(f"❌ مرحله ۲ (golden) با خطا مواجه شد: {e}", 'ERROR')
             sys.exit(1)
 
-        # مرحله ۳: portfolios
         try:
             count = build_portfolios_queue(third_repo, gh_token, results_password)
             results['portfolios'] = count
@@ -1122,7 +1069,6 @@ def main():
             log(f"❌ مرحله ۳ (portfolios) با خطا مواجه شد: {e}", 'ERROR')
             sys.exit(1)
 
-    # خلاصه نهایی
     log("=" * 60)
     log("📊 خلاصه کل عملیات:")
     log(f"   work        → {results.get('work', 0)} ترکیب جدید")
