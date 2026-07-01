@@ -321,15 +321,63 @@ def _list_jsonl_inside_archive(repo, archive_path, password):
     return jsonl_entries
 
 
+def _load_processed_archives_cache(repo):
+    """دانلود processed_archives.json از مخزن سوم. اگر وجود نداشت، لیست خالی برمی‌گرداند."""
+    log("  [ARCHIVES] دانلود کش processed_archives.json...")
+    cache_content = gh_api_get(repo, "processed_archives.json")
+    if cache_content is not None:
+        try:
+            processed = json.loads(cache_content)
+            if not isinstance(processed, list):
+                processed = []
+        except Exception:
+            processed = []
+    else:
+        processed = []
+    processed = _normalize_completed_list(processed, "processed_archives.json")
+    log(f"  [ARCHIVES] تعداد آرشیوهای قبلاً پردازش‌شده در کش: {len(processed)}")
+    return processed
+
+
+def _upload_processed_archives_cache(repo, updated_archive_paths, max_retries=3):
+    """آپلود اتمیک processed_archives.json.
+
+    برای مدیریت race condition (مثلاً اگر همزمان دو اجرای دیگر هم در حال
+    آپدیت این فایل باشند)، هر بار sha تازه گرفته می‌شود و در صورت شکست
+    آپلود (مثلاً به دلیل sha منقضی‌شده)، با sha جدید دوباره تلاش می‌شود.
+    """
+    tmp_file = "/tmp/processed_archives.json"
+    dedup_sorted = sorted(set(updated_archive_paths))
+    for attempt in range(1, max_retries + 1):
+        sha = get_file_sha(repo, "processed_archives.json")
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(dedup_sorted, f, indent=2, ensure_ascii=False)
+        if upload_file_with_curl(repo, "processed_archives.json", tmp_file, sha, "update processed archives cache"):
+            log(f"  [ARCHIVES] کش processed_archives.json به‌روزرسانی شد ✅ ({len(dedup_sorted)} آرشیو)")
+            return True
+        log(f"  [ARCHIVES] تلاش {attempt}/{max_retries} برای آپلود کش ناموفق بود — تلاش مجدد با sha تازه...", 'WARNING')
+    log("  [ARCHIVES] آپلود کش processed_archives.json پس از چند تلاش ناموفق بود", 'ERROR')
+    return False
+
+
 def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
     """
     تمام آرشیوهای signature_archives/{module}/{strategy}/*.tar.gz.enc را پیدا کرده،
     هرکدام را دانلود/رمزگشایی/استخراج‌لیست می‌کند و برای هر فایل .jsonl داخل آن
-    یک آیتم {key_name: <مسیر کامل jsonl شامل 'signatures/'>} می‌سازد.
+    یک آیتم {key_name: <مسیر کامل jsonl شامل 'signatures/'>, "archive_path": <مسیر آرشیو>}
+    می‌سازد.
 
     آرشیوهای خراب یا بدون .jsonl به‌طور کامل نادیده گرفته می‌شوند — هیچ‌گاه
     نام آرشیو به عنوان signature بازگردانده نمی‌شود.
+
+    بهینه‌سازی: آرشیوهایی که در کش processed_archives.json (در ریشه‌ی مخزن
+    سوم) ثبت شده‌اند، اصلاً دانلود نمی‌شوند. فقط آرشیوهای جدید پردازش شده و
+    بلافاصله به کش اضافه می‌شوند تا اجراهای بعدی مجبور به دانلود دوباره‌ی
+    آرشیوهای قبلاً پردازش‌شده نباشند.
     """
+    processed_archives = _load_processed_archives_cache(repo)
+    processed_set = set(processed_archives)
+
     log("  [ARCHIVES] دریافت لیست محتوای signature_archives/...")
     cmd = f"gh api repos/{repo}/contents/signature_archives --jq '.[].name' 2>/dev/null"
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
@@ -373,16 +421,35 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
 
     all_signatures = []
     skipped = 0
+    cached_skip = 0
+    newly_processed = []
     for archive_path in archive_paths:
+        if archive_path in processed_set:
+            cached_skip += 1
+            continue
+
         jsonl_entries = _list_jsonl_inside_archive(repo, archive_path, password)
         if not jsonl_entries:
+            # آرشیو خراب/خالی — به کش اضافه نمی‌شود تا در اجرای بعدی دوباره
+            # تلاش شود (ممکن است خطا موقتی/شبکه‌ای بوده باشد)
             skipped += 1
             continue
-        for entry in jsonl_entries:
-            all_signatures.append({key_name: entry})
 
+        for entry in jsonl_entries:
+            all_signatures.append({key_name: entry, "archive_path": archive_path})
+
+        # بلافاصله پس از پردازش موفق، آرشیو به کش اضافه می‌شود
+        processed_set.add(archive_path)
+        newly_processed.append(archive_path)
+
+    log(f"  [ARCHIVES] آرشیوهای رد شده به دلیل وجود در کش (بدون دانلود): {cached_skip}")
     log(f"  [ARCHIVES] آرشیوهای نادیده‌گرفته‌شده (خراب/خالی): {skipped}")
+    log(f"  [ARCHIVES] آرشیوهای جدید پردازش‌شده در این اجرا: {len(newly_processed)}")
     log(f"  [ARCHIVES] تعداد کل signatureهای یافت‌شده: {len(all_signatures)}")
+
+    if newly_processed:
+        _upload_processed_archives_cache(repo, processed_archives + newly_processed)
+
     return all_signatures
 
 # ================================ مرحله ۱: Work Queue ================================
