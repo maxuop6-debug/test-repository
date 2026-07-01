@@ -14,36 +14,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-try:
-    import pyarrow  # noqa: F401
-    _PARQUET_AVAILABLE = True
-except ImportError:
-    try:
-        import fastparquet  # noqa: F401
-        _PARQUET_AVAILABLE = True
-    except ImportError:
-        _PARQUET_AVAILABLE = False
-
-
 def _save(df: pd.DataFrame, path: Path) -> Path:
-    """ذخیره DataFrame به Parquet یا CSV در صورت عدم وجود engine."""
-    if _PARQUET_AVAILABLE:
-        df.to_parquet(path, index=False)
-        return path
+    """ذخیره DataFrame به CSV."""
     csv_path = path.with_suffix(".csv")
     df.to_csv(csv_path, index=False)
-    log.warning(f"pyarrow/fastparquet موجود نیست – فایل به‌صورت CSV ذخیره شد: {csv_path}")
     return csv_path
 
 
 def _load(path: Path) -> pd.DataFrame:
-    """بارگذاری Parquet یا CSV."""
-    if path.exists():
-        return pd.read_parquet(path) if _PARQUET_AVAILABLE else pd.read_csv(path)
+    """بارگذاری CSV."""
     csv_path = path.with_suffix(".csv")
     if csv_path.exists():
         return pd.read_csv(csv_path)
-    raise FileNotFoundError(path)
+    raise FileNotFoundError(csv_path)
 
 
 logging.basicConfig(
@@ -496,7 +479,7 @@ def run(
                 f"فایل‌های کامل قبلی: {len(processed_files):,}"
             )
             try:
-                existing_raw = _load(output_path / "golden_raw.parquet")
+                existing_raw = _load(output_path / "golden_raw.csv")
                 raw_records = existing_raw.to_dict("records")
                 log.info(f"رکوردهای خام قبلی بارگذاری شد: {len(raw_records):,}")
             except FileNotFoundError:
@@ -517,7 +500,7 @@ def run(
             log.warning(f"interrupt.flag یافت شد - توقف پردازش قبل از قطعه {chunk_idx}.")
             raw_df_partial = pd.DataFrame(raw_records)
             if not raw_df_partial.empty:
-                _save(raw_df_partial, output_path / "golden_raw.parquet")
+                _save(raw_df_partial, output_path / "golden_raw.csv")
             save_status(status_path, processed_signatures, chunk_idx - 1, total_chunks, "interrupted", chunk_size, processed_files)
             interrupted = True
             break
@@ -549,7 +532,7 @@ def run(
                 processed_files.add(src_file)
 
         raw_df_partial = pd.DataFrame(raw_records)
-        _save(raw_df_partial, output_path / "golden_raw.parquet")
+        _save(raw_df_partial, output_path / "golden_raw.csv")
         save_status(status_path, processed_signatures, chunk_idx, total_chunks, "running", chunk_size, processed_files)
         log.info(
             f"قطعه {chunk_idx + 1}/{total_chunks} پردازش شد ({len(chunk_signatures)} امضا) | "
@@ -577,8 +560,8 @@ def run(
     # ── مدیریت all-win ────────────────────────────────────────────────────
     raw_df = resolve_all_win_pf(raw_df)
 
-    # ── ذخیره golden_raw.parquet ──────────────────────────────────────────
-    raw_out = _save(raw_df, output_path / "golden_raw.parquet")
+    # ── ذخیره golden_raw.csv ──────────────────────────────────────────
+    raw_out = _save(raw_df, output_path / "golden_raw.csv")
     log.info(f"golden_raw ذخیره شد: {raw_out}")
 
     # ── حذف فیلتر کم‌تکرار: استفاده مستقیم از داده‌های خام ─────────────────
@@ -608,7 +591,7 @@ def run(
     log.info("وزن‌دهی استراتژی‌های چند-کوینه...")
     scores_df = weighted_multi_coin_score(norm_df)
 
-    # ── آماده‌سازی golden_scores.parquet ──────────────────────────────────
+    # ── آماده‌سازی golden_scores.csv ──────────────────────────────────
     # signature_path ممکن است در برخی مسیرهای قدیمی وجود نداشته باشد؛
     # برای سازگاری با عقب، در صورت نبود، ستون خالی (None) ساخته می‌شود.
     if "signature_path" not in scores_df.columns:
@@ -620,7 +603,7 @@ def run(
     scores_out_df["version_id"] = version_id
     scores_out_df["calculated_at"] = now_utc
 
-    scores_out = _save(scores_out_df, output_path / "golden_scores.parquet")
+    scores_out = _save(scores_out_df, output_path / "golden_scores.csv")
     log.info(f"golden_scores ذخیره شد: {scores_out}")
 
     # ── وضعیت نهایی: completed ───────────────────────────────────────────
