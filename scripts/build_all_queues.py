@@ -30,6 +30,38 @@ def log(message, level='INFO'):
 
 # ================================ توابع مشترک ================================
 
+def _normalize_completed_list(items, source_name=""):
+    """تضمین می‌کند که items یک لیست از رشته‌های hashable باشد.
+
+    فایل‌های completed_*.json باید فقط شامل رشته (signature_path) باشند،
+    اما اگر به هر دلیلی (نسخه قدیمی اسکریپت، دستکاری دستی، و ...) عناصری
+    از نوع list/dict در آن‌ها نفوذ کرده باشد، set(items) با خطای
+    "unhashable type" کرش می‌کند. این تابع چنین عناصری را نرمالایز یا حذف
+    می‌کند تا خط لوله متوقف نشود.
+    """
+    normalized = []
+    bad_count = 0
+    for item in items:
+        if isinstance(item, str):
+            normalized.append(item)
+        elif isinstance(item, dict) and "signature_path" in item:
+            normalized.append(str(item["signature_path"]))
+            bad_count += 1
+        elif isinstance(item, (list, tuple)) and item:
+            # مثلاً یک آیتم آلوده به شکل [signature_path, ...] یا
+            # (coin_composition, signature) — اولین عنصر رشته‌ای را بردار
+            candidate = next((x for x in item if isinstance(x, str)), None)
+            if candidate is not None:
+                normalized.append(candidate)
+            bad_count += 1
+        else:
+            bad_count += 1  # آیتم قابل‌بازیابی نیست، نادیده گرفته می‌شود
+
+    if bad_count:
+        log(f"  ⚠️ {bad_count} آیتم غیرمعتبر/غیر-رشته‌ای در {source_name} یافت و نرمالایز/حذف شد", 'WARNING')
+
+    return normalized
+
 def gh_api_get(repo, path):
     """دریافت محتوای متنی یک فایل از مخزن.
     برای فایل‌های بزرگ‌تر از ~1MB، GitHub Contents API فیلد .content را خالی
@@ -538,6 +570,7 @@ def build_golden_queue(repo, token, password):
     else:
         completed_golden = []
 
+    completed_golden = _normalize_completed_list(completed_golden, "completed_golden.json")
     completed_set = set(completed_golden)
     log(f"  تعداد signatureهایی که قبلاً در completed_golden.json ثبت شده‌اند: {len(completed_set)}")
 
@@ -703,6 +736,7 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     else:
         completed_portfolios = []
 
+    completed_portfolios = _normalize_completed_list(completed_portfolios, "completed_portfolios.json")
     completed_set = set(completed_portfolios)
     log(f"  تعداد signatureهای قبلاً ثبت‌شده: {len(completed_set)}")
 
