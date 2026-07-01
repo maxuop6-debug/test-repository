@@ -59,68 +59,6 @@ jobs:
           fi
           echo "queue_valid=true" >> $GITHUB_OUTPUT
 
-      - name: استخراج آرشیوهای signature و ساخت artifact مشترک all-signatures
-        id: extract
-        if: steps.fetch_queue.outputs.queue_valid == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          # نکته: این استخراج فقط برای ساخت artifact مشترک all-signatures است که
-          # مرحله‌ی golden-batch از آن برای کپی فایل‌های هر چانک استفاده می‌کند.
-          # چانک‌بندی صف (مرحله بعدی) از روی خود صف all_combinations_golden.json
-          # انجام می‌شود، نه از روی این استخراج.
-          mkdir -p /tmp/all_signatures
-
-          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
-
-          ARCHIVES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("signature_archives/")) | select(.path | endswith(".tar.gz.enc")) | .path] | unique')
-          ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
-          echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
-
-          EXTRACTED=0
-          while IFS= read -r ARCH_PATH; do
-            [ -z "$ARCH_PATH" ] && continue
-            API_RESP=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH")
-            DL_URL=$(echo "$API_RESP" | jq -r '.download_url // empty' 2>/dev/null || echo "")
-            if [[ ! "$DL_URL" =~ ^https:// ]]; then
-              echo "⚠️ DL_URL نامعتبر برای $ARCH_PATH: '$DL_URL' — رد می‌شود."
-              continue
-            fi
-            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
-            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
-            [ -s "$ENC_FILE" ] || continue
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('$ENC_FILE');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('${ENC_FILE%.enc}',dec);
-            " 2>/dev/null
-            if [ -f "${ENC_FILE%.enc}" ]; then
-              tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures && EXTRACTED=$((EXTRACTED+1))
-            fi
-            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
-          done < <(echo "$ARCHIVES" | jq -r '.[]')
-
-          JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
-          echo "✅ استخراج: $JSONL_TOTAL فایل JSONL از $EXTRACTED archive"
-          echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
-
-      - name: آپلود artifact مشترک all-signatures
-        if: steps.fetch_queue.outputs.queue_valid == 'true' && steps.extract.outputs.jsonl_total != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: all-signatures-${{ github.run_id }}
-          path: /tmp/all_signatures/
-          retention-days: 1
-
       - name: اعمال محدودیت ۵۰۰۰۰۰ و تقسیم صف به چانک‌های ۵۰۰۰۰۰ تایی
         id: gen
         if: steps.fetch_queue.outputs.queue_valid == 'true'
@@ -129,13 +67,15 @@ jobs:
           TOTAL=$(jq length /tmp/all_combinations_golden.json)
 
           # محدودیت کل آیتم‌ها (حداکثر ۵۰۰٬۰۰۰ در هر اجرا) — فقط ۵۰۰٬۰۰۰ تای اول
-          # signature_path از هر آیتم استخراج می‌شود تا با ساختار all-signatures سازگار بماند
+          # باگ archive_path fix: کل آیتم (شامل signature_path و archive_path) بدون
+          # تغییر نگه داشته می‌شود تا مرحله‌ی golden-batch بتواند فقط آرشیوهای مورد
+          # نیاز خودش را از روی archive_path دانلود کند.
           if [ "$TOTAL" -gt 500000 ]; then
-            jq '[.[:500000][] | (if type == "object" then .signature_path else . end)]' \
+            jq '[.[:500000][]]' \
               /tmp/all_combinations_golden.json > /tmp/golden_chunks/signatures_capped.json
             TOTAL=500000
           else
-            jq '[.[] | (if type == "object" then .signature_path else . end)]' \
+            jq '[.[]]' \
               /tmp/all_combinations_golden.json > /tmp/golden_chunks/signatures_capped.json
           fi
           SIG_FILES_CAPPED=$(cat /tmp/golden_chunks/signatures_capped.json)
@@ -268,28 +208,74 @@ jobs:
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
 
-      - name: دانلود artifact مشترک تمام signatureهای استخراج‌شده (بدون تماس API)
-        # باگ T fix: فقط وقتی واقعاً نیاز داریم دانلود کن
+      - name: دانلود و استخراج آرشیوهای این چانک
+        # باگ archive_path fix: به جای دانلود artifact مشترک all-signatures (که شامل
+        # تمام آرشیوهای صف بود)، هر job فقط archive_path های مربوط به آیتم‌های
+        # همین چانک را از مخزن سوم دانلود، رمزگشایی و استخراج می‌کند.
+        id: fetch_archives
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: all-signatures-${{ github.run_id }}
-          path: /tmp/all_signatures
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          mkdir -p /tmp/archives_extracted
+          CHUNK_INDEX=${{ matrix.chunk_index }}
 
-      - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
+          ARCHIVES=$(jq -r '[.[] | (if type == "object" then .archive_path else empty end)] | map(select(. != null and . != "")) | unique | .[]' \
+            /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json)
+          ARCHIVE_COUNT=$(echo "$ARCHIVES" | grep -c . || true)
+          echo "[DEBUG] تعداد archive یکتای مورد نیاز این چانک: $ARCHIVE_COUNT"
+
+          EXTRACTED=0
+          while IFS= read -r ARCH_PATH; do
+            [ -z "$ARCH_PATH" ] && continue
+            API_RESP=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH")
+            DL_URL=$(echo "$API_RESP" | jq -r '.download_url // empty' 2>/dev/null || echo "")
+            if [[ ! "$DL_URL" =~ ^https:// ]]; then
+              echo "⚠️ DL_URL نامعتبر برای $ARCH_PATH: '$DL_URL' — رد می‌شود."
+              continue
+            fi
+            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
+            [ -s "$ENC_FILE" ] || continue
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ENC_FILE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('${ENC_FILE%.enc}',dec);
+            " 2>/dev/null
+            if [ -f "${ENC_FILE%.enc}" ]; then
+              tar -xzf "${ENC_FILE%.enc}" -C /tmp/archives_extracted && EXTRACTED=$((EXTRACTED+1))
+            fi
+            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
+          done <<< "$ARCHIVES"
+
+          JSONL_TOTAL=$(find /tmp/archives_extracted -name '*.jsonl' | wc -l)
+          echo "✅ استخراج: $JSONL_TOTAL فایل JSONL از $EXTRACTED archive (چانک $CHUNK_INDEX)"
+
+      - name: 3. انتخاب signatureهای مخصوص این چانک از آرشیوهای استخراج‌شده
+        # نکته: golden.py فیلتر داخلی (--signatures-filter) ندارد، بنابراین این
+        # کپی دقیق لازم است تا فقط فایل‌های همین چانک به --signatures-dir برسند.
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
         run: |
           mkdir -p /tmp/signatures
           CHUNK_INDEX=${{ matrix.chunk_index }}
-          SIG_PATHS=$(jq -r '.[]' /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json)
+          SIG_PATHS=$(jq -r '.[] | (if type == "object" then .signature_path else . end)' /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json)
 
           COPIED=0
           while IFS= read -r REL_PATH; do
-            SRC="/tmp/all_signatures/$REL_PATH"
+            [ -z "$REL_PATH" ] && continue
+            SRC="/tmp/archives_extracted/$REL_PATH"
             DEST="/tmp/signatures/$REL_PATH"
             mkdir -p "$(dirname "$DEST")"
             if [ -f "$SRC" ]; then
