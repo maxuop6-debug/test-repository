@@ -452,6 +452,79 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path"):
 
     return all_signatures
 
+
+def _migrate_legacy_queue_format(repo, remote_path, existing_combos, sig_to_archive, commit_msg):
+    """
+    سازگاری با صف‌های قدیمی: اگر صف موجود (existing_combos) شامل حداقل یک
+    آیتم فاقد کلید archive_path باشد، یعنی صف با فرمت قدیمی ساخته شده است.
+
+    این تابع archive_path را (در صورت وجود در نگاشت sig_to_archive) به چنین
+    آیتم‌هایی اضافه می‌کند و صف را در مخزن بازنویسی می‌کند. عملیات کاملاً
+    غیرمخرب است:
+    - هیچ آیتمی حذف نمی‌شود.
+    - هیچ آیتمی تکراری اضافه نمی‌شود (فقط archive_path به آیتم‌های موجود
+      افزوده می‌شود، نه اینکه صف از نو با لیست signatureهای جدید ساخته شود).
+    - اگر signature_path یک آیتم قدیمی در نگاشت پیدا نشود (مثلاً چون آرشیو
+      مربوطه دیگر در signature_archives/ وجود ندارد)، آیتم بدون تغییر با
+      archive_path=None نگه داشته می‌شود تا از دست نرود.
+
+    خروجی: (لیست به‌روزشده‌ی آیتم‌ها, آیا مهاجرتی انجام شد یا نه)
+    """
+    needs_migration = any(
+        isinstance(item, dict) and "archive_path" not in item
+        for item in existing_combos
+    )
+    if not needs_migration:
+        return existing_combos, False
+
+    log(f"  [MIGRATE] فرمت قدیمی صف شناسایی شد ({remote_path}) — افزودن archive_path به آیتم‌های موجود...", 'WARNING')
+
+    migrated = []
+    added_count = 0
+    missing_count = 0
+    for item in existing_combos:
+        if isinstance(item, str):
+            # آیتم صرفاً رشته‌ای (فرمت خیلی قدیمی) — به دیکشنری تبدیل می‌شود
+            sig_path = item
+            archive_path = sig_to_archive.get(sig_path)
+            migrated.append({"signature_path": sig_path, "archive_path": archive_path})
+            if archive_path:
+                added_count += 1
+            else:
+                missing_count += 1
+        elif isinstance(item, dict):
+            if "archive_path" in item:
+                migrated.append(item)
+            else:
+                sig_path = item.get("signature_path")
+                archive_path = sig_to_archive.get(sig_path)
+                new_item = dict(item)
+                new_item["archive_path"] = archive_path
+                migrated.append(new_item)
+                if archive_path:
+                    added_count += 1
+                else:
+                    missing_count += 1
+        else:
+            # نوع ناشناخته — بدون تغییر نگه داشته می‌شود تا چیزی گم نشود
+            migrated.append(item)
+
+    log(f"  [MIGRATE] archive_path به {added_count} آیتم اضافه شد؛ "
+        f"{missing_count} آیتم بدون archive_path باقی ماند (در آرشیوهای فعلی یافت نشد)")
+
+    tmp_file = f"/tmp/_migrate_{os.path.basename(remote_path)}"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(migrated, f, indent=2, ensure_ascii=False)
+
+    sha = get_file_sha(repo, remote_path)
+    if not upload_file_with_curl(repo, remote_path, tmp_file, sha, commit_msg):
+        log(f"  [MIGRATE] آپلود صف مهاجرت‌شده ({remote_path}) ناموفق بود — "
+            f"نسخه‌ی مهاجرت‌شده فقط در حافظه برای ادامه‌ی این اجرا استفاده می‌شود", 'ERROR')
+    else:
+        log(f"  [MIGRATE] صف {remote_path} با موفقیت به فرمت جدید بازنویسی شد ✅ ({len(migrated)} آیتم)")
+
+    return migrated, True
+
 # ================================ مرحله ۱: Work Queue ================================
 
 def build_work_queue(repo, token):
@@ -671,6 +744,20 @@ def build_golden_queue(repo, token, password):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
+    # سازگاری با صف‌های قدیمی: اگر آیتم‌های صف موجود فاقد archive_path باشند
+    # (فرمت قدیمی)، صف را با استفاده از نگاشت signature_path -> archive_path
+    # که از all_signatures (همین اجرا) به‌دست می‌آید، بازنویسی می‌کنیم. این کار
+    # غیرمخرب است و آیتم‌های موجود را حذف یا دوباره اضافه نمی‌کند.
+    sig_to_archive = {
+        s["signature_path"]: s.get("archive_path")
+        for s in all_signatures
+        if isinstance(s, dict) and "signature_path" in s
+    }
+    existing_combos, _ = _migrate_legacy_queue_format(
+        repo, "all_combinations_golden.json", existing_combos, sig_to_archive,
+        "migrate golden queue to include archive_path"
+    )
+
     # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش)
     existing_in_queue = {
         s["signature_path"] if isinstance(s, dict) else s
@@ -887,6 +974,30 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     else:
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
+
+    # سازگاری با صف‌های قدیمی: اگر آیتم‌های صف موجود فاقد archive_path باشند
+    # (فرمت قدیمی)، صف را بازنویسی می‌کنیم. برخلاف golden، اینجا all_signatures
+    # از آرشیوها نگرفته‌ایم (منبع portfolios، golden_scores.parquet است)، پس
+    # فقط برای ساخت نگاشت signature_path -> archive_path یک‌بار
+    # get_all_signatures_from_archives را صدا می‌زنیم. به لطف کش
+    # processed_archives.json، اگر آرشیوها قبلاً در همین اجرا (مرحله‌ی golden)
+    # پردازش شده باشند، این فراخوانی عملاً بدون دانلود اضافی خواهد بود.
+    needs_migration_check = any(
+        isinstance(item, dict) and "archive_path" not in item
+        for item in existing_combos
+    )
+    if needs_migration_check:
+        log("  [MIGRATE] فرمت قدیمی در صف portfolios شناسایی شد — دریافت نگاشت archive_path از آرشیوها...", 'WARNING')
+        archive_signatures_for_map = get_all_signatures_from_archives(repo, password, key_name="signature_path")
+        sig_to_archive = {
+            s["signature_path"]: s.get("archive_path")
+            for s in archive_signatures_for_map
+            if isinstance(s, dict) and "signature_path" in s
+        }
+        existing_combos, _ = _migrate_legacy_queue_format(
+            repo, "all_combinations_portfolios.json", existing_combos, sig_to_archive,
+            "migrate portfolios queue to include archive_path"
+        )
 
     # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش) —
     # بدون این فیلتر، هر اجرای build_portfolios_queue قبل از آپدیت
