@@ -244,7 +244,17 @@ jobs:
             "$CHUNK_FILE" > /tmp/archive_list.txt
 
           ARCH_TOTAL=$(wc -l < /tmp/archive_list.txt | tr -d ' ')
+          CHUNK_ITEM_COUNT=$(jq 'length' "$CHUNK_FILE")
+          MISSING_ARCHIVE_COUNT=$(jq '[.[] | select(type == "object" and ((.archive_path // "") == ""))] | length' "$CHUNK_FILE")
           echo "ℹ️ تعداد آرشیوهای یکتای این chunk: $ARCH_TOTAL"
+          if [ "$MISSING_ARCHIVE_COUNT" -gt 0 ]; then
+            echo "⚠️ $MISSING_ARCHIVE_COUNT از $CHUNK_ITEM_COUNT آیتم این chunk فاقد archive_path هستند و نادیده گرفته می‌شوند (احتمالاً صف قدیمی/migrate‌نشده — به build_all_queues.py مراجعه کنید)."
+          fi
+          if [ "$ARCH_TOTAL" -eq 0 ] && [ "$CHUNK_ITEM_COUNT" -gt 0 ]; then
+            echo "❌ هیچ آرشیوی برای این chunk قابل دانلود نیست چون همه‌ی $CHUNK_ITEM_COUNT آیتم فاقد archive_path هستند."
+            echo "   این یعنی صف all_combinations_portfolios.json نیاز به migrate دارد (archive_path گم شده)."
+            exit 1
+          fi
 
           FAIL_COUNT=0
           while IFS= read -r ARCH_PATH; do
@@ -278,6 +288,11 @@ jobs:
           JSONL_TOTAL=$(find /tmp/archives_extracted -name '*.jsonl' | wc -l)
           echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCH_TOTAL آرشیو (ناموفق: $FAIL_COUNT)."
           rm -f /tmp/archive_list.txt
+
+          if [ "$JSONL_TOTAL" -eq 0 ] && [ "$ARCH_TOTAL" -gt 0 ]; then
+            echo "❌ از $ARCH_TOTAL آرشیو، هیچ فایل .jsonl استخراج نشد (دانلود/رمزگشایی/استخراج همه ناموفق بودند)."
+            exit 1
+          fi
 
       - name: 3. بررسی chunk این job (فیلتر واقعی در مرحله ۶ با --signatures-filter انجام می‌شود)
         if: |
