@@ -3,7 +3,7 @@
 portfolios.py - ماژول دوم: سبدهای مکمل (Complementary Portfolios)
 
 این ماژول با استفاده از خروجی ماژول Golden (golden_scores.parquet) و داده‌های
-خام per-period (signatures/*.jsonl)، ترکیب‌های بهینه ۲ و ۳ استراتژیِ هم‌گروه
+خام per-period (signatures/*.jsonl)، ترکیب‌های بهینه ۲، ۳ و ۴ استراتژیِ هم‌گروه
 (coin_composition, signature) را پیدا می‌کند: ترکیب‌هایی که بیشترین نرخ بقا
 (Survival Rate) و جبران‌سازی متقابل (Compensation) و کمترین همبستگی شرطی را
 دارند. خروجی نهایی در portfolios.parquet ذخیره می‌شود.
@@ -53,7 +53,7 @@ GOLDEN_SCORE_THRESHOLD = 45.0
 MIN_PAIR_OVERLAP = 10
 MIN_PORTFOLIO_SAMPLES = 10
 CORR_PERCENTILE_THRESHOLD = 25
-PORTFOLIO_SIZES = (2, 3)
+PORTFOLIO_SIZES = (2, 3, 4)
 ABS_MIN_SURVIVAL_RATE = 50.0
 ABS_MIN_COMPENSATION_RATIO = 0.6
 ABS_MIN_AVG_RETURN = 0.0
@@ -437,7 +437,7 @@ def survival_rate(returns: pd.DataFrame) -> float:
 
     ========== باگ ۲ رفع شد ==========
     معیار مجموع (sum) به‌تنهایی به‌نفع سبدهای ۳عضوی سوگیری دارد (صرفاً به‌خاطر
-    تعداد اعضای بیشتر، نه کیفیت ترکیب). برای عدالت در مقایسه‌ی سبدهای ۲ و ۳تایی
+    تعداد اعضای بیشتر، نه کیفیت ترکیب). برای عدالت در مقایسه‌ی سبدهای با اندازه‌های مختلف
     هم نرخ بقا بر اساس مجموع (قدرت تجمعی سبد) و هم بر اساس میانگین هر عضو
     (بی‌اثر از اندازه‌ی سبد) محاسبه و ترکیب می‌شوند.
     """
@@ -497,7 +497,7 @@ def evaluate_group(
     group: pd.DataFrame,
     top_n: int,
 ) -> tuple[list[dict], int]:
-    """ارزیابی و رتبه‌بندی سبدهای ۲ و ۳ استراتژی برای یک گروه.
+    """ارزیابی و رتبه‌بندی سبدهای ۲، ۳ و ۴ استراتژی برای یک گروه.
 
     خروجی: (لیست سبدهای برتر تا top_n، تعداد کل سبدهای کاندید بررسی‌شده پیش از فیلتر مطلق)
     """
@@ -844,7 +844,7 @@ def run(
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="ماژول سبدهای مکمل (Portfolios) — ساخت و امتیازدهی سبدهای ۲ و ۳ استراتژی",
+        description="ماژول سبدهای مکمل (Portfolios) — ساخت و امتیازدهی سبدهای ۲، ۳ و ۴ استراتژی",
     )
     parser.add_argument(
         "--signatures-dir", required=True, type=Path,
