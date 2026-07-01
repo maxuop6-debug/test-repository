@@ -355,6 +355,69 @@ def _upload_processed_archives_cache(repo, updated_archive_paths, max_retries=3)
     return False
 
 
+# ================================ ایندکس دائمی signature_path -> archive_path ================================
+#
+# مشکل قبلی: sig_to_archive در build_portfolios_queue با فراخوانی دوباره‌ی
+# get_all_signatures_from_archives ساخته می‌شد، اما آن تابع آرشیوهایی را که
+# قبلاً در processed_archives.json کش شده‌اند (یعنی اکثر آرشیوهای قدیمی) به
+# طور کامل رد می‌کند (continue) و هیچ signature‌ای از آن‌ها برنمی‌گرداند.
+# نتیجه: sig_to_archive فقط شامل آرشیوهای «تازه دیده‌شده در همین اجرا» بود
+# و archive_path برای اکثر signatureهای قدیمی = None می‌شد.
+#
+# راه‌حل: یک فایل ایندکس دائمی (signature_archive_index.json) در مخزن سوم
+# نگه می‌داریم که نگاشت signature_path -> archive_path را به صورت تجمعی
+# (append-only) ذخیره می‌کند. هر بار که get_all_signatures_from_archives
+# آرشیوهای جدیدی پیدا و پردازش می‌کند، نگاشت آن‌ها بلافاصله در این ایندکس
+# ذخیره می‌شود — حتی اگر بعداً آیتم مربوطه از all_combinations_golden.json
+# حذف شود (چون آن فایل صف است، نه آرشیو تاریخچه). به این ترتیب دیگر هیچ‌وقت
+# نیازی به rescan کامل آرشیوها نیست: کافیست همین یک فایل کوچک دانلود شود.
+
+SOURCE_INDEX_PATH = "signature_archive_index.json"
+
+def _load_source_index(repo):
+    """دانلود نگاشت دائمی signature_path -> archive_path از مخزن سوم."""
+    log(f"  [INDEX] دانلود {SOURCE_INDEX_PATH}...")
+    content = gh_api_get(repo, SOURCE_INDEX_PATH)
+    if content is None:
+        log(f"  [INDEX] {SOURCE_INDEX_PATH} یافت نشد — ایندکس خالی در نظر گرفته می‌شود", 'WARNING')
+        return {}
+    try:
+        index = json.loads(content)
+        if not isinstance(index, dict):
+            log(f"  [INDEX] محتوای {SOURCE_INDEX_PATH} از نوع dict نیست — نادیده گرفته می‌شود", 'WARNING')
+            return {}
+    except Exception as e:
+        log(f"  [INDEX] خطا در parse {SOURCE_INDEX_PATH}: {e}", 'ERROR')
+        return {}
+    log(f"  [INDEX] {len(index)} نگاشت signature_path -> archive_path بارگذاری شد")
+    return index
+
+
+def _upload_source_index(repo, new_entries, max_retries=3):
+    """ادغام اتمیک new_entries در signature_archive_index.json موجود در مخزن و آپلود آن.
+
+    new_entries: dict {signature_path: archive_path} که باید اضافه/به‌روزرسانی شود.
+    برای جلوگیری از race condition، هر تلاش دوباره نسخه‌ی فعلی فایل را از مخزن
+    می‌خواند، new_entries را روی آن ادغام می‌کند و با sha تازه آپلود می‌کند.
+    """
+    if not new_entries:
+        return True
+
+    tmp_file = "/tmp/signature_archive_index.json"
+    for attempt in range(1, max_retries + 1):
+        current = _load_source_index(repo)
+        current.update(new_entries)
+        sha = get_file_sha(repo, SOURCE_INDEX_PATH)
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=2, ensure_ascii=False)
+        if upload_file_with_curl(repo, SOURCE_INDEX_PATH, tmp_file, sha, "update signature->archive index"):
+            log(f"  [INDEX] {SOURCE_INDEX_PATH} به‌روزرسانی شد ✅ (اکنون {len(current)} نگاشت، {len(new_entries)} مورد جدید/تغییریافته)")
+            return True
+        log(f"  [INDEX] تلاش {attempt}/{max_retries} برای آپلود ایندکس ناموفق بود — تلاش مجدد با sha تازه...", 'WARNING')
+    log(f"  [INDEX] آپلود {SOURCE_INDEX_PATH} پس از چند تلاش ناموفق بود — نگاشت‌های جدید فقط در حافظه‌ی همین اجرا باقی ماندند", 'ERROR')
+    return False
+
+
 def get_all_signatures_from_archives(repo, password, key_name="signature_path", force_refresh=False):
     """
     تمام آرشیوهای signature_archives/{module}/{strategy}/*.tar.gz.enc را پیدا کرده،
@@ -453,6 +516,20 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path", 
 
     if newly_processed and not force_refresh:
         _upload_processed_archives_cache(repo, processed_archives + newly_processed)
+
+    # نگاشت signature_path -> archive_path هر آرشیو تازه‌پردازش‌شده را به صورت
+    # دائمی در signature_archive_index.json ذخیره می‌کنیم — چون processed_set
+    # باعث می‌شود این آرشیوها در فراخوانی‌های بعدی دیگر هرگز اسکن نشوند،
+    # این تنها فرصت است که نگاشت آن‌ها ثبت شود؛ در غیر این صورت archive_path
+    # این signatureها برای همیشه گم می‌شود (باگ اصلی archive_path=null).
+    if key_name == "signature_path":
+        new_index_entries = {
+            s["signature_path"]: s.get("archive_path")
+            for s in all_signatures
+            if isinstance(s, dict) and s.get("signature_path") and s.get("archive_path")
+        }
+        if new_index_entries:
+            _upload_source_index(repo, new_index_entries)
 
     return all_signatures
 
@@ -948,16 +1025,22 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # دریافت نگاشت signature_path -> archive_path از آرشیوها
-    # دیگر نیازی به force_refresh نیست چون signature_path دقیقاً با مسیر فایل‌ها تطابق دارد
-    log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از آرشیوها...")
-    archive_signatures = get_all_signatures_from_archives(repo, password, key_name="signature_path")
-    sig_to_archive = {
-        s["signature_path"]: s.get("archive_path")
-        for s in archive_signatures
-        if isinstance(s, dict) and "signature_path" in s
-    }
-    log(f"  [ARCHIVE-MAP] نگاشت ساخته شد: {len(sig_to_archive)} signature_path -> archive_path")
+    # دریافت نگاشت signature_path -> archive_path
+    #
+    # قبلاً اینجا get_all_signatures_from_archives دوباره فراخوانی می‌شد تا
+    # نگاشت از روی آرشیوها بازسازی شود. اما آن تابع آرشیوهای قبلاً
+    # پردازش‌شده (که در processed_archives.json کش هستند) را به‌طور کامل رد
+    # می‌کند، پس نگاشت فقط شامل آرشیوهای «تازه» همین اجرا بود و archive_path
+    # اکثر signatureهای قدیمی (که آرشیوشان از قبل کش شده بود) None می‌شد —
+    # این دقیقاً باگ archive_path=null در صف portfolios بود.
+    #
+    # حالا به‌جای rescan، از ایندکس دائمی signature_archive_index.json
+    # استفاده می‌کنیم که هر بار get_all_signatures_from_archives آرشیو جدیدی
+    # پیدا می‌کند، بلافاصله نگاشت آن را در خودش ذخیره می‌کند و هیچ‌وقت آن را
+    # از دست نمی‌دهد (حتی بعد از اینکه آیتم از صف golden حذف شد).
+    log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از ایندکس دائمی...")
+    sig_to_archive = _load_source_index(repo)
+    log(f"  [ARCHIVE-MAP] نگاشت بارگذاری شد: {len(sig_to_archive)} signature_path -> archive_path")
 
     # بررسی و مهاجرت صف قدیمی (در صورت نیاز)
     needs_migration = any(
@@ -1029,6 +1112,33 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     log(f"✅ تعداد {len(new_signatures)} signature جدید به all_combinations_portfolios.json اضافه شد")
     return len(new_signatures)
 
+def bootstrap_source_index(repo, password):
+    """اجرای یک‌باره: کل signature_archives/ را (حتی آرشیوهای قبلاً کش‌شده)
+    از نو اسکن می‌کند تا نگاشت signature_path -> archive_path آرشیوهایی که
+    قبل از وجود این ایندکس پردازش شده بودند (و نگاشتشان گم شده بود) بازسازی
+    و در signature_archive_index.json ذخیره شود.
+
+    این تابع گران است (دانلود همه‌ی آرشیوها) و فقط یک‌بار لازم است اجرا شود؛
+    بعد از آن، get_all_signatures_from_archives به‌صورت خودکار و تدریجی
+    ایندکس را برای هر آرشیو جدید تکمیل می‌کند و دیگر هیچ‌وقت rescan کامل
+    لازم نیست. برای اجرا: BOOTSTRAP_SOURCE_INDEX=1 را در محیط تنظیم کنید.
+    """
+    log("=" * 60)
+    log("🔄 Bootstrap یک‌باره: بازسازی کامل signature_archive_index.json")
+    log("=" * 60)
+    all_signatures = get_all_signatures_from_archives(
+        repo, password, key_name="signature_path", force_refresh=True
+    )
+    entries = {
+        s["signature_path"]: s.get("archive_path")
+        for s in all_signatures
+        if isinstance(s, dict) and s.get("signature_path") and s.get("archive_path")
+    }
+    log(f"  {len(entries)} نگاشت از rescan کامل به‌دست آمد — ادغام در ایندکس دائمی...")
+    _upload_source_index(repo, entries)
+    log("✅ Bootstrap ایندکس تمام شد")
+
+
 # ================================ تابع اصلی ================================
 
 def main():
@@ -1052,6 +1162,16 @@ def main():
     if not third_repo or not gh_token:
         log("THIRD_REPO یا GH_TOKEN تنظیم نشده است. خروج.", 'ERROR')
         sys.exit(1)
+
+    if os.environ.get('BOOTSTRAP_SOURCE_INDEX') == '1':
+        if not results_password:
+            log("BOOTSTRAP_SOURCE_INDEX=1 ست شده اما RESULTS_PASSWORD موجود نیست. خروج.", 'ERROR')
+            sys.exit(1)
+        try:
+            bootstrap_source_index(third_repo, results_password)
+        except Exception as e:
+            log(f"❌ Bootstrap ایندکس با خطا مواجه شد: {e}", 'ERROR')
+            sys.exit(1)
 
     results = {}
 
