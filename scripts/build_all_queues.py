@@ -436,7 +436,11 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path", 
             continue
 
         for entry in jsonl_entries:
-            all_signatures.append({key_name: entry, "archive_path": archive_path})
+            # حذف پیشوند "signatures/" از entry تا با ستون signature_path در golden_scores.parquet مطابقت داشته باشد
+            clean_entry = entry
+            if clean_entry.startswith("signatures/"):
+                clean_entry = clean_entry[11:]  # len("signatures/") == 11
+            all_signatures.append({key_name: clean_entry, "archive_path": archive_path})
 
         if not force_refresh:
             processed_set.add(archive_path)
@@ -786,7 +790,12 @@ def _install_pandas():
     return True
 
 def _get_qualified_signatures(parquet_path, min_score=45):
-    """خواندن golden_scores.parquet و فیلتر score >= min_score"""
+    """
+    خواندن golden_scores.parquet و فیلتر score >= min_score
+
+    اولویت با ستون signature_path است (معماری جدید). اگر ستون signature_path
+    وجود نداشت، از ستون signature استفاده می‌شود (سازگاری با عقب).
+    """
     try:
         import pandas as pd
     except ImportError:
@@ -813,16 +822,25 @@ def _get_qualified_signatures(parquet_path, min_score=45):
                 log("  هیچ ستون عددی در parquet یافت نشد", 'ERROR')
                 return []
 
+        # ========== تغییر اصلی: اولویت با signature_path ==========
         sig_col = None
-        for col in ['signature', 'signature_path', 'sig', 'name']:
+        # اولویت ۱: signature_path (ستون جدید در golden.py اصلاح‌شده)
+        for col in ['signature_path']:
             if col in df.columns:
                 sig_col = col
                 break
+        # اولویت ۲: signature (ستون قدیمی، سازگاری با عقب)
+        if sig_col is None:
+            for col in ['signature', 'sig', 'name']:
+                if col in df.columns:
+                    sig_col = col
+                    break
+
         if sig_col is None:
             str_cols = df.select_dtypes(include='object').columns.tolist()
             if str_cols:
                 sig_col = str_cols[0]
-                log(f"  ستون 'signature' یافت نشد، از '{sig_col}' استفاده می‌شود", 'WARNING')
+                log(f"  ستون 'signature_path'/'signature' یافت نشد، از '{sig_col}' استفاده می‌شود", 'WARNING')
             else:
                 log("  هیچ ستون رشته‌ای در parquet یافت نشد", 'ERROR')
                 return []
@@ -913,13 +931,10 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         log("  هیچ signature واجد شرایطی یافت نشد ✅")
         return 0
 
-    new_signatures = [s for s in qualified if s["signature_path"] not in completed_set]
-    log(f"  تعداد signatureهای جدید (نه در completed_portfolios): {len(new_signatures)}")
-
-    if not new_signatures:
-        log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
-        return 0
-
+    # ====================================================================
+    # تغییر اصلی: به جای استفاده از signature (امضای خبری)، از signature_path استفاده می‌کنیم
+    # چون golden.py اصلاح‌شده، signature_path را در خروجی ذخیره می‌کند.
+    # ====================================================================
     log("  دانلود all_combinations_portfolios.json...")
     combos_content = gh_api_get(repo, "all_combinations_portfolios.json")
     if combos_content is not None:
@@ -933,58 +948,58 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # ====================================================================
-    # رفع باگ: new_signatures از golden_scores.parquet می‌آیند و فقط
-    # signature_path دارند. برای تکمیل archive_path باید کش را نادیده بگیریم
-    # تا نگاشت کامل signature_path -> archive_path ساخته شود.
-    # ====================================================================
-    needs_migration_check = any(
+    # دریافت نگاشت signature_path -> archive_path از آرشیوها
+    # دیگر نیازی به force_refresh نیست چون signature_path دقیقاً با مسیر فایل‌ها تطابق دارد
+    log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از آرشیوها...")
+    archive_signatures = get_all_signatures_from_archives(repo, password, key_name="signature_path")
+    sig_to_archive = {
+        s["signature_path"]: s.get("archive_path")
+        for s in archive_signatures
+        if isinstance(s, dict) and "signature_path" in s
+    }
+    log(f"  [ARCHIVE-MAP] نگاشت ساخته شد: {len(sig_to_archive)} signature_path -> archive_path")
+
+    # بررسی و مهاجرت صف قدیمی (در صورت نیاز)
+    needs_migration = any(
         isinstance(item, dict) and "archive_path" not in item
         for item in existing_combos
     )
-    if needs_migration_check or new_signatures:
-        log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از آرشیوها (force_refresh=True)...")
-        # force_refresh=True باعث می‌شود کش نادیده گرفته شود و همه‌ی آرشیوها
-        # دوباره پردازش شوند تا نگاشت کامل ساخته شود.
-        archive_signatures_for_map = get_all_signatures_from_archives(
-            repo, password, key_name="signature_path", force_refresh=True
+    if needs_migration:
+        log("  [MIGRATE] فرمت قدیمی در صف portfolios شناسایی شد — migrate می‌شود...", 'WARNING')
+        existing_combos, _ = _migrate_legacy_queue_format(
+            repo, "all_combinations_portfolios.json", existing_combos, sig_to_archive,
+            "migrate portfolios queue to include archive_path"
         )
-        sig_to_archive = {
-            s["signature_path"]: s.get("archive_path")
-            for s in archive_signatures_for_map
-            if isinstance(s, dict) and "signature_path" in s
-        }
-        log(f"  [ARCHIVE-MAP] نگاشت ساخته شد: {len(sig_to_archive)} signature_path -> archive_path")
 
-        if needs_migration_check:
-            log("  [MIGRATE] فرمت قدیمی در صف portfolios شناسایی شد — migrate می‌شود...", 'WARNING')
-            existing_combos, _ = _migrate_legacy_queue_format(
-                repo, "all_combinations_portfolios.json", existing_combos, sig_to_archive,
-                "migrate portfolios queue to include archive_path"
-            )
-
-        # افزودن archive_path به signatureهای تازه‌ای که از golden_scores آمده‌اند
-        missing_archive_count = 0
-        for s in new_signatures:
-            s["archive_path"] = sig_to_archive.get(s["signature_path"])
-            if not s["archive_path"]:
-                missing_archive_count += 1
-        if missing_archive_count:
-            log(
-                f"  ⚠️ {missing_archive_count} از {len(new_signatures)} signature جدید "
-                f"در هیچ آرشیوی پیدا نشدند (archive_path=None ثبت شد و توسط "
-                f"analysis_portfolios.yml رد خواهند شد)",
-                'WARNING'
-            )
-
+    # فیلتر کردن signatureهای جدید (نه در completed و نه در صف)
     existing_in_queue = {
         s["signature_path"] if isinstance(s, dict) else s
         for s in existing_combos
     }
-    new_signatures = [
-        s for s in new_signatures
-        if s["signature_path"] not in existing_in_queue
-    ]
+
+    new_signatures = []
+    missing_archive_count = 0
+    for q in qualified:
+        sig_path = q["signature_path"]
+        if sig_path in completed_set or sig_path in existing_in_queue:
+            continue
+        archive_path = sig_to_archive.get(sig_path)
+        new_signatures.append({
+            "signature_path": sig_path,
+            "archive_path": archive_path,
+            "score": q["score"]
+        })
+        if not archive_path:
+            missing_archive_count += 1
+
+    if missing_archive_count:
+        log(
+            f"  ⚠️ {missing_archive_count} از {len(new_signatures)} signature جدید "
+            f"در هیچ آرشیوی پیدا نشدند (archive_path=None ثبت شد و توسط "
+            f"analysis_portfolios.yml رد خواهند شد)",
+            'WARNING'
+        )
+
     log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
 
     if not new_signatures:
