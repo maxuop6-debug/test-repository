@@ -588,38 +588,43 @@ jobs:
             [ $RETRY -ge $MAX ] && { echo "ERROR: پس از $MAX تلاش ناموفق."; exit 1; }
 
             # fix ARG_MAX: همه عملیات merge روی فایل انجام میشه نه shell variable
-            curl -s \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Accept: application/vnd.github.v3.raw" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json" \
-              2>/dev/null > /tmp/current_completed_raw.json
-            if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
-              echo "[]" > /tmp/current_completed_raw.json
-            fi
-            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
-              /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
-              || echo "[]" > /tmp/current_normalized.json
-
+            # new_sigs.json (خروجی همین chunk) یک‌بار ساخته میشه و ثابت می‌مونه
             jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
               /tmp/merged_done.json > /tmp/new_sigs.json 2>/dev/null \
               || echo "[]" > /tmp/new_sigs.json
 
-            jq -s '.[0] + .[1] | unique' \
-              /tmp/current_normalized.json /tmp/new_sigs.json > /tmp/completed_portfolios.json 2>/dev/null \
-              || echo "[]" > /tmp/completed_portfolios.json
-
-            MERGED_COMP_COUNT=$(jq 'length' /tmp/completed_portfolios.json)
-            echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_portfolios: $MERGED_COMP_COUNT"
-
-            rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json /tmp/new_sigs.json
-
-            if [ "$AFTER" -eq 0 ]; then
-              echo "✅ صف خالی شد — completed_portfolios.json به [\"completed\"] تنظیم می‌شود."
-              echo '["completed"]' > /tmp/completed_portfolios.json
-            fi
-
             COMP_RETRY=0; COMP_MAX=10000
             while [ $COMP_RETRY -lt $COMP_MAX ]; do
+
+              # fix race condition: هر بار از نو دانلود + merge — نه فقط SHA،
+              # وگرنه در retry بعد از تداخل SHA، محتوای قدیمی این chunk
+              # ممکنه کار chunkهای موازی دیگه رو overwrite کنه (lost update)
+              curl -s \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github.v3.raw" \
+                "https://api.github.com/repos/$THIRD_REPO/contents/completed_portfolios.json" \
+                2>/dev/null > /tmp/current_completed_raw.json
+              if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
+                echo "[]" > /tmp/current_completed_raw.json
+              fi
+              jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+                /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
+                || echo "[]" > /tmp/current_normalized.json
+
+              jq -s '.[0] + .[1] | unique' \
+                /tmp/current_normalized.json /tmp/new_sigs.json > /tmp/completed_portfolios.json 2>/dev/null \
+                || echo "[]" > /tmp/completed_portfolios.json
+
+              MERGED_COMP_COUNT=$(jq 'length' /tmp/completed_portfolios.json)
+              echo "[DEBUG] تعداد کل signatureهای ثبت‌شده در completed_portfolios: $MERGED_COMP_COUNT"
+
+              if [ "$AFTER" -eq 0 ]; then
+                echo "✅ صف خالی شد — completed_portfolios.json به [\"completed\"] تنظیم می‌شود."
+                echo '["completed"]' > /tmp/completed_portfolios.json
+              fi
+
+              rm -f /tmp/current_completed_raw.json /tmp/current_normalized.json
+
               SHA_COMP=$(gh api "repos/$THIRD_REPO/contents/completed_portfolios.json" -q '.sha' 2>/dev/null || echo "")
               base64 -w0 /tmp/completed_portfolios.json > /tmp/completed_base64.txt
               # fix ARG_MAX: --rawfile به جای --arg content "$(cat ...)"
@@ -646,7 +651,7 @@ jobs:
                 echo "✅ completed_portfolios.json به‌روز شد."
                 break
               elif [ "$COMP_HTTP" = "409" ] || [ "$COMP_HTTP" = "422" ]; then
-                echo "⚠️ تداخل SHA در completed_portfolios (HTTP $COMP_HTTP) — تلاش مجدد..."
+                echo "⚠️ تداخل SHA در completed_portfolios (HTTP $COMP_HTTP) — تلاش مجدد با merge تازه..."
                 COMP_RETRY=$((COMP_RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
               else
                 echo "⚠️ به‌روزرسانی completed_portfolios.json ناموفق (HTTP $COMP_HTTP)"
