@@ -1139,6 +1139,77 @@ def bootstrap_source_index(repo, password):
     log("✅ Bootstrap ایندکس تمام شد")
 
 
+def repair_portfolios_queue_archive_paths(repo, password):
+    """اجرای یک‌باره: null هایی که همین الان داخل all_combinations_portfolios.json
+    نشسته‌اند را با استفاده از ایندکس دائمی signature_archive_index.json پر می‌کند.
+
+    فرق این تابع با fix قبلی: آن fix فقط جلوی null شدن آیتم‌های *جدید* را
+    می‌گیرد. این تابع آیتم‌هایی را که از قبل با archive_path=None در صف
+    نوشته شده‌اند اصلاح می‌کند. حتماً باید بعد از bootstrap_source_index
+    (یا بعد از چند اجرای عادی که ایندکس را پر کرده باشند) اجرا شود، وگرنه
+    ایندکس هنوز نگاشت لازم را ندارد.
+    """
+    log("=" * 60)
+    log("🔧 Repair یک‌باره: پر کردن archive_path=null در صف موجود portfolios")
+    log("=" * 60)
+
+    content = gh_api_get(repo, "all_combinations_portfolios.json")
+    if content is None:
+        log("  all_combinations_portfolios.json یافت نشد — کاری برای repair نیست", 'WARNING')
+        return 0
+    try:
+        combos = json.loads(content)
+        if not isinstance(combos, list):
+            log("  محتوای صف از نوع لیست نیست — repair متوقف شد", 'ERROR')
+            return 0
+    except Exception as e:
+        log(f"  خطا در parse صف: {e}", 'ERROR')
+        return 0
+
+    null_items = [
+        it for it in combos
+        if isinstance(it, dict) and it.get("signature_path") and not it.get("archive_path")
+    ]
+    log(f"  تعداد کل آیتم‌ها: {len(combos)} — آیتم‌های archive_path=null: {len(null_items)}")
+
+    if not null_items:
+        log("  هیچ آیتم null ای برای اصلاح وجود ندارد ✅")
+        return 0
+
+    sig_to_archive = _load_source_index(repo)
+    if not sig_to_archive:
+        log("  ⚠️ ایندکس signature_archive_index.json خالی است — ابتدا BOOTSTRAP_SOURCE_INDEX=1 را اجرا کنید", 'WARNING')
+        return 0
+
+    fixed_count = 0
+    still_missing = 0
+    for it in combos:
+        if isinstance(it, dict) and it.get("signature_path") and not it.get("archive_path"):
+            found = sig_to_archive.get(it["signature_path"])
+            if found:
+                it["archive_path"] = found
+                fixed_count += 1
+            else:
+                still_missing += 1
+
+    log(f"  ✅ {fixed_count} آیتم اصلاح شد — {still_missing} آیتم همچنان بدون archive_path ماند "
+        f"(احتمالاً آرشیوشان دیگر در signature_archives/ وجود ندارد)")
+
+    if fixed_count == 0:
+        return 0
+
+    tmp_file = "/tmp/all_combinations_portfolios_repaired.json"
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        json.dump(combos, f, indent=2, ensure_ascii=False)
+
+    sha = get_file_sha(repo, "all_combinations_portfolios.json")
+    if not upload_file_with_curl(repo, "all_combinations_portfolios.json", tmp_file, sha, "repair null archive_path in portfolios queue"):
+        raise RuntimeError("آپلود صف اصلاح‌شده‌ی portfolios ناموفق بود")
+
+    log(f"✅ صف all_combinations_portfolios.json با {fixed_count} archive_path بازیابی‌شده به‌روزرسانی شد")
+    return fixed_count
+
+
 # ================================ تابع اصلی ================================
 
 def main():
@@ -1171,6 +1242,16 @@ def main():
             bootstrap_source_index(third_repo, results_password)
         except Exception as e:
             log(f"❌ Bootstrap ایندکس با خطا مواجه شد: {e}", 'ERROR')
+            sys.exit(1)
+
+    if os.environ.get('REPAIR_PORTFOLIOS_ARCHIVE_PATHS') == '1':
+        if not results_password:
+            log("REPAIR_PORTFOLIOS_ARCHIVE_PATHS=1 ست شده اما RESULTS_PASSWORD موجود نیست. خروج.", 'ERROR')
+            sys.exit(1)
+        try:
+            repair_portfolios_queue_archive_paths(third_repo, results_password)
+        except Exception as e:
+            log(f"❌ Repair صف portfolios با خطا مواجه شد: {e}", 'ERROR')
             sys.exit(1)
 
     results = {}
