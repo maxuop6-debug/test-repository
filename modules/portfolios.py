@@ -154,12 +154,18 @@ def save_status(status_file: Path, status: dict) -> None:
         log.error("خطا در ذخیره فایل وضعیت: %s", exc)
 
 
-def check_interrupt_flag(output_dir: Path) -> bool:
-    """بررسی وجود فایل interrupt.flag."""
+def check_interrupt_flag(output_dir: Path, interrupt_flag: Optional[Path] = None) -> bool:
+    """بررسی وجود فایل interrupt.flag.
+
+    اگر مسیر سفارشی interrupt_flag داده شده باشد (مثلاً runner.temp در CI)،
+    آن نیز علاوه بر مسیرهای پیش‌فرض بررسی می‌شود.
+    """
     candidates = [
         output_dir / "interrupt.flag",
         Path("interrupt.flag"),
     ]
+    if interrupt_flag is not None:
+        candidates.insert(0, Path(interrupt_flag))
     for p in candidates:
         if p.exists():
             log.warning("فایل interrupt.flag شناسایی شد: %s", p)
@@ -598,6 +604,7 @@ def run(
     resume: bool,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     signatures_filter: Optional[Path] = None,
+    interrupt_flag: Optional[Path] = None,
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -710,7 +717,7 @@ def run(
     for chunk_idx, chunk in enumerate(chunks[start_chunk_index:], start=start_chunk_index):
 
         # بررسی interrupt.flag قبل از هر chunk
-        if check_interrupt_flag(output_dir):
+        if check_interrupt_flag(output_dir, interrupt_flag):
             log.warning("interrupt.flag شناسایی شد — ذخیره وضعیت و توقف.")
             status["status"] = "interrupted"
             interrupted = True
@@ -880,6 +887,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--signatures-filter", required=False, type=str, default=None,
         help="مسیر فایل JSON شامل آرایه‌ای از امضاها برای پردازش زیرمجموعه‌ای (اختیاری)",
     )
+    parser.add_argument(
+        "--interrupt-flag", required=False, type=Path, default=None,
+        help="مسیر سفارشی فایل interrupt.flag برای بررسی وقفه (اختیاری، مثلاً runner.temp در CI)",
+    )
     return parser.parse_args(argv)
 
 
@@ -907,6 +918,7 @@ def main(argv=None) -> int:
             resume=args.resume,
             chunk_size=args.chunk_size,
             signatures_filter=args.signatures_filter,
+            interrupt_flag=args.interrupt_flag,
         )
     except Exception:
         log.exception("اجرای ماژول Portfolios با خطا مواجه شد.")
