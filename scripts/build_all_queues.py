@@ -821,6 +821,24 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
+    # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش) —
+    # بدون این فیلتر، هر اجرای build_portfolios_queue قبل از آپدیت
+    # completed_portfolios.json می‌تونه همون signature رو دوباره به صف
+    # اضافه کنه و باعث duplicate entry بشه.
+    existing_in_queue = {
+        s["signature_path"] if isinstance(s, dict) else s
+        for s in existing_combos
+    }
+    new_signatures = [
+        s for s in new_signatures
+        if s["signature_path"] not in existing_in_queue
+    ]
+    log(f"  تعداد signatureهای واقعاً جدید (نه در صف و نه در completed): {len(new_signatures)}")
+
+    if not new_signatures:
+        log("  هیچ signature جدیدی برای اضافه کردن وجود ندارد ✅")
+        return 0
+
     updated_combos = existing_combos + new_signatures
 
     tmp_file = "/tmp/all_combinations_portfolios.json"
