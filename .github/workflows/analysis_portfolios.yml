@@ -263,28 +263,28 @@ jobs:
           name: all-signatures-${{ github.run_id }}
           path: /tmp/all_signatures
 
-      - name: 3. انتخاب signatureهای مخصوص این چانک از artifact مشترک
+      - name: 3. بررسی chunk این job (فیلتر واقعی در مرحله ۶ با --signatures-filter انجام می‌شود)
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
         run: |
-          mkdir -p /tmp/signatures
           CHUNK_INDEX=${{ matrix.chunk_index }}
-          SIG_PATHS=$(jq -r '.[]' /tmp/portfolios_chunks/chunk_${CHUNK_INDEX}.json)
-
-          COPIED=0
-          while IFS= read -r REL_PATH; do
-            SRC="/tmp/all_signatures/$REL_PATH"
-            DEST="/tmp/signatures/$REL_PATH"
-            mkdir -p "$(dirname "$DEST")"
-            if [ -f "$SRC" ]; then
-              cp "$SRC" "$DEST"
-              COPIED=$((COPIED+1))
-            fi
-          done <<< "$SIG_PATHS"
-
-          JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
+          CHUNK_FILE="/tmp/portfolios_chunks/chunk_${CHUNK_INDEX}.json"
+          if [ ! -f "$CHUNK_FILE" ]; then
+            echo "❌ فایل chunk یافت نشد: $CHUNK_FILE"; exit 1
+          fi
+          SIG_COUNT=$(jq 'length' "$CHUNK_FILE")
+          ALL_JSONL_COUNT=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
+          echo "ℹ️ تعداد امضاهای این chunk: $SIG_COUNT — تعداد کل فایل‌های JSONL موجود: $ALL_JSONL_COUNT"
+          # ========== باگ رفع شد ==========
+          # مقادیر داخل chunk_N.json (و signature_path در صف) در واقع رشته‌ی
+          # ستون "signature" هستند، نه مسیر فایل .jsonl — چون golden_scores.parquet
+          # اصلاً ستونی به‌نام signature_path ندارد (نگاه کنید به لاگ build_all_queues.py:
+          # ستون‌های parquet شامل 'signature' است، نه 'signature_path'). بنابراین کپی
+          # فایل بر اساس تطبیق مسیر (روش قبلی) همیشه ۰ نتیجه می‌داد. به‌جای آن، کل
+          # /tmp/all_signatures مستقیماً به‌عنوان --signatures-dir به portfolios.py
+          # داده می‌شود و فیلتر واقعی با --signatures-filter (که روی ستون signature
+          # تطبیق می‌دهد، نه مسیر فایل) در مرحله ۶ انجام می‌شود.
 
       - name: 4. دانلود golden_scores.parquet از مخزن سوم
         if: |
@@ -356,7 +356,8 @@ jobs:
           fi
 
           python modules/portfolios.py \
-            --signatures-dir /tmp/signatures \
+            --signatures-dir /tmp/all_signatures \
+            --signatures-filter /tmp/portfolios_chunks/chunk_${{ matrix.chunk_index }}.json \
             $GOLDEN_ARG \
             --output-dir /tmp/portfolios_chunk_cache \
             --interrupt-flag ${{ runner.temp }}/interrupt.flag \
