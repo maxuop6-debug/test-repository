@@ -872,6 +872,16 @@ def _get_qualified_signatures(parquet_path, min_score=45):
 
     اولویت با ستون signature_path است (معماری جدید). اگر ستون signature_path
     وجود نداشت، از ستون signature استفاده می‌شود (سازگاری با عقب).
+
+    اجباری: archive_path مستقیماً از خودِ سورس گلدن (ستونی داخل همین parquet،
+    مثلاً archive_path/source_file/source_archive) خوانده می‌شود — نه با
+    اسکن مجدد آرشیوها و نه از ایندکس جداگانه. اگر golden.py چنین ستونی
+    ننوشته باشد، archive_path=None می‌ماند و این یعنی مشکل باید در خودِ
+    golden.py حل شود، نه اینجا با rescan سنگین.
+
+    دیباگ اجباری: صرف‌نظر از موفقیت یا شکست خواندن/فیلتر کردن، ۲ نمونه‌ی
+    اول همین parquet (سورس گلدن) همیشه چاپ می‌شود تا مشخص شود واقعاً چه
+    ستون‌هایی و چه مقادیری در سورس گلدن وجود دارد.
     """
     try:
         import pandas as pd
@@ -880,11 +890,24 @@ def _get_qualified_signatures(parquet_path, min_score=45):
             return []
         import pandas as pd
 
+    df = None
     try:
         df = pd.read_parquet(parquet_path)
         log(f"  ستون‌های parquet: {list(df.columns)}")
         log(f"  تعداد کل سطرها: {len(df)}")
+    except Exception as e:
+        log(f"  خطا در خواندن parquet: {e}", 'ERROR')
+        log("  [GOLDEN-SOURCE] ۲ نمونه اول چاپ نشد چون خودِ فایل parquet خوانده نشد", 'ERROR')
+        return []
 
+    # ---- چاپ اجباری ۲ نمونه اول سورس گلدن (چه بعداً موفق شویم چه نه) ----
+    try:
+        sample_records = df.head(2).to_dict(orient="records")
+        log(f"  [GOLDEN-SOURCE] ۲ نمونه اول سورس گلدن (parquet): {json.dumps(sample_records, ensure_ascii=False, default=str)}")
+    except Exception as e:
+        log(f"  [GOLDEN-SOURCE] چاپ نمونه‌ها با خطا مواجه شد: {e}", 'ERROR')
+
+    try:
         score_col = None
         for col in ['score', 'golden_score', 'total_score', 'final_score']:
             if col in df.columns:
@@ -922,15 +945,31 @@ def _get_qualified_signatures(parquet_path, min_score=45):
                 log("  هیچ ستون رشته‌ای در parquet یافت نشد", 'ERROR')
                 return []
 
+        # اجباری: archive_path مستقیماً از سورس گلدن — بدون هیچ rescan/ایندکس
+        archive_col = None
+        for col in ['archive_path', 'source_file', 'source_archive', 'archive']:
+            if col in df.columns:
+                archive_col = col
+                break
+        if archive_col:
+            log(f"  [GOLDEN-SOURCE] ستون archive_path از سورس گلدن خوانده می‌شود: '{archive_col}'")
+        else:
+            log("  [GOLDEN-SOURCE] ⚠️ هیچ ستون archive_path/source_file در سورس گلدن یافت نشد — "
+                "golden.py هنوز این متادیتا را ذخیره نمی‌کند؛ archive_path=None خواهد بود", 'WARNING')
+
         filtered = df[df[score_col] >= min_score]
         log(f"  تعداد استراتژی‌های با امتیاز >= {min_score}: {len(filtered)}")
 
         return [
-            {"signature_path": str(row[sig_col]), "score": float(row[score_col])}
+            {
+                "signature_path": str(row[sig_col]),
+                "score": float(row[score_col]),
+                "archive_path": (str(row[archive_col]) if archive_col and pd.notna(row[archive_col]) else None),
+            }
             for _, row in filtered.iterrows()
         ]
     except Exception as e:
-        log(f"  خطا در خواندن parquet: {e}", 'ERROR')
+        log(f"  خطا در پردازش parquet: {e}", 'ERROR')
         return []
 
 def build_portfolios_queue(repo, token, password, min_score=45.0):
@@ -1025,22 +1064,21 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # دریافت نگاشت signature_path -> archive_path
+    # نگاشت signature_path -> archive_path
     #
-    # قبلاً اینجا get_all_signatures_from_archives دوباره فراخوانی می‌شد تا
-    # نگاشت از روی آرشیوها بازسازی شود. اما آن تابع آرشیوهای قبلاً
-    # پردازش‌شده (که در processed_archives.json کش هستند) را به‌طور کامل رد
-    # می‌کند، پس نگاشت فقط شامل آرشیوهای «تازه» همین اجرا بود و archive_path
-    # اکثر signatureهای قدیمی (که آرشیوشان از قبل کش شده بود) None می‌شد —
-    # این دقیقاً باگ archive_path=null در صف portfolios بود.
+    # اجباری: منبع اصلی و اول archive_path حالا خودِ سورس گلدن است —
+    # یعنی همان مقداری که _get_qualified_signatures مستقیماً از ستون
+    # archive_path/source_file داخل golden_scores.parquet خوانده (q["archive_path"]).
+    # هیچ اسکن مجدد آرشیوها (که کند و سنگین است) اینجا انجام نمی‌شود.
     #
-    # حالا به‌جای rescan، از ایندکس دائمی signature_archive_index.json
-    # استفاده می‌کنیم که هر بار get_all_signatures_from_archives آرشیو جدیدی
-    # پیدا می‌کند، بلافاصله نگاشت آن را در خودش ذخیره می‌کند و هیچ‌وقت آن را
-    # از دست نمی‌دهد (حتی بعد از اینکه آیتم از صف golden حذف شد).
-    log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از ایندکس دائمی...")
+    # ایندکس دائمی signature_archive_index.json فقط به‌عنوان یک fallback
+    # سبک و رایگان (فقط یک دانلود JSON، بدون دانلود/رمزگشایی آرشیو) برای
+    # مواردی نگه داشته می‌شود که سورس گلدن هنوز این ستون را ندارد یا خالی
+    # است — نه به‌عنوان منبع اصلی.
+    log("  [ARCHIVE-MAP] منبع اصلی archive_path: ستون سورس گلدن (golden_scores.parquet)")
+    log("  [ARCHIVE-MAP] دریافت ایندکس سبک signature_path -> archive_path به‌عنوان fallback...")
     sig_to_archive = _load_source_index(repo)
-    log(f"  [ARCHIVE-MAP] نگاشت بارگذاری شد: {len(sig_to_archive)} signature_path -> archive_path")
+    log(f"  [ARCHIVE-MAP] ایندکس fallback بارگذاری شد: {len(sig_to_archive)} نگاشت")
 
     # بررسی و مهاجرت صف قدیمی (در صورت نیاز)
     needs_migration = any(
@@ -1061,12 +1099,21 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     }
 
     new_signatures = []
+    from_golden_source_count = 0
+    from_index_fallback_count = 0
     missing_archive_count = 0
     for q in qualified:
         sig_path = q["signature_path"]
         if sig_path in completed_set or sig_path in existing_in_queue:
             continue
-        archive_path = sig_to_archive.get(sig_path)
+        # اجباری: اول از سورس گلدن (q["archive_path"])، فقط اگر خالی بود از ایندکس fallback
+        archive_path = q.get("archive_path")
+        if archive_path:
+            from_golden_source_count += 1
+        else:
+            archive_path = sig_to_archive.get(sig_path)
+            if archive_path:
+                from_index_fallback_count += 1
         new_signatures.append({
             "signature_path": sig_path,
             "archive_path": archive_path,
@@ -1075,10 +1122,13 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         if not archive_path:
             missing_archive_count += 1
 
+    log(f"  [ARCHIVE-MAP] archive_path از سورس گلدن: {from_golden_source_count} | "
+        f"از ایندکس fallback: {from_index_fallback_count} | یافت نشد: {missing_archive_count}")
+
     if missing_archive_count:
         log(
             f"  ⚠️ {missing_archive_count} از {len(new_signatures)} signature جدید "
-            f"در هیچ آرشیوی پیدا نشدند (archive_path=None ثبت شد و توسط "
+            f"نه در سورس گلدن و نه در ایندکس archive_path داشتند (archive_path=None ثبت شد و توسط "
             f"analysis_portfolios.yml رد خواهند شد)",
             'WARNING'
         )
