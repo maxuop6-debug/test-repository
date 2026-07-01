@@ -389,13 +389,22 @@ def load_version_schema(path: Optional[Path]) -> str:
 
 def prefilter_candidates(signatures: pd.DataFrame, golden: pd.DataFrame) -> pd.DataFrame:
     """فقط استراتژی‌هایی با امتیاز Golden >= آستانه را نگه می‌دارد."""
+    # ========== رفع باگ: coin_composition نباید در کلید join باشد ==========
+    # golden.py (weighted_multi_coin_score) برای استراتژی‌های چند-کوینه،
+    # coin_composition را به رشته‌ی ترکیبی مثل "BTC+ETH" تغییر می‌دهد، در حالی
+    # که هر رکورد خام signatures فقط یک کوین تکی دارد (مثلاً فقط "BTC"). پس
+    # join روی coin_composition برای همه‌ی استراتژی‌های چند-کوینه همیشه ۰
+    # نتیجه می‌داد. signature (که در load_signatures برای این موارد به
+    # base_signature نرمال شده) به همراه strategy_id برای match کافی است —
+    # golden.py هم گروه‌بندی نهایی‌اش را روی (strategy_id, base_signature)
+    # انجام می‌دهد، نه coin_composition.
     qualified = golden[golden["score"] >= GOLDEN_SCORE_THRESHOLD][
-        ["strategy_id", "coin_composition", "signature"]
+        ["strategy_id", "signature"]
     ].drop_duplicates()
 
     merged = signatures.merge(
         qualified,
-        on=["strategy_id", "coin_composition", "signature"],
+        on=["strategy_id", "signature"],
         how="inner",
     )
     log.info(
