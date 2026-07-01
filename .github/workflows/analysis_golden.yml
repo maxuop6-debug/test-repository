@@ -225,7 +225,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - run: pip install pandas numpy scipy pyarrow
+      - run: pip install pandas numpy scipy
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
@@ -533,7 +533,7 @@ jobs:
             cat /tmp/csv_list.txt
 
             # باگ K fix: ادغام csv با حفظ index اصلی (signature key)
-            echo "aW1wb3J0IHN5cywgcGF0aGxpYgp0cnk6CiAgICBpbXBvcnQgcGFuZGFzIGFzIHBkCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9jc3ZfbGlzdC50eHQiKS5yZWFkX3RleHQoKS5zdHJpcCgpLnNwbGl0KCJcbiIpCiAgICBwYXRocyA9IFtwIGZvciBwIGluIHBhdGhzIGlmIHAgYW5kIHBhdGhsaWIuUGF0aChwKS5leGlzdHMoKV0KICAgIGlmIG5vdCBwYXRoczoKICAgICAgICBwcmludCgibm8gdmFsaWQgY3N2IGZpbGVzIGZvdW5kIikKICAgICAgICBzeXMuZXhpdCgwKQogICAgZGZzID0gW10KICAgIGZvciBwIGluIHBhdGhzOgogICAgICAgIHRyeToKICAgICAgICAgICAgZGZzLmFwcGVuZChwZC5yZWFkX2NzdihwLCBpbmRleF9jb2w9MCkpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgICAgICBwcmludChmInNraXAge3B9OiB7ZX0iKQogICAgaWYgbm90IGRmczoKICAgICAgICBzeXMuZXhpdCgwKQogICAgbWVyZ2VkID0gcGQuY29uY2F0KGRmcywgaWdub3JlX2luZGV4PUZhbHNlKQogICAgaWYgbm90IG1lcmdlZC5pbmRleC5pc191bmlxdWU6CiAgICAgICAgbWVyZ2VkID0gbWVyZ2VkW35tZXJnZWQuaW5kZXguZHVwbGljYXRlZChrZWVwPSJsYXN0IildCiAgICBtZXJnZWQudG9fY3N2KCIvdG1wL2dvbGRlbl9zY29yZXMuY3N2IiwgaW5kZXg9VHJ1ZSkKICAgIHByaW50KGYibWVyZ2VkIHtsZW4obWVyZ2VkKX0gcm93cyBmcm9tIHtsZW4oZGZzKX0gZmlsZXMiKQpleGNlcHQgSW1wb3J0RXJyb3I6CiAgICBpbXBvcnQgc2h1dGlsCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9jc3ZfbGlzdC50eHQiKS5yZWFkX3RleHQoKS5zdHJpcCgpLnNwbGl0KCJcbiIpCiAgICBwYXRocyA9IFtwIGZvciBwIGluIHBhdGhzIGlmIHBdCiAgICBzaHV0aWwuY29weShwYXRoc1stMV0sICIvdG1wL2dvbGRlbl9zY29yZXMuY3N2IikKICAgIHByaW50KGYicGFuZGFzIG5vdCBhdmFpbGFibGUsIHVzZWQgbGFzdCBmaWxlOiB7cGF0aHNbLTFdfSIpCg==" \
+            echo "aW1wb3J0IHN5cywgcGF0aGxpYgppbXBvcnQgcGFuZGFzIGFzIHBkCnBhdGhzID0gcGF0aGxpYi5QYXRoKCIvdG1wL2Nzdl9saXN0LnR4dCIpLnJlYWRfdGV4dCgpLnN0cmlwKCkuc3BsaXQoIlxuIikKcGF0aHMgPSBbcCBmb3IgcCBpbiBwYXRocyBpZiBwIGFuZCBwYXRobGliLlBhdGgocCkuZXhpc3RzKCldCmlmIG5vdCBwYXRoczoKICAgIHByaW50KCJubyB2YWxpZCBjc3YgZmlsZXMgZm91bmQiKQogICAgc3lzLmV4aXQoMCkKZGZzID0gW10KZm9yIHAgaW4gcGF0aHM6CiAgICB0cnk6CiAgICAgICAgZGZzLmFwcGVuZChwZC5yZWFkX2NzdihwKSkKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICBwcmludChmInNraXAge3B9OiB7ZX0iKQppZiBub3QgZGZzOgogICAgc3lzLmV4aXQoMCkKbWVyZ2VkID0gcGQuY29uY2F0KGRmcywgaWdub3JlX2luZGV4PVRydWUpCmlmICJzaWduYXR1cmVfcGF0aCIgaW4gbWVyZ2VkLmNvbHVtbnM6CiAgICBtZXJnZWQgPSBtZXJnZWQuZHJvcF9kdXBsaWNhdGVzKHN1YnNldD1bInNpZ25hdHVyZV9wYXRoIl0sIGtlZXA9Imxhc3QiKQptZXJnZWQudG9fY3N2KCIvdG1wL2dvbGRlbl9zY29yZXMuY3N2IiwgaW5kZXg9RmFsc2UpCnByaW50KGYibWVyZ2VkIHtsZW4obWVyZ2VkKX0gcm93cyBmcm9tIHtsZW4oZGZzKX0gZmlsZXMiKQo=" \
               | base64 -d > /tmp/merge_csv.py
             python3 /tmp/merge_csv.py
             echo "[DEBUG] خروجی merge_csv.py: exit=$?"
