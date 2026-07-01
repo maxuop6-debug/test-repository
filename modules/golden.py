@@ -139,6 +139,19 @@ def build_signature(row: pd.Series) -> str:
 # گام ۲: محاسبه معیارهای خام
 # ---------------------------------------------------------------------------
 
+def _representative_value(series: pd.Series):
+    """انتخاب رایج‌ترین مقدار یک سری (در صورت تساوی، اولین مقدار).
+
+    برای انتخاب signature_path نماینده از بین چند source_file که ممکن است
+    به یک signature یکسان ختم شوند، استفاده می‌شود.
+    """
+    clean = series.dropna()
+    if clean.empty:
+        return None
+    counts = clean.value_counts()
+    return counts.index[0]
+
+
 def consecutive_losses(returns: list[float]) -> int:
     """محاسبه حداکثر تعداد ضررهای متوالی."""
     max_consec = 0
@@ -172,6 +185,14 @@ def compute_raw_metrics(group: pd.DataFrame) -> dict:
 
     avg_daily_return = group["avg_daily_return"].mean() if "avg_daily_return" in group.columns else 0.0
 
+    # signature_path: مسیر نسبی فایل JSONL نماینده (رایج‌ترین source_file در گروه).
+    # یک گروه (strategy_id, coin, signature) ممکن است از چند فایل JSONL تشکیل شده
+    # باشد (چون چند فایل می‌توانند به یک امضای خبری یکسان ختم شوند)، بنابراین
+    # رایج‌ترین source_file به‌عنوان نماینده انتخاب می‌شود.
+    signature_path = (
+        _representative_value(group["source_file"]) if "source_file" in group.columns else None
+    )
+
     return {
         "win_rate": win_rate,
         "profit_factor": profit_factor,
@@ -179,6 +200,7 @@ def compute_raw_metrics(group: pd.DataFrame) -> dict:
         "avg_daily_return": avg_daily_return,
         "sample_count": n,
         "total_return_sum": sum(returns),
+        "signature_path": signature_path,
     }
 
 
@@ -303,6 +325,9 @@ def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
             representative["signature"] = base_sig_val
             # sample_count را به‌عنوان مجموع نمونه‌ها نگه می‌داریم
             representative["sample_count"] = int(total_samples)
+            # signature_path: رایج‌ترین مسیر JSONL در بین کوین‌های ترکیب‌شده
+            if "signature_path" in grp.columns:
+                representative["signature_path"] = _representative_value(grp["signature_path"])
             result_rows.append(representative)
 
     return pd.DataFrame(result_rows)
@@ -584,8 +609,13 @@ def run(
     scores_df = weighted_multi_coin_score(norm_df)
 
     # ── آماده‌سازی golden_scores.parquet ──────────────────────────────────
+    # signature_path ممکن است در برخی مسیرهای قدیمی وجود نداشته باشد؛
+    # برای سازگاری با عقب، در صورت نبود، ستون خالی (None) ساخته می‌شود.
+    if "signature_path" not in scores_df.columns:
+        scores_df["signature_path"] = None
+
     scores_out_df = scores_df[
-        ["strategy_id", "coin_composition", "signature", "score", "sample_count"]
+        ["strategy_id", "coin_composition", "signature_path", "signature", "score", "sample_count"]
     ].copy()
     scores_out_df["version_id"] = version_id
     scores_out_df["calculated_at"] = now_utc
