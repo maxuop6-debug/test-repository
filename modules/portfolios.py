@@ -118,6 +118,13 @@ def _read_parquet_or_csv(path: Path) -> pd.DataFrame:
 def _default_status() -> dict:
     return {
         "processed_signatures": [],
+        # ========== رفع باگ: مثل processed_files در golden.py، این فیلد هم‌سطح صف
+        # (all_combinations_portfolios.json) است — رشته‌ی تخت signature، نه جفت
+        # [coin_composition, signature]. processed_signatures فقط برای resume
+        # داخلی است و نباید مستقیم در done_items.json/cleanup استفاده شود، چون
+        # صف بر اساس رشته‌ی signature حذف می‌شود (signature از قبل coin_composition
+        # را در خودش دارد، پس جفت غیرلازم است و با صف تطبیق پیدا نمی‌کند). ==========
+        "processed_signature_strings": [],
         "last_chunk_index": -1,
         "total_chunks": 0,
         "chunk_size": DEFAULT_CHUNK_SIZE,
@@ -800,6 +807,8 @@ def run(
         # ---- به‌روزرسانی وضعیت پس از هر chunk ----
         status["last_chunk_index"] = chunk_idx
         status["processed_signatures"] = [list(k) for k in processed_set]
+        # ========== رفع باگ: نسخه‌ی هم‌سطح صف (رشته‌ی تخت signature) برای done_items.json ==========
+        status["processed_signature_strings"] = sorted({k[1] for k in processed_set})
         status["total_raw_portfolios"] = total_raw_portfolios
         status["status"] = "running"
 
@@ -858,6 +867,7 @@ def run(
     # ---- وضعیت نهایی ----
     status["status"] = "completed"
     status["processed_signatures"] = [list(k) for k in processed_set]
+    status["processed_signature_strings"] = sorted({k[1] for k in processed_set})
     status["total_raw_portfolios"] = total_raw_portfolios
     save_status(status_file, status)
 
