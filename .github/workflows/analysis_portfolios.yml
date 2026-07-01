@@ -370,8 +370,14 @@ jobs:
         run: |
           mkdir -p /tmp/portfolios_chunk_cache
 
+          # ========== رفع باگ: قبلاً از processed_signatures خوانده می‌شد که هر
+          # آیتمش جفت [coin_composition, signature] است، در حالی که صف
+          # (all_combinations_portfolios.json) بر اساس رشته‌ی تخت signature حذف
+          # می‌شود. نتیجه: مقایسه در portfolios-cleanup هیچ‌وقت match نمی‌شد و
+          # هیچ‌چیز از صف حذف نمی‌شد (حذف‌شده همیشه ۰ بود، حتی با صدها امضای
+          # موفق). حالا از processed_signature_strings (هم‌سطح صف) خوانده می‌شود. ==========
           if [ -f /tmp/portfolios_chunk_cache/portfolios_status.json ]; then
-            jq -c '.processed_signatures // []' /tmp/portfolios_chunk_cache/portfolios_status.json \
+            jq -c '.processed_signature_strings // []' /tmp/portfolios_chunk_cache/portfolios_status.json \
               > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
           else
             if [ ! -f /tmp/done_items.json ]; then
@@ -393,6 +399,23 @@ jobs:
           fi
 
           echo "✅ done_items برای chunk ${{ matrix.chunk_index }}: $DONE_COUNT signature واقعاً پردازش‌شده."
+
+      - name: 6.6. آپلود portfolios_scores این chunk به‌عنوان artifact
+        # ========== رفع باگ: این artifact هیچ‌وقت آپلود نمی‌شد! خروجی واقعی
+        # portfolios.py (portfolios.parquet) فقط با actions/cache (که یک مکانیزم
+        # کاملاً متفاوت است) ذخیره می‌شد، در حالی که portfolios-cleanup با
+        # download-artifact دنبال artifact ای با نام "portfolios-scores-*"
+        # می‌گشت که اصلاً وجود نداشت — به همین دلیل هر سه روش دانلود همیشه
+        # ۰ فایل پیدا می‌کردند. ==========
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolios-scores-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: |
+            /tmp/portfolios_chunk_cache/portfolios.parquet
+            /tmp/portfolios_chunk_cache/portfolios.csv
+          retention-days: 1
+          if-no-files-found: warn
 
       - name: 7. ذخیره نتایج در Cache
         if: always()
@@ -646,16 +669,30 @@ jobs:
         id: dl1
 
       - name: گزارش نتیجه روش اول
+        id: dl1_report
         run: |
+          # ========== رفع باگ: قبلاً فقط outcome اکشن دانلود چک می‌شد، نه تعداد
+          # فایل واقعی. چون pattern با هیچ artifact ای match نمی‌شد (چون هیچ‌جا
+          # چنین artifact ای آپلود نمی‌شد)، dl1.outcome همیشه "success" بود ولی
+          # ۰ فایل — و چون روش دوم/سوم شرطشان dl1.outcome != 'success' بود، هیچ‌وقت
+          # اجرا نمی‌شدند. حالا یک output جدا (found) بر اساس تعداد واقعی فایل
+          # ساخته می‌شود و روش دوم/سوم بر اساس همین output فعال می‌شوند. ==========
           if [ "${{ steps.dl1.outcome }}" = "success" ]; then
-            COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
-            echo "✅ روش اول موفق بود — $COUNT فایل parquet دریافت شد."
+            COUNT=$(find /tmp/portfolios_scores_parts \( -name 'portfolios*.parquet' -o -name 'portfolios*.csv' \) 2>/dev/null | wc -l)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "✅ روش اول موفق بود — $COUNT فایل دریافت شد."
+              echo "found=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ روش اول (download-artifact) هیچ فایلی پیدا نکرد — تلاش با روش دوم..."
+              echo "found=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "⚠️ روش اول (download-artifact) ناموفق بود — تلاش با روش دوم..."
+            echo "found=false" >> $GITHUB_OUTPUT
           fi
 
       - name: دانلود portfolios_scores (روش دوم)
-        if: steps.dl1.outcome != 'success'
+        if: steps.dl1_report.outputs.found != 'true'
         id: dl2
         continue-on-error: true
         env:
@@ -665,15 +702,15 @@ jobs:
           gh run download ${{ github.run_id }} \
             --pattern "portfolios-scores-*-${{ github.run_id }}" \
             --dir /tmp/portfolios_scores_parts
-          COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
+          COUNT=$(find /tmp/portfolios_scores_parts \( -name 'portfolios*.parquet' -o -name 'portfolios*.csv' \) 2>/dev/null | wc -l)
           if [ "$COUNT" -eq 0 ]; then
             echo "⚠️ روش دوم (gh run download) هیچ فایلی پیدا نکرد."
             exit 1
           fi
-          echo "✅ روش دوم موفق بود — $COUNT فایل parquet دریافت شد."
+          echo "✅ روش دوم موفق بود — $COUNT فایل دریافت شد."
 
       - name: دانلود portfolios_scores (روش سوم)
-        if: steps.dl1.outcome != 'success' && steps.dl2.outcome != 'success'
+        if: steps.dl1_report.outputs.found != 'true' && steps.dl2.outcome != 'success'
         id: dl3
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -686,13 +723,13 @@ jobs:
             unzip -o -d /tmp/portfolios_scores_parts /tmp/artifact.zip
             rm -f /tmp/artifact.zip
           done
-          COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
+          COUNT=$(find /tmp/portfolios_scores_parts \( -name 'portfolios*.parquet' -o -name 'portfolios*.csv' \) 2>/dev/null | wc -l)
           if [ "$COUNT" -eq 0 ]; then
             echo "❌ روش سوم (GitHub API + curl) نیز هیچ فایلی پیدا نکرد."
             echo "ERROR: هر سه روش دانلود portfolios_scores ناموفق بودند."
             exit 1
           fi
-          echo "✅ روش سوم موفق بود — $COUNT فایل parquet دریافت شد."
+          echo "✅ روش سوم موفق بود — $COUNT فایل دریافت شد."
 
       - name: آپلود portfolios.parquet به مخزن سوم
         env:
