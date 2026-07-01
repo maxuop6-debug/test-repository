@@ -254,6 +254,21 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         )
     data["signature"] = data.apply(build_signature, axis=1)
 
+    # ========== رفع باگ: عدم تطبیق signature استراتژی‌های چند-کوینه ==========
+    # golden.py (weighted_multi_coin_score) برای استراتژی‌هایی که روی چند کوین
+    # اجرا شده‌اند، پیشوند کوین را از signature حذف می‌کند (base_sig) و آن را در
+    # golden_scores.parquet ذخیره می‌کند. بنابراین صف portfolios (که از
+    # golden_scores.parquet ساخته می‌شود) برای این استراتژی‌ها signature بدون
+    # پیشوند کوین دارد. اما رکوردهای خام JSONL اینجا هرکدام مربوط به یک کوین
+    # تکی هستند و signature ساخته‌شده همیشه پیشوند کوین را دارد — در نتیجه
+    # هیچ‌وقت match نمی‌شدند و کل صف merged-شده صفر پردازش می‌شد.
+    # راه‌حل: برای هر رکورد خام base_signature را هم (دقیقاً با فرمول golden.py)
+    # حساب می‌کنیم تا با نسخه‌ی merged-شده در فیلتر تطبیق یابد.
+    data["base_signature"] = data.apply(
+        lambda r: str(r["signature"]).replace(f"{r.get('coin_composition', '')}_", "", 1),
+        axis=1,
+    )
+
     required_cols = {
         "coin_composition", "signature", "strategy_folder",
         "period_start", "period_end", "total_return",
@@ -298,6 +313,7 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         before = len(data)
         mask = (
             data["signature"].isin(allowed_signatures)
+            | data["base_signature"].isin(allowed_signatures)
             | data["__source_file"].isin(allowed_signatures)
             | data["__source_stem"].isin(allowed_stems)
         )
@@ -305,6 +321,21 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         log.info(
             "اعمال signatures-filter: %d -> %d رکورد (%d مورد مجاز).",
             before, len(data), len(allowed_raw),
+        )
+
+        # ========== ادامه رفع باگ چند-کوینه ==========
+        # صف (و مرحله‌ی cleanup که بعداً بر اساس این رشته حذف می‌کند) روی
+        # base_signature (بدون پیشوند کوین) برای استراتژی‌های merged-شده کار
+        # می‌کند. اگر اینجا "signature" را روی مقدار خام (با پیشوند کوین) نگه
+        # داریم، پردازش درست انجام می‌شود ولی گزارش processed_signature_strings
+        # هیچ‌وقت با آیتم صف match نمی‌شود و دوباره چیزی از صف حذف نمی‌شود.
+        # پس هر رکورد را با همان کلیدی که در فیلتر match شده (raw یا base)
+        # برچسب می‌زنیم.
+        data["signature"] = data.apply(
+            lambda r: r["base_signature"]
+            if r["base_signature"] in allowed_signatures
+            else r["signature"],
+            axis=1,
         )
     elif signatures_filter is not None:
         log.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
