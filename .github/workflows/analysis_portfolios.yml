@@ -61,64 +61,28 @@ jobs:
             echo "queue_empty=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: دانلود و استخراج آرشیوهای signature برای ساخت artifact all-signatures
-        id: extract
-        if: steps.queue.outputs.queue_empty == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          THIRD_REPO: ${{ secrets.THIRD_REPO }}
-          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
-        run: |
-          mkdir -p /tmp/all_signatures
-          TREE=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/$THIRD_REPO/git/trees/main?recursive=1")
-
-          ARCHIVES=$(echo "$TREE" | jq -r '[.tree[] | select(.path | startswith("signature_archives/")) | select(.path | endswith(".tar.gz.enc")) | .path] | unique')
-          ARCHIVE_COUNT=$(echo "$ARCHIVES" | jq 'length')
-          echo "[DEBUG] تعداد archive های signature: $ARCHIVE_COUNT"
-
-          echo "$ARCHIVES" | jq -r '.[]' | while read -r ARCH_PATH; do
-            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url')
-            [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ] && continue
-            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
-            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
-            [ -s "$ENC_FILE" ] || continue
-            node -e "
-              const crypto=require('crypto'),fs=require('fs');
-              const pass=process.env.RESULTS_PASSWORD;
-              const data=fs.readFileSync('$ENC_FILE');
-              const key=crypto.scryptSync(pass,'salt',32);
-              const iv=data.slice(0,16),enc=data.slice(16);
-              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
-              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
-              fs.writeFileSync('${ENC_FILE%.enc}',dec);
-            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/all_signatures
-            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
-          done
-
-          JSONL_TOTAL=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
-          echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCHIVE_COUNT archive."
-          echo "jsonl_total=$JSONL_TOTAL" >> $GITHUB_OUTPUT
-
-      - name: آپلود یک artifact مشترک با تمام signatureهای استخراج‌شده
-        if: steps.queue.outputs.queue_empty == 'false' && steps.extract.outputs.jsonl_total != '0'
-        uses: actions/upload-artifact@v4
-        with:
-          name: all-signatures-${{ github.run_id }}
-          path: /tmp/all_signatures/
-          retention-days: 1
-
-      - name: تقسیم صف به چانک‌های ۵۰۰ تایی بر اساس signature_path
+      - name: تقسیم صف به چانک‌های ۲۵۰۰ تایی (نگهداری کامل signature_path و archive_path)
         id: gen
         if: steps.queue.outputs.queue_empty != 'true'
         run: |
           mkdir -p /tmp/portfolios_chunks
 
-          # استخراج signature_path از صف (بدون اعمال هیچ محدودیت کلّی روی تعداد آیتم‌ها)
-          jq -c '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null))' \
-            /tmp/all_combinations_portfolios.json > /tmp/portfolios_chunks/queue_paths.json
-          TOTAL=$(jq 'length' /tmp/portfolios_chunks/queue_paths.json)
+          # ========== تغییر: به‌جای استخراج فقط signature_path، کل آیتم صف
+          # (شامل signature_path و archive_path) بدون تغییر نگهداری می‌شود تا
+          # هر job در مرحله‌ی portfolios-batch بتواند archive_path لازم خودش
+          # را مستقیماً دانلود کند و دیگر نیازی به artifact عظیم all-signatures
+          # نباشد. همچنین یک سقف MAX_COMBOS_PER_RUN اعمال می‌شود تا هر اجرا
+          # حداکثر روی ۳۰,۰۰۰ آیتم اول صف کار کند. ==========
+          jq -c '[.[] | select(. != null)]' \
+            /tmp/all_combinations_portfolios.json > /tmp/portfolios_chunks/queue_items_full.json
+
+          MAX_COMBOS_PER_RUN=30000
+          jq -c ".[0:${MAX_COMBOS_PER_RUN}]" /tmp/portfolios_chunks/queue_items_full.json \
+            > /tmp/portfolios_chunks/queue_items.json
+          rm -f /tmp/portfolios_chunks/queue_items_full.json
+
+          TOTAL=$(jq 'length' /tmp/portfolios_chunks/queue_items.json)
+          echo "[DEBUG] تعداد آیتم‌های صف پس از اعمال سقف $MAX_COMBOS_PER_RUN: $TOTAL"
 
           if [ "$TOTAL" -eq 0 ]; then
             echo "empty=true" >> $GITHUB_OUTPUT
@@ -126,7 +90,7 @@ jobs:
             exit 0
           fi
 
-          CHUNK_SIZE=500
+          CHUNK_SIZE=2500
           CHUNK_COUNT=$(( (TOTAL + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           if [ "$CHUNK_COUNT" -gt 256 ]; then
             CHUNK_SIZE=$(( (TOTAL + 255) / 256 ))
@@ -159,17 +123,17 @@ jobs:
           for ((i=0; i<CHUNK_COUNT; i++)); do
             START=$((i * CHUNK_SIZE))
             END=$((START + CHUNK_SIZE))
-            jq ".[$START:$END]" /tmp/portfolios_chunks/queue_paths.json > /tmp/portfolios_chunks/chunk_${i}.json
+            jq ".[$START:$END]" /tmp/portfolios_chunks/queue_items.json > /tmp/portfolios_chunks/chunk_${i}.json
             if [ "$i" -ge "$INPUT_START" ] && [ "$i" -le "$INPUT_END" ]; then
               if [ "${#INDICES}" -gt 1 ]; then INDICES+=", "; fi
               INDICES+="$i"
             fi
           done
           INDICES+="]"
-          rm -f /tmp/portfolios_chunks/queue_paths.json
+          rm -f /tmp/portfolios_chunks/queue_items.json
           echo "matrix_items=$INDICES" >> $GITHUB_OUTPUT
           echo "empty=false" >> $GITHUB_OUTPUT
-          echo "✅ $TOTAL signature در $CHUNK_COUNT چانک — اجرای chunk‌های $INPUT_START تا $INPUT_END."
+          echo "✅ $TOTAL آیتم در $CHUNK_COUNT چانک (سایز $CHUNK_SIZE) — اجرای chunk‌های $INPUT_START تا $INPUT_END."
 
       - name: آپلود چانک‌های portfolios
         if: steps.gen.outputs.empty == 'false'
@@ -254,14 +218,66 @@ jobs:
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
 
-      - name: دانلود artifact مشترک تمام signatureهای استخراج‌شده (بدون تماس API)
+      - name: دانلود و استخراج آرشیوهای این چانک
+        id: fetch_archives
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: all-signatures-${{ github.run_id }}
-          path: /tmp/all_signatures
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+        run: |
+          # ========== بهینه‌سازی: به‌جای دانلود artifact عظیم all-signatures
+          # (که شامل تمام آرشیوهای صف بود)، فقط archive_path های مربوط به
+          # آیتم‌های همین chunk از مخزن سوم دانلود، رمزگشایی و استخراج می‌شوند.
+          # حجم دانلود هر job اکنون متناسب با نیاز واقعی همان chunk است. ==========
+          mkdir -p /tmp/archives_extracted
+          CHUNK_INDEX=${{ matrix.chunk_index }}
+          CHUNK_FILE="/tmp/portfolios_chunks/chunk_${CHUNK_INDEX}.json"
+          if [ ! -f "$CHUNK_FILE" ]; then
+            echo "❌ فایل chunk یافت نشد: $CHUNK_FILE"; exit 1
+          fi
+
+          jq -r '[.[] | if type == "object" then .archive_path else empty end]
+                 | map(select(. != null and . != "")) | unique | .[]' \
+            "$CHUNK_FILE" > /tmp/archive_list.txt
+
+          ARCH_TOTAL=$(wc -l < /tmp/archive_list.txt | tr -d ' ')
+          echo "ℹ️ تعداد آرشیوهای یکتای این chunk: $ARCH_TOTAL"
+
+          FAIL_COUNT=0
+          while IFS= read -r ARCH_PATH; do
+            [ -z "$ARCH_PATH" ] && continue
+            DL_URL=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/$THIRD_REPO/contents/$ARCH_PATH" | jq -r '.download_url // empty')
+            if [ -z "$DL_URL" ] || [ "$DL_URL" = "null" ]; then
+              echo "⚠️ آدرس دانلود برای $ARCH_PATH یافت نشد — رد می‌شود."
+              FAIL_COUNT=$((FAIL_COUNT+1)); continue
+            fi
+            ENC_FILE="/tmp/$(basename "$ARCH_PATH")"
+            curl -s -L -H "Authorization: token $GH_TOKEN" -o "$ENC_FILE" "$DL_URL"
+            if [ ! -s "$ENC_FILE" ]; then
+              echo "⚠️ دانلود $ARCH_PATH ناموفق بود — رد می‌شود."
+              FAIL_COUNT=$((FAIL_COUNT+1)); rm -f "$ENC_FILE"; continue
+            fi
+            node -e "
+              const crypto=require('crypto'),fs=require('fs');
+              const pass=process.env.RESULTS_PASSWORD;
+              const data=fs.readFileSync('$ENC_FILE');
+              const key=crypto.scryptSync(pass,'salt',32);
+              const iv=data.slice(0,16),enc=data.slice(16);
+              const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
+              const dec=Buffer.concat([decipher.update(enc),decipher.final()]);
+              fs.writeFileSync('${ENC_FILE%.enc}',dec);
+            " 2>/dev/null && tar -xzf "${ENC_FILE%.enc}" -C /tmp/archives_extracted \
+              || { echo "⚠️ رمزگشایی/استخراج $ARCH_PATH ناموفق بود."; FAIL_COUNT=$((FAIL_COUNT+1)); }
+            rm -f "$ENC_FILE" "${ENC_FILE%.enc}"
+          done < /tmp/archive_list.txt
+
+          JSONL_TOTAL=$(find /tmp/archives_extracted -name '*.jsonl' | wc -l)
+          echo "✅ تعداد $JSONL_TOTAL فایل JSONL استخراج‌شده از $ARCH_TOTAL آرشیو (ناموفق: $FAIL_COUNT)."
+          rm -f /tmp/archive_list.txt
 
       - name: 3. بررسی chunk این job (فیلتر واقعی در مرحله ۶ با --signatures-filter انجام می‌شود)
         if: |
@@ -274,17 +290,14 @@ jobs:
             echo "❌ فایل chunk یافت نشد: $CHUNK_FILE"; exit 1
           fi
           SIG_COUNT=$(jq 'length' "$CHUNK_FILE")
-          ALL_JSONL_COUNT=$(find /tmp/all_signatures -name '*.jsonl' | wc -l)
-          echo "ℹ️ تعداد امضاهای این chunk: $SIG_COUNT — تعداد کل فایل‌های JSONL موجود: $ALL_JSONL_COUNT"
-          # ========== باگ رفع شد ==========
-          # مقادیر داخل chunk_N.json (و signature_path در صف) در واقع رشته‌ی
-          # ستون "signature" هستند، نه مسیر فایل .jsonl — چون golden_scores.parquet
-          # اصلاً ستونی به‌نام signature_path ندارد (نگاه کنید به لاگ build_all_queues.py:
-          # ستون‌های parquet شامل 'signature' است، نه 'signature_path'). بنابراین کپی
-          # فایل بر اساس تطبیق مسیر (روش قبلی) همیشه ۰ نتیجه می‌داد. به‌جای آن، کل
-          # /tmp/all_signatures مستقیماً به‌عنوان --signatures-dir به portfolios.py
-          # داده می‌شود و فیلتر واقعی با --signatures-filter (که روی ستون signature
-          # تطبیق می‌دهد، نه مسیر فایل) در مرحله ۶ انجام می‌شود.
+          EXTRACTED_JSONL_COUNT=$(find /tmp/archives_extracted -name '*.jsonl' 2>/dev/null | wc -l)
+          echo "ℹ️ تعداد امضاهای این chunk: $SIG_COUNT — تعداد فایل‌های JSONL استخراج‌شده برای این chunk: $EXTRACTED_JSONL_COUNT"
+          # نکته: مقادیر داخل chunk_N.json در واقع بر اساس ستون "signature" فیلتر
+          # می‌شوند نه مسیر فایل .jsonl. پوشه‌ی /tmp/archives_extracted (که ممکن
+          # است شامل امضاهای کمی بیش از نیاز همین chunk هم باشد، چون archive_path
+          # می‌تواند بین چند آیتم مشترک باشد) مستقیماً به‌عنوان --signatures-dir
+          # به portfolios.py داده می‌شود و فیلتر دقیق با --signatures-filter
+          # (که chunk_N.json را دریافت می‌کند) در مرحله ۶ انجام می‌شود.
 
       - name: 4. دانلود golden_scores.parquet از مخزن سوم
         if: |
@@ -356,7 +369,7 @@ jobs:
           fi
 
           python modules/portfolios.py \
-            --signatures-dir /tmp/all_signatures \
+            --signatures-dir /tmp/archives_extracted \
             --signatures-filter /tmp/portfolios_chunks/chunk_${{ matrix.chunk_index }}.json \
             $GOLDEN_ARG \
             --output-dir /tmp/portfolios_chunk_cache \
