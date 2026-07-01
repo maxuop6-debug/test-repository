@@ -177,6 +177,33 @@ def check_interrupt_flag(output_dir: Path, interrupt_flag: Optional[Path] = None
 # گام ۱: بارگذاری داده‌ها
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# ساخت امضای خبری (signature)
+# -----------------------------------------------------------------------------
+# ========== رفع باگ: این تابع باید عیناً با build_signature در golden.py یکسان
+# باشد. داده‌ی خام JSONL (خروجی combo_10day.py/combo_monthly.py) هیچ‌وقت ستون
+# "signature" ندارد؛ golden.py آن را در لحظه‌ی بارگذاری می‌سازد (نه از فایل
+# می‌خواند). اگر اینجا فرمول متفاوتی استفاده شود، merge با golden_scores.parquet
+# در prefilter_candidates بی‌صدا صفر نتیجه می‌دهد (چون رشته‌های signature تطبیق
+# پیدا نمی‌کنند) — پس این تابع باید کلمه‌به‌کلمه با نسخه‌ی golden.py یکی بماند. ==========
+
+def build_signature(row: pd.Series) -> str:
+    """ساخت امضای خبری از فیلدهای یک رکورد (باید عیناً مطابق golden.py باشد)."""
+    regime = row.get("market_regime")
+    if regime is None or (isinstance(regime, float) and pd.isna(regime)) or regime == "":
+        regime = "unknown"
+    coin = row.get("coin_composition", "")
+    indicator = row.get("dominant_indicator", "")
+    position = row.get("position")
+    if position is None or (isinstance(position, float) and pd.isna(position)):
+        position = "none"
+    distance = row.get("distance_days")
+    if distance is None or (isinstance(distance, float) and pd.isna(distance)):
+        distance = 0
+    model = row.get("model", "")
+    return f"{coin}_{indicator}_{position}_{distance}_{model}_{regime}"
+
+
 def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = None) -> pd.DataFrame:
     """تمام فایل‌های .jsonl را از دایرکتوری signatures بارگذاری و یکی می‌کند.
 
@@ -205,13 +232,31 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
 
     data = pd.concat(frames, ignore_index=True)
 
+    # ========== رفع باگ: ستون "signature" هیچ‌وقت در JSONL خام وجود ندارد ==========
+    # درست مثل golden.py، اینجا هم باید signature از روی فیلدهای خام ساخته شود؛
+    # قبلاً این مرحله جا افتاده بود و کد فقط انتظار داشت ستون از قبل موجود باشد.
+    base_signature_cols = {
+        "coin_composition", "dominant_indicator", "position",
+        "distance_days", "model", "market_regime",
+    }
+    missing_base = base_signature_cols - set(data.columns)
+    if missing_base:
+        raise ValueError(
+            f"ستون‌های لازم برای ساخت signature یافت نشد: {missing_base}\n"
+            f"ستون‌های موجود در داده: {sorted(data.columns.tolist())}"
+        )
+    data["signature"] = data.apply(build_signature, axis=1)
+
     required_cols = {
         "coin_composition", "signature", "strategy_folder",
         "period_start", "period_end", "total_return",
     }
     missing = required_cols - set(data.columns)
     if missing:
-        raise ValueError(f"ستون‌های ضروری در داده‌های signatures یافت نشد: {missing}")
+        raise ValueError(
+            f"ستون‌های ضروری در داده‌های signatures یافت نشد: {missing}\n"
+            f"ستون‌های موجود در داده: {sorted(data.columns.tolist())}"
+        )
 
     data["strategy_id"] = data["strategy_folder"].astype(str)
     data["period_start"] = pd.to_datetime(data["period_start"])
