@@ -41,10 +41,33 @@ jobs:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          HTTP_CODE=$(curl -s -o /tmp/all_combinations_portfolios.json -w "%{http_code}" \
+          # باگ فایل‌های بزرگ‌تر از ~1MB fix: هدر Accept: application/vnd.github.v3.raw
+          # برای فایل‌های بزرگ به‌صورت خاموش محتوای خالی/قطع‌شده برمی‌گرداند.
+          # به‌جای آن، ابتدا متادیتا گرفته می‌شود و سپس از download_url دانلود می‌شود
+          # (دقیقاً مطابق پیاده‌سازی gh_api_get در build_all_queues.py).
+          META_HTTP_CODE=$(curl -s -o /tmp/queue_meta.json -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3.raw" \
+            -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/$THIRD_REPO/contents/all_combinations_portfolios.json")
+          echo "[DEBUG] META_HTTP_CODE=$META_HTTP_CODE"
+
+          if [ "$META_HTTP_CODE" != "200" ]; then
+            echo "⚠️ متادیتای صف دریافت نشد (HTTP $META_HTTP_CODE) — matrix خالی."
+            echo "queue_empty=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          DOWNLOAD_URL=$(jq -r '.download_url // empty' /tmp/queue_meta.json)
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" == "null" ]; then
+            echo "⚠️ download_url در پاسخ متادیتا یافت نشد — matrix خالی."
+            echo "queue_empty=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          HTTP_CODE=$(curl -sL -o /tmp/all_combinations_portfolios.json -w "%{http_code}" \
+            -H "Authorization: token $GH_TOKEN" \
+            "$DOWNLOAD_URL")
+          echo "[DEBUG] HTTP_CODE=$HTTP_CODE"
 
           if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/all_combinations_portfolios.json ] || \
              ! jq -e 'type == "array"' /tmp/all_combinations_portfolios.json > /dev/null 2>&1; then
