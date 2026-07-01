@@ -297,7 +297,7 @@ jobs:
           COPIED=0
           while IFS= read -r REL_PATH; do
             [ -z "$REL_PATH" ] && continue
-            SRC="/tmp/archives_extracted/$REL_PATH"
+            SRC="/tmp/archives_extracted/signatures/$REL_PATH"
             DEST="/tmp/signatures/$REL_PATH"
             mkdir -p "$(dirname "$DEST")"
             if [ -f "$SRC" ]; then
