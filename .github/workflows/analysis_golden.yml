@@ -323,33 +323,33 @@ jobs:
             --resume
           echo "✅ golden chunk ${{ matrix.chunk_index }} پردازش شد."
 
-      - name: 5.2. کپی golden_scores.parquet به artifact برای ادغام در cleanup
+      - name: 5.2. کپی golden_scores.csv به artifact برای ادغام در cleanup
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
         run: |
-          PARQUET_SRC=""
+          CSV_SRC=""
           for candidate in \
-              /tmp/golden_chunk_cache/golden_scores.parquet \
-              /tmp/golden_chunk_cache/golden_scores/golden_scores.parquet; do
+              /tmp/golden_chunk_cache/golden_scores.csv \
+              /tmp/golden_chunk_cache/golden_scores/golden_scores.csv; do
             if [ -f "$candidate" ]; then
-              PARQUET_SRC="$candidate"
+              CSV_SRC="$candidate"
               break
             fi
           done
-          if [ -z "$PARQUET_SRC" ]; then
-            PARQUET_SRC=$(find /tmp/golden_chunk_cache -name 'golden_scores.parquet' | head -1)
+          if [ -z "$CSV_SRC" ]; then
+            CSV_SRC=$(find /tmp/golden_chunk_cache -name 'golden_scores.csv' | head -1)
           fi
-          if [ -n "$PARQUET_SRC" ]; then
-            DEST="/tmp/golden_chunk_cache/golden_scores.parquet"
-            if [ "$(realpath "$PARQUET_SRC")" != "$(realpath "$DEST" 2>/dev/null || echo "")" ]; then
-              cp "$PARQUET_SRC" "$DEST"
-              echo "✅ golden_scores.parquet برای artifact ذخیره شد: $PARQUET_SRC"
+          if [ -n "$CSV_SRC" ]; then
+            DEST="/tmp/golden_chunk_cache/golden_scores.csv"
+            if [ "$(realpath "$CSV_SRC")" != "$(realpath "$DEST" 2>/dev/null || echo "")" ]; then
+              cp "$CSV_SRC" "$DEST"
+              echo "✅ golden_scores.csv برای artifact ذخیره شد: $CSV_SRC"
             else
-              echo "✅ golden_scores.parquet قبلاً در مسیر صحیح است: $PARQUET_SRC"
+              echo "✅ golden_scores.csv قبلاً در مسیر صحیح است: $CSV_SRC"
             fi
           else
-            echo "⚠️ golden_scores.parquet در این chunk یافت نشد."
+            echo "⚠️ golden_scores.csv در این chunk یافت نشد."
           fi
 
       - name: 5.5. ذخیره done_items این chunk در Cache
@@ -357,12 +357,12 @@ jobs:
         run: |
           mkdir -p /tmp/golden_chunk_cache
 
-          # اگر chunk از cache بارگذاری شده و parquet در آن موجود است، مطمئن می‌شیم
+          # اگر chunk از cache بارگذاری شده و csv در آن موجود است، مطمئن می‌شیم
           # که در مسیر استاندارد قرار دارد تا step 6.6 بتونه آن را آپلود کنه
           if [ "${{ steps.prev_check.outputs.already_done }}" = "true" ]; then
-            CACHED_PARQUET=$(find /tmp/golden_chunk_cache -name 'golden_scores.parquet' 2>/dev/null | head -1)
-            if [ -n "$CACHED_PARQUET" ] && [ "$(realpath "$CACHED_PARQUET")" != "/tmp/golden_chunk_cache/golden_scores.parquet" ]; then
-              cp "$CACHED_PARQUET" /tmp/golden_chunk_cache/golden_scores.parquet
+            CACHED_CSV=$(find /tmp/golden_chunk_cache -name 'golden_scores.csv' 2>/dev/null | head -1)
+            if [ -n "$CACHED_CSV" ] && [ "$(realpath "$CACHED_CSV")" != "/tmp/golden_chunk_cache/golden_scores.csv" ]; then
+              cp "$CACHED_CSV" /tmp/golden_chunk_cache/golden_scores.csv
             fi
           fi
 
@@ -420,7 +420,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: golden-scores-${{ matrix.chunk_index }}-${{ github.run_id }}
-          path: /tmp/golden_chunk_cache/golden_scores.parquet
+          path: /tmp/golden_chunk_cache/golden_scores.csv
           retention-days: 1
           if-no-files-found: ignore
 
@@ -450,7 +450,7 @@ jobs:
 
       - name: گزارش نتیجه روش اول
         run: |
-          FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' 2>/dev/null | wc -l)
+          FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.csv' 2>/dev/null | wc -l)
           echo "[DEBUG] روش اول (download-artifact@v4) outcome=${{ steps.dl1.outcome }} — $FOUND فایل یافت شد."
 
       - name: دانلود golden_scores (روش دوم)
@@ -465,7 +465,7 @@ jobs:
           if gh run download ${{ github.run_id }} \
             --pattern "golden-scores-*-${{ github.run_id }}" \
             --dir /tmp/golden_scores_parts; then
-            FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
+            FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.csv' | wc -l)
             echo "[DEBUG] روش دوم: $FOUND فایل دریافت شد."
             if [ "$FOUND" -gt 0 ]; then
               echo "success=true" >> $GITHUB_OUTPUT
@@ -500,10 +500,10 @@ jobs:
             rm -f "/tmp/artifact_${COUNT}.zip"
             COUNT=$((COUNT+1))
           done <<< "$URLS"
-          FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
+          FOUND=$(find /tmp/golden_scores_parts -name 'golden_scores.csv' | wc -l)
           echo "[DEBUG] روش سوم: $FOUND فایل دریافت شد (از $COUNT artifact)."
           if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: روش سوم هم هیچ golden_scores.parquet ای پیدا نکرد — همه روش‌های دانلود ناموفق بودند."
+            echo "ERROR: روش سوم هم هیچ golden_scores.csv ای پیدا نکرد — همه روش‌های دانلود ناموفق بودند."
             exit 1
           fi
 
@@ -519,30 +519,30 @@ jobs:
           echo "[DEBUG] ساختار دایرکتوری golden_scores_parts:"
           find /tmp/golden_scores_parts -type f | head -30 || echo "(خالی)"
 
-          PARQUET_COUNT=$(find /tmp/golden_scores_parts -name 'golden_scores.parquet' | wc -l)
-          echo "[DEBUG] تعداد golden_scores.parquet یافت‌شده: $PARQUET_COUNT"
-          if [ "$PARQUET_COUNT" -eq 0 ]; then
-            echo "⚠️ هیچ golden_scores.parquet یافت نشد — رد می‌شویم."
+          CSV_COUNT=$(find /tmp/golden_scores_parts -name 'golden_scores.csv' | wc -l)
+          echo "[DEBUG] تعداد golden_scores.csv یافت‌شده: $CSV_COUNT"
+          if [ "$CSV_COUNT" -eq 0 ]; then
+            echo "⚠️ هیچ golden_scores.csv یافت نشد — رد می‌شویم."
           else
-            pip install pyarrow pandas --quiet --break-system-packages 2>/dev/null || \
-              pip install pyarrow pandas --quiet 2>/dev/null || true
+            pip install pandas --quiet --break-system-packages 2>/dev/null || \
+              pip install pandas --quiet 2>/dev/null || true
 
-            find /tmp/golden_scores_parts -name 'golden_scores.parquet' \
-              | sort > /tmp/parquet_list.txt
-            echo "[DEBUG] فایل‌های parquet برای ادغام:"
-            cat /tmp/parquet_list.txt
+            find /tmp/golden_scores_parts -name 'golden_scores.csv' \
+              | sort > /tmp/csv_list.txt
+            echo "[DEBUG] فایل‌های csv برای ادغام:"
+            cat /tmp/csv_list.txt
 
-            # باگ K fix: ادغام parquet با حفظ index اصلی (signature key)
-            echo "aW1wb3J0IHN5cywgcGF0aGxpYgp0cnk6CiAgICBpbXBvcnQgcGFuZGFzIGFzIHBkCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9wYXJxdWV0X2xpc3QudHh0IikucmVhZF90ZXh0KCkuc3RyaXAoKS5zcGxpdCgiXG4iKQogICAgcGF0aHMgPSBbcCBmb3IgcCBpbiBwYXRocyBpZiBwIGFuZCBwYXRobGliLlBhdGgocCkuZXhpc3RzKCldCiAgICBpZiBub3QgcGF0aHM6CiAgICAgICAgcHJpbnQoIm5vIHZhbGlkIHBhcnF1ZXQgZmlsZXMgZm91bmQiKQogICAgICAgIHN5cy5leGl0KDApCiAgICBkZnMgPSBbXQogICAgZm9yIHAgaW4gcGF0aHM6CiAgICAgICAgdHJ5OgogICAgICAgICAgICBkZnMuYXBwZW5kKHBkLnJlYWRfcGFycXVldChwKSkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgICAgIHByaW50KGYic2tpcCB7cH06IHtlfSIpCiAgICBpZiBub3QgZGZzOgogICAgICAgIHN5cy5leGl0KDApCiAgICBtZXJnZWQgPSBwZC5jb25jYXQoZGZzLCBpZ25vcmVfaW5kZXg9RmFsc2UpCiAgICBpZiBub3QgbWVyZ2VkLmluZGV4LmlzX3VuaXF1ZToKICAgICAgICBtZXJnZWQgPSBtZXJnZWRbfm1lcmdlZC5pbmRleC5kdXBsaWNhdGVkKGtlZXA9Imxhc3QiKV0KICAgIG1lcmdlZC50b19wYXJxdWV0KCIvdG1wL2dvbGRlbl9zY29yZXMucGFycXVldCIsIGluZGV4PVRydWUpCiAgICBwcmludChmIm1lcmdlZCB7bGVuKG1lcmdlZCl9IHJvd3MgZnJvbSB7bGVuKGRmcyl9IGZpbGVzIikKZXhjZXB0IEltcG9ydEVycm9yOgogICAgaW1wb3J0IHNodXRpbAogICAgcGF0aHMgPSBwYXRobGliLlBhdGgoIi90bXAvcGFycXVldF9saXN0LnR4dCIpLnJlYWRfdGV4dCgpLnN0cmlwKCkuc3BsaXQoIlxuIikKICAgIHBhdGhzID0gW3AgZm9yIHAgaW4gcGF0aHMgaWYgcF0KICAgIHNodXRpbC5jb3B5KHBhdGhzWy0xXSwgIi90bXAvZ29sZGVuX3Njb3Jlcy5wYXJxdWV0IikKICAgIHByaW50KGYicGFuZGFzIG5vdCBhdmFpbGFibGUsIHVzZWQgbGFzdCBmaWxlOiB7cGF0aHNbLTFdfSIpCg==" \
-              | base64 -d > /tmp/merge_parquet.py
-            python3 /tmp/merge_parquet.py
-            echo "[DEBUG] خروجی merge_parquet.py: exit=$?"
+            # باگ K fix: ادغام csv با حفظ index اصلی (signature key)
+            echo "aW1wb3J0IHN5cywgcGF0aGxpYgp0cnk6CiAgICBpbXBvcnQgcGFuZGFzIGFzIHBkCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9jc3ZfbGlzdC50eHQiKS5yZWFkX3RleHQoKS5zdHJpcCgpLnNwbGl0KCJcbiIpCiAgICBwYXRocyA9IFtwIGZvciBwIGluIHBhdGhzIGlmIHAgYW5kIHBhdGhsaWIuUGF0aChwKS5leGlzdHMoKV0KICAgIGlmIG5vdCBwYXRoczoKICAgICAgICBwcmludCgibm8gdmFsaWQgY3N2IGZpbGVzIGZvdW5kIikKICAgICAgICBzeXMuZXhpdCgwKQogICAgZGZzID0gW10KICAgIGZvciBwIGluIHBhdGhzOgogICAgICAgIHRyeToKICAgICAgICAgICAgZGZzLmFwcGVuZChwZC5yZWFkX2NzdihwLCBpbmRleF9jb2w9MCkpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgICAgICBwcmludChmInNraXAge3B9OiB7ZX0iKQogICAgaWYgbm90IGRmczoKICAgICAgICBzeXMuZXhpdCgwKQogICAgbWVyZ2VkID0gcGQuY29uY2F0KGRmcywgaWdub3JlX2luZGV4PUZhbHNlKQogICAgaWYgbm90IG1lcmdlZC5pbmRleC5pc191bmlxdWU6CiAgICAgICAgbWVyZ2VkID0gbWVyZ2VkW35tZXJnZWQuaW5kZXguZHVwbGljYXRlZChrZWVwPSJsYXN0IildCiAgICBtZXJnZWQudG9fY3N2KCIvdG1wL2dvbGRlbl9zY29yZXMuY3N2IiwgaW5kZXg9VHJ1ZSkKICAgIHByaW50KGYibWVyZ2VkIHtsZW4obWVyZ2VkKX0gcm93cyBmcm9tIHtsZW4oZGZzKX0gZmlsZXMiKQpleGNlcHQgSW1wb3J0RXJyb3I6CiAgICBpbXBvcnQgc2h1dGlsCiAgICBwYXRocyA9IHBhdGhsaWIuUGF0aCgiL3RtcC9jc3ZfbGlzdC50eHQiKS5yZWFkX3RleHQoKS5zdHJpcCgpLnNwbGl0KCJcbiIpCiAgICBwYXRocyA9IFtwIGZvciBwIGluIHBhdGhzIGlmIHBdCiAgICBzaHV0aWwuY29weShwYXRoc1stMV0sICIvdG1wL2dvbGRlbl9zY29yZXMuY3N2IikKICAgIHByaW50KGYicGFuZGFzIG5vdCBhdmFpbGFibGUsIHVzZWQgbGFzdCBmaWxlOiB7cGF0aHNbLTFdfSIpCg==" \
+              | base64 -d > /tmp/merge_csv.py
+            python3 /tmp/merge_csv.py
+            echo "[DEBUG] خروجی merge_csv.py: exit=$?"
 
-            if [ ! -f /tmp/golden_scores.parquet ]; then
-              echo "⚠️ golden_scores.parquet پس از merge وجود ندارد — رد می‌شویم."
+            if [ ! -f /tmp/golden_scores.csv ]; then
+              echo "⚠️ golden_scores.csv پس از merge وجود ندارد — رد می‌شویم."
             else
-              echo "[DEBUG] اندازه golden_scores.parquet: $(du -sh /tmp/golden_scores.parquet | cut -f1)"
-              tar -czf /tmp/golden_scores.tar.gz -C /tmp golden_scores.parquet
+              echo "[DEBUG] اندازه golden_scores.csv: $(du -sh /tmp/golden_scores.csv | cut -f1)"
+              tar -czf /tmp/golden_scores.tar.gz -C /tmp golden_scores.csv
               echo "✅ فشرده‌سازی انجام شد ($(du -sh /tmp/golden_scores.tar.gz | cut -f1))"
 
               node -e "
@@ -559,7 +559,7 @@ jobs:
 
               # باگ P fix: مسیر فایل در ریشه مخزن سوم (نه زیرپوشه analysis_results که وجود ندارد)
               # GitHub API برای PUT در پوشه‌ای که وجود ندارد 422 می‌دهد
-              DEST="golden_scores.parquet.enc"
+              DEST="golden_scores.csv.enc"
               echo "[DEBUG] مسیر مقصد در مخزن سوم: $DEST"
 
               base64 -w0 /tmp/golden_scores.tar.gz.enc > /tmp/golden_scores_b64.txt
@@ -608,7 +608,7 @@ jobs:
                 echo "[DEBUG] پاسخ سرور: $(cat /tmp/gs_resp.txt | head -c 300)"
 
                 if [ "$GS_HTTP" = "200" ] || [ "$GS_HTTP" = "201" ]; then
-                  echo "✅ golden_scores.parquet.enc در مخزن سوم آپلود شد → $DEST"
+                  echo "✅ golden_scores.csv.enc در مخزن سوم آپلود شد → $DEST"
                   GS_UPLOADED=true
                   break
                 elif [ "$GS_HTTP" = "409" ]; then
@@ -639,8 +639,8 @@ jobs:
                 exit 1
               fi
 
-              rm -f /tmp/golden_scores.parquet /tmp/golden_scores.tar.gz \
-                /tmp/golden_scores.tar.gz.enc /tmp/gs_resp.txt /tmp/parquet_list.txt \
+              rm -f /tmp/golden_scores.csv /tmp/golden_scores.tar.gz \
+                /tmp/golden_scores.tar.gz.enc /tmp/gs_resp.txt /tmp/csv_list.txt \
                 /tmp/golden_scores_b64.txt /tmp/payload_gs.json
             fi
           fi
