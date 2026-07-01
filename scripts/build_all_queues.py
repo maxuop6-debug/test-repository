@@ -975,29 +975,50 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
         existing_combos = []
     log(f"  ترکیب‌های موجود در صف: {len(existing_combos)}")
 
-    # سازگاری با صف‌های قدیمی: اگر آیتم‌های صف موجود فاقد archive_path باشند
-    # (فرمت قدیمی)، صف را بازنویسی می‌کنیم. برخلاف golden، اینجا all_signatures
-    # از آرشیوها نگرفته‌ایم (منبع portfolios، golden_scores.parquet است)، پس
-    # فقط برای ساخت نگاشت signature_path -> archive_path یک‌بار
-    # get_all_signatures_from_archives را صدا می‌زنیم. به لطف کش
-    # processed_archives.json، اگر آرشیوها قبلاً در همین اجرا (مرحله‌ی golden)
-    # پردازش شده باشند، این فراخوانی عملاً بدون دانلود اضافی خواهد بود.
+    # سازگاری با صف‌های قدیمی + تکمیل archive_path برای signatureهای جدید:
+    # ========== فیکس: new_signatures مستقیماً از golden_scores.parquet خوانده
+    # می‌شوند (فقط signature_path و score دارند) و هرگز archive_path ندارند.
+    # قبلاً این‌ها بدون archive_path مستقیم به صف append می‌شدند و باعث
+    # می‌شد در analysis_portfolios.yml فیلتر jq روی archive_path این آیتم‌ها
+    # را کامل حذف کند و /tmp/archives_extracted خالی بماند (FileNotFoundError
+    # در portfolios.py). حالا نگاشت signature_path -> archive_path هر بار که
+    # new_signatures غیرخالی باشد ساخته و به تک‌تک آن‌ها اعمال می‌شود، علاوه
+    # بر migrate کردن آیتم‌های قدیمیِ از قبل موجود در صف در صورت نیاز. به لطف
+    # کش processed_archives.json، اگر آرشیوها قبلاً در همین اجرا (مرحله‌ی
+    # golden) پردازش شده باشند، این فراخوانی عملاً بدون دانلود اضافی است. ==========
     needs_migration_check = any(
         isinstance(item, dict) and "archive_path" not in item
         for item in existing_combos
     )
-    if needs_migration_check:
-        log("  [MIGRATE] فرمت قدیمی در صف portfolios شناسایی شد — دریافت نگاشت archive_path از آرشیوها...", 'WARNING')
+    if needs_migration_check or new_signatures:
+        log("  [ARCHIVE-MAP] دریافت نگاشت signature_path -> archive_path از آرشیوها...")
         archive_signatures_for_map = get_all_signatures_from_archives(repo, password, key_name="signature_path")
         sig_to_archive = {
             s["signature_path"]: s.get("archive_path")
             for s in archive_signatures_for_map
             if isinstance(s, dict) and "signature_path" in s
         }
-        existing_combos, _ = _migrate_legacy_queue_format(
-            repo, "all_combinations_portfolios.json", existing_combos, sig_to_archive,
-            "migrate portfolios queue to include archive_path"
-        )
+
+        if needs_migration_check:
+            log("  [MIGRATE] فرمت قدیمی در صف portfolios شناسایی شد — migrate می‌شود...", 'WARNING')
+            existing_combos, _ = _migrate_legacy_queue_format(
+                repo, "all_combinations_portfolios.json", existing_combos, sig_to_archive,
+                "migrate portfolios queue to include archive_path"
+            )
+
+        # افزودن archive_path به signatureهای تازه‌ای که از golden_scores آمده‌اند
+        missing_archive_count = 0
+        for s in new_signatures:
+            s["archive_path"] = sig_to_archive.get(s["signature_path"])
+            if not s["archive_path"]:
+                missing_archive_count += 1
+        if missing_archive_count:
+            log(
+                f"  ⚠️ {missing_archive_count} از {len(new_signatures)} signature جدید "
+                f"در هیچ آرشیوی پیدا نشدند (archive_path=None ثبت شد و توسط "
+                f"analysis_portfolios.yml رد خواهند شد)",
+                'WARNING'
+            )
 
     # فیلتر ۲: حذف signatureهایی که هنوز در صف هستند (منتظر پردازش) —
     # بدون این فیلتر، هر اجرای build_portfolios_queue قبل از آپدیت
