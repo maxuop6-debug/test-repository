@@ -237,7 +237,22 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
             continue
         if df.empty:
             continue
-        df["__source_file"] = fp.name
+        # ========== رفع باگ اصلی: عدم یکتایی basename ==========
+        # قبلاً فقط fp.name (basename) ذخیره می‌شد، در حالی که آیتم‌های صف
+        # (signature_path در build_all_queues.py) با مسیر نسبیِ کامل داخل
+        # آرشیو شناسایی می‌شوند (مثلاً
+        # "combo_10day/Best_15m/BTCUSDT/fixed_5d_simple_hybrid.jsonl").
+        # چون اسم فایل‌ها بین پوشه‌های کوین/استراتژی مختلف تکراری‌ست (همان‌طور
+        # که در لاگ دیده می‌شود: monthly_simple_hybrid.jsonl چندبار پشت‌سرهم
+        # خوانده می‌شود)، ذخیره‌ی فقط basename باعث می‌شد تطبیق مستقیم
+        # (data["__source_file"].isin(allowed_signatures)) هیچ‌وقت برقرار
+        # نشود و کد همیشه به fallback غیریکتای __source_stem بیفتد که
+        # ده‌ها/صدها queue_key واقعی را به یک کلید مشترک collapse می‌کرد و در
+        # نتیجه‌ی group_queue_keys (که یک set است) همیشه فقط همان تعداد کم
+        # مسیر یکتا برای حذف از صف باقی می‌ماند. با ذخیره‌ی مسیر نسبی کامل،
+        # این تطبیق مستقیم و صحیح انجام می‌شود و هر فایل queue_key یکتای خودش
+        # را می‌گیرد.
+        df["__source_file"] = fp.relative_to(signatures_dir).as_posix()
         frames.append(df)
 
     if not frames:
