@@ -117,6 +117,11 @@ def _default_status() -> dict:
         # صف بر اساس رشته‌ی signature حذف می‌شود (signature از قبل coin_composition
         # را در خودش دارد، پس جفت غیرلازم است و با صف تطبیق پیدا نمی‌کند). ==========
         "processed_signature_strings": [],
+        # ========== رفع باگ ناسازگاری فضای شناسه‌ها ==========
+        # این فیلد، برخلاف processed_signature_strings، دقیقاً با فرمت
+        # signature_path/path آیتم‌های صف (all_combinations_portfolios.json)
+        # یکی است و باید در ورک‌فلو برای ساخت done_items.json استفاده شود.
+        "processed_signature_paths": [],
         "last_chunk_index": -1,
         "total_chunks": 0,
         "chunk_size": DEFAULT_CHUNK_SIZE,
@@ -124,6 +129,15 @@ def _default_status() -> dict:
         "total_raw_portfolios": 0,  # ========== باگ ۷: شمارش کاندیدهای پیش از فیلتر مطلق ==========
         "last_updated": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _expand_processed_paths(processed_set: set[tuple], group_queue_keys: dict[tuple, set[str]]) -> list[str]:
+    """برای هر گروه (coin_composition, signature) پردازش‌شده، تمام queue_key های
+    عضو آن را (که دقیقاً با فرمت signature_path صف مطابقت دارند) برمی‌گرداند."""
+    paths: set[str] = set()
+    for key in processed_set:
+        paths.update(group_queue_keys.get(key, set()))
+    return sorted(paths)
 
 
 def load_status(status_file: Path) -> dict:
@@ -296,9 +310,14 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         # تا با فرمت‌های مختلف (مسیر کامل، فقط نام فایل، یا خود امضا) تطبیق یابد.
         allowed_signatures: set[str] = set()
         allowed_stems: set[str] = set()
+        # نگاشت stem -> همان رشته‌ی اصلی صف (signature_path/path) تا بتوانیم بعداً
+        # دقیقاً همان رشته‌ای که در صف بود را به هر رکورد نسبت بدهیم.
+        stem_to_raw: dict[str, str] = {}
         for val in allowed_raw:
             allowed_signatures.add(val)
-            allowed_stems.add(Path(val).stem)
+            stem = Path(val).stem
+            allowed_stems.add(stem)
+            stem_to_raw.setdefault(stem, val)
 
         data["__source_stem"] = data["__source_file"].apply(lambda x: Path(str(x)).stem)
 
@@ -309,7 +328,31 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
             | data["__source_file"].isin(allowed_signatures)
             | data["__source_stem"].isin(allowed_stems)
         )
-        data = data[mask].drop(columns="__source_stem").copy()
+        data = data[mask].copy()
+
+        # ========== رفع باگ ناسازگاری فضای شناسه‌ها ==========
+        # processed_signature_strings قبلاً همیشه از "signature" ساخته‌شده
+        # (coin_indicator_position_...) پر می‌شد، در حالی که آیتم‌های صف
+        # (all_combinations_portfolios.json) با "signature_path" (مسیر فایل
+        # jsonl) شناسایی می‌شوند. این دو فرمت هیچ‌وقت با هم match نمی‌شدند و
+        # cleanup صف عملاً کاری انجام نمی‌داد. اینجا برای هر رکورد، همان رشته‌ی
+        # خامی که در فیلتر با آن match شده (queue_key) را نگه می‌داریم تا در
+        # خروجی نهایی (processed_signature_paths) دقیقاً با فرمت صف یکی باشد.
+        def _resolve_queue_key(row) -> str:
+            if row["signature"] in allowed_signatures:
+                return row["signature"]
+            if row["base_signature"] in allowed_signatures:
+                return row["base_signature"]
+            if row["__source_file"] in allowed_signatures:
+                return row["__source_file"]
+            if row["__source_stem"] in stem_to_raw:
+                return stem_to_raw[row["__source_stem"]]
+            # نباید به اینجا برسیم چون mask بالا از قبل تطبیق را تضمین کرده،
+            # ولی برای اطمینان مقدار signature را به‌عنوان fallback برمی‌گردانیم.
+            return row["signature"]
+
+        data["queue_key"] = data.apply(_resolve_queue_key, axis=1)
+        data = data.drop(columns="__source_stem")
         log.info(
             "اعمال signatures-filter: %d -> %d رکورد (%d مورد مجاز).",
             before, len(data), len(allowed_raw),
@@ -331,6 +374,11 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         )
     elif signatures_filter is not None:
         log.warning("فایل signatures-filter پیدا نشد: %s؛ همه‌ی داده‌ها پردازش می‌شوند.", signatures_filter)
+
+    if "queue_key" not in data.columns:
+        # بدون signatures_filter، شناسه‌ی صف در دسترس نیست؛ به‌عنوان fallback از
+        # signature ساخته‌شده استفاده می‌کنیم (فقط برای گزارش‌دهی، نه cleanup صف).
+        data["queue_key"] = data["signature"]
 
     log.info("مجموع رکوردهای signatures بارگذاری‌شده: %d", len(data))
     return data
@@ -753,6 +801,18 @@ def run(
     )
     log.info("تعداد کل گروه‌های (coin_composition, signature): %d", len(all_sig_keys))
 
+    # ========== رفع باگ ناسازگاری فضای شناسه‌ها ==========
+    # هر گروه (coin_composition, signature) ممکن است از چند رکورد/فایل خام
+    # ساخته شده باشد که هرکدام queue_key متفاوتی دارند (مثلاً چند دوره‌ی زمانی
+    # از یک استراتژی). برای اینکه بتوانیم آیتم صف را دقیقاً پس از پردازش کامل
+    # گروه حذف کنیم، تمام queue_key های عضو هر گروه را از پیش نگاشت می‌کنیم.
+    group_queue_keys: dict[tuple, set[str]] = (
+        candidates
+        .groupby(["coin_composition", "signature"])["queue_key"]
+        .apply(lambda s: set(s.dropna().astype(str)))
+        .to_dict()
+    )
+
     # حذف امضاهای قبلاً پردازش‌شده در حالت resume
     pending_keys = [k for k in all_sig_keys if k not in processed_set]
     log.info("تعداد گروه‌های باقی‌مانده برای پردازش: %d", len(pending_keys))
@@ -841,6 +901,10 @@ def run(
         status["processed_signatures"] = [list(k) for k in processed_set]
         # ========== رفع باگ: نسخه‌ی هم‌سطح صف (رشته‌ی تخت signature) برای done_items.json ==========
         status["processed_signature_strings"] = sorted({k[1] for k in processed_set})
+        # ========== رفع باگ ناسازگاری فضای شناسه‌ها: این فیلد را ورک‌فلو برای
+        # ساخت done_items.json/cleanup صف استفاده می‌کند چون دقیقاً با فرمت
+        # signature_path آیتم‌های صف یکی است (برخلاف processed_signature_strings). ==========
+        status["processed_signature_paths"] = _expand_processed_paths(processed_set, group_queue_keys)
         status["total_raw_portfolios"] = total_raw_portfolios
         status["status"] = "running"
 
@@ -900,6 +964,7 @@ def run(
     status["status"] = "completed"
     status["processed_signatures"] = [list(k) for k in processed_set]
     status["processed_signature_strings"] = sorted({k[1] for k in processed_set})
+    status["processed_signature_paths"] = _expand_processed_paths(processed_set, group_queue_keys)
     status["total_raw_portfolios"] = total_raw_portfolios
     save_status(status_file, status)
 
