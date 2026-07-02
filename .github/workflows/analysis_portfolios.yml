@@ -426,9 +426,14 @@ jobs:
           # (all_combinations_portfolios.json) بر اساس رشته‌ی تخت signature حذف
           # می‌شود. نتیجه: مقایسه در portfolios-cleanup هیچ‌وقت match نمی‌شد و
           # هیچ‌چیز از صف حذف نمی‌شد (حذف‌شده همیشه ۰ بود، حتی با صدها امضای
-          # موفق). حالا از processed_signature_strings (هم‌سطح صف) خوانده می‌شود. ==========
+          # موفق).
+          # ========== رفع باگ ناسازگاری فضای شناسه‌ها: processed_signature_strings
+          # فرمت "coin_indicator_position_..." دارد ولی آیتم‌های صف پرتفولیو
+          # با signature_path (مسیر فایل jsonl) شناسایی می‌شوند — این دو هیچ‌وقت
+          # match نمی‌شدند. حالا از processed_signature_paths خوانده می‌شود که
+          # portfolios.py دقیقاً با همان فرمت signature_path صف پر می‌کند. ==========
           if [ -f /tmp/portfolios_chunk_cache/portfolios_status.json ]; then
-            jq -c '.processed_signature_strings // []' /tmp/portfolios_chunk_cache/portfolios_status.json \
+            jq -c '.processed_signature_paths // []' /tmp/portfolios_chunk_cache/portfolios_status.json \
               > /tmp/done_items.json 2>/dev/null || echo "[]" > /tmp/done_items.json
           else
             if [ ! -f /tmp/done_items.json ]; then
