@@ -252,7 +252,15 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         # مسیر یکتا برای حذف از صف باقی می‌ماند. با ذخیره‌ی مسیر نسبی کامل،
         # این تطبیق مستقیم و صحیح انجام می‌شود و هر فایل queue_key یکتای خودش
         # را می‌گیرد.
-        df["__source_file"] = fp.relative_to(signatures_dir).as_posix()
+        # نکته: build_all_queues.py هنگام ساخت signature_path پیشوند "signatures/"
+        # را از مسیر داخل tar حذف می‌کند (چون خودِ tar آن پوشه را دارد ولی صف
+        # بدون آن ذخیره می‌شود). این‌جا هم باید همان پیشوند حذف شود، وگرنه
+        # __source_file هیچ‌وقت با signature_path های صف برابر نمی‌شود و کد
+        # کاملاً به fallback غیریکتای stem سقوط می‌کند.
+        _rel = fp.relative_to(signatures_dir).as_posix()
+        if _rel.startswith("signatures/"):
+            _rel = _rel[len("signatures/"):]
+        df["__source_file"] = _rel
         frames.append(df)
 
     if not frames:
@@ -321,27 +329,25 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
             if val:
                 allowed_raw.append(str(val))
 
-        # برای هر مقدار مجاز، هم خود رشته و هم stem (بدون مسیر/پسوند) را نگه می‌داریم
-        # تا با فرمت‌های مختلف (مسیر کامل، فقط نام فایل، یا خود امضا) تطبیق یابد.
-        allowed_signatures: set[str] = set()
-        allowed_stems: set[str] = set()
-        # نگاشت stem -> همان رشته‌ی اصلی صف (signature_path/path) تا بتوانیم بعداً
-        # دقیقاً همان رشته‌ای که در صف بود را به هر رکورد نسبت بدهیم.
-        stem_to_raw: dict[str, str] = {}
-        for val in allowed_raw:
-            allowed_signatures.add(val)
-            stem = Path(val).stem
-            allowed_stems.add(stem)
-            stem_to_raw.setdefault(stem, val)
-
-        data["__source_stem"] = data["__source_file"].apply(lambda x: Path(str(x)).stem)
+        # ========== رفع باگ اصلی: حذف fallback غیریکتای stem ==========
+        # قبلاً یک شرط چهارم اضافه (`__source_stem.isin(allowed_stems)`) وجود
+        # داشت که فقط basename فایل (بدون مسیر) را مقایسه می‌کرد. چون اسم
+        # فایل‌های jsonl (مثل monthly_simple_hybrid.jsonl) بین صدها پوشه‌ی
+        # کوین/دوره/آرشیو مختلف تکراری‌ست، این شرط عملاً هر رکوردی با یکی از
+        # چند اسم پرتکرار را از هر آرشیوی قبول می‌کرد (نه فقط آرشیو/مسیر مجاز)
+        # و باعث می‌شد mask میلیون‌ها رکورد اضافه را قبول کند و در نتیجه‌ی
+        # _resolve_queue_key هم همه‌ی آن‌ها به همان تعداد کم stem یکتا نگاشت
+        # شوند (دقیقاً همان چیزی که در لاگ دیده شد: فقط ۶ signature حذف شد).
+        # این fallback عمداً حذف شده؛ حالا فقط تطبیق دقیق روی signature،
+        # base_signature یا مسیر نسبی کامل فایل (__source_file، که دیگر با
+        # همان فرمت signature_path در صف تولید می‌شود) انجام می‌شود.
+        allowed_signatures: set[str] = set(allowed_raw)
 
         before = len(data)
         mask = (
             data["signature"].isin(allowed_signatures)
             | data["base_signature"].isin(allowed_signatures)
             | data["__source_file"].isin(allowed_signatures)
-            | data["__source_stem"].isin(allowed_stems)
         )
         data = data[mask].copy()
 
@@ -360,14 +366,11 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
                 return row["base_signature"]
             if row["__source_file"] in allowed_signatures:
                 return row["__source_file"]
-            if row["__source_stem"] in stem_to_raw:
-                return stem_to_raw[row["__source_stem"]]
             # نباید به اینجا برسیم چون mask بالا از قبل تطبیق را تضمین کرده،
             # ولی برای اطمینان مقدار signature را به‌عنوان fallback برمی‌گردانیم.
             return row["signature"]
 
         data["queue_key"] = data.apply(_resolve_queue_key, axis=1)
-        data = data.drop(columns="__source_stem")
         log.info(
             "اعمال signatures-filter: %d -> %d رکورد (%d مورد مجاز).",
             before, len(data), len(allowed_raw),
