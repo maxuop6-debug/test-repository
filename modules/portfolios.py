@@ -6,7 +6,7 @@ portfolios.py - ماژول دوم: سبدهای مکمل (Complementary Portfoli
 خام per-period (signatures/*.jsonl)، ترکیب‌های بهینه ۲، ۳ و ۴ استراتژیِ هم‌گروه
 (coin_composition, signature) را پیدا می‌کند: ترکیب‌هایی که بیشترین نرخ بقا
 (Survival Rate) و جبران‌سازی متقابل (Compensation) و کمترین همبستگی شرطی را
-دارند. خروجی نهایی در portfolios.parquet ذخیره می‌شود.
+دارند. خروجی نهایی در portfolios.csv ذخیره می‌شود.
 
 نیازمندی‌ها:
     pip install pandas numpy scipy pyarrow
@@ -69,7 +69,7 @@ DEFAULT_CHUNK_SIZE = 20
 _POSITION_RE = re.compile(r"_(pre|post)_(\d+)_")
 
 # -----------------------------------------------------------------------------
-# بررسی کتابخانه‌ی Parquet
+# بررسی کتابخانه‌ی Parquet (فقط برای خواندن ورودی‌های احتمالی مثل golden_scores.parquet)
 # -----------------------------------------------------------------------------
 try:
     import pyarrow  # noqa: F401
@@ -80,20 +80,12 @@ except ImportError:
         _HAS_PARQUET = True
     except ImportError:
         _HAS_PARQUET = False
-        log.warning(
-            "pyarrow یا fastparquet نصب نیستند — خروجی به‌صورت CSV ذخیره خواهد شد."
-        )
 
 
 def _save_dataframe(df: pd.DataFrame, path: Path) -> Path:
-    """ذخیره DataFrame با Parquet یا CSV به‌عنوان fallback."""
-    if _HAS_PARQUET:
-        out = path.with_suffix(".parquet")
-        df.to_parquet(out, index=False)
-    else:
-        out = path.with_suffix(".csv")
-        df.to_csv(out, index=False)
-        log.warning("خروجی به‌صورت CSV ذخیره شد (جایگزین Parquet): %s", out)
+    """ذخیره DataFrame همیشه به‌صورت CSV (Parquet دیگر تولید نمی‌شود)."""
+    out = path.with_suffix(".csv")
+    df.to_csv(out, index=False)
     return out
 
 
@@ -866,7 +858,7 @@ def run(
 
     if interrupted:
         log.info("اجرا به‌صورت graceful متوقف شد. برای ادامه از --resume استفاده کنید.")
-        return output_dir / "portfolios.parquet"
+        return output_dir / "portfolios.csv"
 
     # ---- گام ۶: پس از اتمام همه chunk‌ها ----
     columns = [
