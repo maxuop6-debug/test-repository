@@ -301,69 +301,6 @@ def compute_score(row: pd.Series) -> float:
 
 
 # ---------------------------------------------------------------------------
-# گام ۶: وزن‌دهی استراتژی‌های چند-کوینه
-# ---------------------------------------------------------------------------
-
-def _dedup_coin_composition(series: pd.Series) -> str:
-    """ادغام coin_composition چند ردیف بدون تکرار تیکرها.
-
-    هر ردیف در گروه از قبل یک coin_composition چندکوینه دارد (مثلاً
-    'BTCUSDT+ETHUSDT+PAXGUSDT'). join خام این رشته‌ها باعث تکرار نمایی
-    تیکرها می‌شد (باگ اصلی اسپم). اینجا فقط تیکرهای یکتا را (با حفظ
-    ترتیب اولین ظهور) نگه می‌داریم.
-    """
-    seen: list[str] = []
-    for val in series.dropna():
-        for coin in str(val).split("+"):
-            coin = coin.strip()
-            if coin and coin not in seen:
-                seen.append(coin)
-    return "+".join(seen)
-
-
-def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    اگر یک استراتژی روی بیش از یک کوین اجرا شده باشد،
-    امتیاز نهایی آن میانگین وزنی امتیازهای هر کوین است.
-    وزن = sample_count نسبی.
-    """
-    def base_sig(sig: str, coin: str) -> str:
-        return sig.replace(f"{coin}_", "", 1)
-
-    scores_df = scores_df.copy()
-    scores_df["base_signature"] = scores_df.apply(
-        lambda r: base_sig(r["signature"], r["coin_composition"]), axis=1
-    )
-
-    result_rows = []
-    grouped = scores_df.groupby(["strategy_id", "base_signature"])
-
-    for (strat_id, base_sig_val), grp in grouped:
-        if len(grp) == 1:
-            row = grp.iloc[0].to_dict()
-            result_rows.append(row)
-        else:
-            total_samples = grp["sample_count"].sum()
-            weights = grp["sample_count"] / total_samples
-            final_score = (grp["score"] * weights).sum()
-
-            representative = grp.iloc[0].to_dict()
-            representative["score"] = round(float(final_score), 4)
-            representative["coin_composition"] = _dedup_coin_composition(grp["coin_composition"])
-            representative["signature"] = base_sig_val
-            # sample_count را به‌عنوان مجموع نمونه‌ها نگه می‌داریم
-            representative["sample_count"] = int(total_samples)
-            # signature_path: رایج‌ترین مسیر JSONL در بین کوین‌های ترکیب‌شده
-            if "signature_path" in grp.columns:
-                representative["signature_path"] = _representative_value(grp["signature_path"])
-            result_rows.append(representative)
-
-    return pd.DataFrame(result_rows)
-
-
-
-
-# ---------------------------------------------------------------------------
 # مدیریت وضعیت (Status) برای وقفه و ادامه (Resume)
 # ---------------------------------------------------------------------------
 
@@ -636,17 +573,16 @@ def run(
     log.info("محاسبه امتیاز نهایی...")
     norm_df["score"] = norm_df.apply(compute_score, axis=1)
 
-    # ── وزن‌دهی چند-کوینه ─────────────────────────────────────────────────
-    log.info("وزن‌دهی استراتژی‌های چند-کوینه...")
-    scores_df = weighted_multi_coin_score(norm_df)
-
     # ── آماده‌سازی golden_scores.csv ──────────────────────────────────
+    # هیچ ادغامی صورت نمی‌گیرد: هر (strategy_id, signature, coin_composition)
+    # به‌عنوان یک ردیف مجزا در خروجی باقی می‌ماند تا عملکرد هر ترکیب کوین
+    # به‌طور مستقل قابل بررسی باشد.
     # signature_path ممکن است در برخی مسیرهای قدیمی وجود نداشته باشد؛
     # برای سازگاری با عقب، در صورت نبود، ستون خالی (None) ساخته می‌شود.
-    if "signature_path" not in scores_df.columns:
-        scores_df["signature_path"] = None
+    if "signature_path" not in norm_df.columns:
+        norm_df["signature_path"] = None
 
-    scores_out_df = scores_df[
+    scores_out_df = norm_df[
         ["strategy_id", "coin_composition", "signature_path", "signature", "score", "sample_count"]
     ].copy()
     scores_out_df["version_id"] = version_id
