@@ -309,18 +309,45 @@ jobs:
           JSONL_COUNT=$(find /tmp/signatures -name '*.jsonl' | wc -l)
           echo "✅ تعداد فایل‌های JSONL کپی‌شده: $JSONL_COUNT (از $COPIED مسیر درخواستی)"
 
+      - name: 4.5. ساخت archive_index.json برای این چانک از روی صف
+        # نکته: archive_path هر آیتم از قبل در chunk_N.json موجود است (همان
+        # چیزی که در مرحله ۲ برای دانلود آرشیوها استفاده شد)، پس نیازی به
+        # دانلود جداگانه‌ی signature_archive_index.json از مخزن سوم نیست —
+        # فقط یک نگاشت signature_path -> archive_path از همین فایل محلی
+        # می‌سازیم تا به golden.py داده شود و در golden_scores.csv نوشته شود.
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
+        run: |
+          CHUNK_INDEX=${{ matrix.chunk_index }}
+          jq 'reduce (.[] | select(type == "object" and .signature_path != null and .archive_path != null and .archive_path != "")) as $item
+              ({}; . + {($item.signature_path): $item.archive_path})' \
+            /tmp/golden_chunks/chunk_${CHUNK_INDEX}.json > /tmp/archive_index.json
+
+          IDX_COUNT=$(jq 'length' /tmp/archive_index.json 2>/dev/null || echo 0)
+          echo "✅ archive_index.json ساخته شد: $IDX_COUNT نگاشت signature_path -> archive_path"
+
       - name: 5. اجرای golden.py برای این چانک
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
         run: |
           mkdir -p /tmp/golden_chunk_cache
+
+          ARCHIVE_INDEX_ARG=""
+          if [ -s /tmp/archive_index.json ] && [ "$(jq 'length' /tmp/archive_index.json 2>/dev/null || echo 0)" != "0" ]; then
+            ARCHIVE_INDEX_ARG="--archive-index /tmp/archive_index.json"
+          else
+            echo "ℹ️ archive_index.json خالی یا موجود نیست — golden.py بدون --archive-index اجرا می‌شود (archive_path=None خواهد بود)."
+          fi
+
           python modules/golden.py \
             --signatures-dir /tmp/signatures \
             --output-dir /tmp/golden_chunk_cache \
             --interrupt-flag ${{ runner.temp }}/interrupt.flag \
             --alpha 0.1 \
-            --resume
+            --resume \
+            $ARCHIVE_INDEX_ARG
           echo "✅ golden chunk ${{ matrix.chunk_index }} پردازش شد."
 
       - name: 5.2. کپی golden_scores.csv به artifact برای ادغام در cleanup
