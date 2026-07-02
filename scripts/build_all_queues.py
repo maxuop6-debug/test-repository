@@ -866,21 +866,21 @@ def _install_pandas():
     log("  pandas و pyarrow نصب شدند ✅")
     return True
 
-def _get_qualified_signatures(parquet_path, min_score=45):
+def _get_qualified_signatures(csv_path, min_score=45):
     """
-    خواندن golden_scores.parquet و فیلتر score >= min_score
+    خواندن golden_scores.csv و فیلتر score >= min_score
 
     اولویت با ستون signature_path است (معماری جدید). اگر ستون signature_path
     وجود نداشت، از ستون signature استفاده می‌شود (سازگاری با عقب).
 
-    اجباری: archive_path مستقیماً از خودِ سورس گلدن (ستونی داخل همین parquet،
+    اجباری: archive_path مستقیماً از خودِ سورس گلدن (ستونی داخل همین CSV،
     مثلاً archive_path/source_file/source_archive) خوانده می‌شود — نه با
     اسکن مجدد آرشیوها و نه از ایندکس جداگانه. اگر golden.py چنین ستونی
     ننوشته باشد، archive_path=None می‌ماند و این یعنی مشکل باید در خودِ
     golden.py حل شود، نه اینجا با rescan سنگین.
 
     دیباگ اجباری: صرف‌نظر از موفقیت یا شکست خواندن/فیلتر کردن، ۲ نمونه‌ی
-    اول همین parquet (سورس گلدن) همیشه چاپ می‌شود تا مشخص شود واقعاً چه
+    اول همین CSV (سورس گلدن) همیشه چاپ می‌شود تا مشخص شود واقعاً چه
     ستون‌هایی و چه مقادیری در سورس گلدن وجود دارد.
     """
     try:
@@ -892,18 +892,18 @@ def _get_qualified_signatures(parquet_path, min_score=45):
 
     df = None
     try:
-        df = pd.read_parquet(parquet_path)
-        log(f"  ستون‌های parquet: {list(df.columns)}")
+        df = pd.read_csv(csv_path)
+        log(f"  ستون‌های CSV: {list(df.columns)}")
         log(f"  تعداد کل سطرها: {len(df)}")
     except Exception as e:
-        log(f"  خطا در خواندن parquet: {e}", 'ERROR')
-        log("  [GOLDEN-SOURCE] ۲ نمونه اول چاپ نشد چون خودِ فایل parquet خوانده نشد", 'ERROR')
+        log(f"  خطا در خواندن CSV: {e}", 'ERROR')
+        log("  [GOLDEN-SOURCE] ۲ نمونه اول چاپ نشد چون خودِ فایل CSV خوانده نشد", 'ERROR')
         return []
 
     # ---- چاپ اجباری ۲ نمونه اول سورس گلدن (چه بعداً موفق شویم چه نه) ----
     try:
         sample_records = df.head(2).to_dict(orient="records")
-        log(f"  [GOLDEN-SOURCE] ۲ نمونه اول سورس گلدن (parquet): {json.dumps(sample_records, ensure_ascii=False, default=str)}")
+        log(f"  [GOLDEN-SOURCE] ۲ نمونه اول سورس گلدن (CSV): {json.dumps(sample_records, ensure_ascii=False, default=str)}")
     except Exception as e:
         log(f"  [GOLDEN-SOURCE] چاپ نمونه‌ها با خطا مواجه شد: {e}", 'ERROR')
 
@@ -919,7 +919,7 @@ def _get_qualified_signatures(parquet_path, min_score=45):
                 score_col = numeric_cols[0]
                 log(f"  ستون 'score' یافت نشد، از '{score_col}' استفاده می‌شود", 'WARNING')
             else:
-                log("  هیچ ستون عددی در parquet یافت نشد", 'ERROR')
+                log("  هیچ ستون عددی در CSV یافت نشد", 'ERROR')
                 return []
 
         # ========== تغییر اصلی: اولویت با signature_path ==========
@@ -942,7 +942,7 @@ def _get_qualified_signatures(parquet_path, min_score=45):
                 sig_col = str_cols[0]
                 log(f"  ستون 'signature_path'/'signature' یافت نشد، از '{sig_col}' استفاده می‌شود", 'WARNING')
             else:
-                log("  هیچ ستون رشته‌ای در parquet یافت نشد", 'ERROR')
+                log("  هیچ ستون رشته‌ای در CSV یافت نشد", 'ERROR')
                 return []
 
         # اجباری: archive_path مستقیماً از سورس گلدن — بدون هیچ rescan/ایندکس
@@ -969,7 +969,7 @@ def _get_qualified_signatures(parquet_path, min_score=45):
             for _, row in filtered.iterrows()
         ]
     except Exception as e:
-        log(f"  خطا در پردازش parquet: {e}", 'ERROR')
+        log(f"  خطا در پردازش CSV: {e}", 'ERROR')
         return []
 
 def build_portfolios_queue(repo, token, password, min_score=45.0):
@@ -1021,17 +1021,19 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     if tar_result.returncode != 0:
         raise RuntimeError(f"استخراج tar.gz ناموفق بود: {tar_result.stderr[:300]}")
 
-    found_parquet = []
+    found_csv = []
     for root, _, files in os.walk(extract_dir):
         for fn in files:
-            if fn.endswith('.parquet'):
-                found_parquet.append(os.path.join(root, fn))
+            if fn.endswith('.csv'):
+                found_csv.append(os.path.join(root, fn))
 
-    if not found_parquet:
-        raise RuntimeError("هیچ فایل .parquet داخل tar.gz استخراج‌شده یافت نشد")
+    if not found_csv:
+        raise RuntimeError("هیچ فایل .csv داخل tar.gz استخراج‌شده یافت نشد")
 
-    dec_path = found_parquet[0]
-    log(f"  فایل parquet استخراج شد: {dec_path} ({os.path.getsize(dec_path)} bytes) ✅")
+    # اولویت با golden_scores.csv در صورت وجود چند فایل CSV
+    preferred = [p for p in found_csv if os.path.basename(p) == 'golden_scores.csv']
+    dec_path = preferred[0] if preferred else found_csv[0]
+    log(f"  فایل CSV استخراج شد: {dec_path} ({os.path.getsize(dec_path)} bytes) ✅")
 
     log(f"  فیلتر signatureها با score >= {min_score}...")
     qualified = _get_qualified_signatures(dec_path, min_score)
