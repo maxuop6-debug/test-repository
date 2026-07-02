@@ -86,6 +86,34 @@ def load_strategies(strategies_json: str | None) -> dict:
         return json.load(fh)
 
 
+def load_archive_index(archive_index_path: str | None) -> dict:
+    """بارگذاری نگاشت signature_path -> archive_path از فایل ایندکس (اختیاری).
+
+    فرمت فایل باید همان signature_archive_index.json باشد که در مخزن سوم
+    نگهداری می‌شود: یک شیء JSON ساده {signature_path: archive_path, ...}.
+    اگر مسیر داده نشود یا فایل موجود نباشد، نگاشت خالی برگردانده می‌شود و
+    ستون archive_path در خروجی همه‌جا None خواهد بود (بدون خطا).
+    """
+    if not archive_index_path:
+        log.info("[ARCHIVE-INDEX] --archive-index داده نشده — ستون archive_path خالی (None) خواهد بود.")
+        return {}
+    idx_path = Path(archive_index_path)
+    if not idx_path.exists():
+        log.warning(f"[ARCHIVE-INDEX] فایل {idx_path} یافت نشد — ستون archive_path خالی (None) خواهد بود.")
+        return {}
+    try:
+        with open(idx_path, encoding="utf-8") as fh:
+            mapping = json.load(fh)
+        if not isinstance(mapping, dict):
+            log.warning(f"[ARCHIVE-INDEX] محتوای {idx_path} یک dict نیست — نادیده گرفته شد.")
+            return {}
+        log.info(f"[ARCHIVE-INDEX] {len(mapping):,} نگاشت signature_path -> archive_path از {idx_path} بارگذاری شد.")
+        return mapping
+    except Exception as e:
+        log.warning(f"[ARCHIVE-INDEX] خطا در خواندن {idx_path}: {e} — ستون archive_path خالی (None) خواهد بود.")
+        return {}
+
+
 def load_version_schema(version_schema: str | None) -> str:
     """استخراج version_id از فایل schema یا مقدار پیش‌فرض."""
     if not version_schema or not Path(version_schema).exists():
@@ -276,23 +304,6 @@ def compute_score(row: pd.Series) -> float:
 # گام ۶: وزن‌دهی استراتژی‌های چند-کوینه
 # ---------------------------------------------------------------------------
 
-def _dedup_coin_composition(series: pd.Series) -> str:
-    """ادغام coin_composition چند ردیف بدون تکرار تیکرها.
-
-    هر ردیف در گروه از قبل یک coin_composition چندکوینه دارد (مثلاً
-    'BTCUSDT+ETHUSDT+PAXGUSDT'). join خام این رشته‌ها باعث تکرار نمایی
-    تیکرها می‌شد (باگ اصلی اسپم). اینجا فقط تیکرهای یکتا را (با حفظ
-    ترتیب اولین ظهور) نگه می‌داریم.
-    """
-    seen: list[str] = []
-    for val in series.dropna():
-        for coin in str(val).split("+"):
-            coin = coin.strip()
-            if coin and coin not in seen:
-                seen.append(coin)
-    return "+".join(seen)
-
-
 def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
     """
     اگر یک استراتژی روی بیش از یک کوین اجرا شده باشد،
@@ -321,7 +332,7 @@ def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
 
             representative = grp.iloc[0].to_dict()
             representative["score"] = round(float(final_score), 4)
-            representative["coin_composition"] = _dedup_coin_composition(grp["coin_composition"])
+            representative["coin_composition"] = "+".join(grp["coin_composition"].tolist())
             representative["signature"] = base_sig_val
             # sample_count را به‌عنوان مجموع نمونه‌ها نگه می‌داریم
             representative["sample_count"] = int(total_samples)
@@ -439,6 +450,7 @@ def run(
     resume: bool = False,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     interrupt_flag: str | None = None,
+    archive_index: str | None = None,
 ) -> None:
     now_utc = datetime.now(timezone.utc)
     output_path = Path(output_dir)
@@ -450,6 +462,9 @@ def run(
     # ── بارگذاری ──────────────────────────────────────────────────────────
     log.info("بارگذاری signatures...")
     sig_df = load_signatures(signatures_dir)
+
+    # ── بارگذاری ایندکس archive_path (اختیاری) ──────────────────────────
+    sig_to_archive = load_archive_index(archive_index)
 
     version_id = load_version_schema(version_schema)
     log.info(f"version_id: {version_id}")
@@ -620,6 +635,23 @@ def run(
     scores_out_df["version_id"] = version_id
     scores_out_df["calculated_at"] = now_utc
 
+    # ── پر کردن archive_path از ایندکس (در صورت وجود) ────────────────────
+    # این ستون همان چیزی است که build_all_queues.py قبلاً به‌صورت fallback
+    # از signature_archive_index.json می‌خواند؛ حالا مستقیماً همینجا در
+    # خودِ golden_scores.csv نوشته می‌شود تا نیازی به fallback runtime نباشد.
+    scores_out_df["archive_path"] = scores_out_df["signature_path"].map(sig_to_archive)
+    matched_archive_count = int(scores_out_df["archive_path"].notna().sum())
+    missing_archive_count = len(scores_out_df) - matched_archive_count
+    log.info(
+        f"[ARCHIVE-INDEX] archive_path پر شد برای {matched_archive_count:,} ردیف | "
+        f"یافت نشد برای {missing_archive_count:,} ردیف از {len(scores_out_df):,}"
+    )
+    if sig_to_archive and missing_archive_count:
+        log.warning(
+            f"[ARCHIVE-INDEX] {missing_archive_count:,} ردیف signature_path‌ای دارند که در "
+            "ایندکس archive_index یافت نشد — archive_path=None برای این ردیف‌ها ثبت می‌شود."
+        )
+
     scores_out = _save(scores_out_df, output_path / "golden_scores.csv")
     log.info(f"golden_scores ذخیره شد: {scores_out}")
 
@@ -683,6 +715,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="(اختیاری) مسیر فایل interrupt.flag برای توقف کنترل‌شده (پیش‌فرض: interrupt.flag در output-dir)",
     )
+    parser.add_argument(
+        "--archive-index",
+        default=None,
+        help="(اختیاری) مسیر فایل signature_archive_index.json برای پر کردن ستون archive_path "
+             "در golden_scores.csv. اگر داده نشود، archive_path=None ثبت می‌شود.",
+    )
     return parser.parse_args()
 
 
@@ -699,5 +737,6 @@ if __name__ == "__main__":
         resume=args.resume,
         chunk_size=args.chunk_size,
         interrupt_flag=args.interrupt_flag,
+        archive_index=args.archive_index,
     )
     sys.exit(0)
