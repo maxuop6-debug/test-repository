@@ -499,7 +499,7 @@ def get_all_signatures_from_archives(repo, password, key_name="signature_path", 
             continue
 
         for entry in jsonl_entries:
-            # حذف پیشوند "signatures/" از entry تا با ستون signature_path در golden_scores.parquet مطابقت داشته باشد
+            # حذف پیشوند "signatures/" از entry تا با ستون signature_path در golden_scores.csv مطابقت داشته باشد
             clean_entry = entry
             if clean_entry.startswith("signatures/"):
                 clean_entry = clean_entry[11:]  # len("signatures/") == 11
@@ -946,16 +946,24 @@ def _get_qualified_signatures(csv_path, min_score=45):
                 return []
 
         # اجباری: archive_path مستقیماً از سورس گلدن — بدون هیچ rescan/ایندکس
+        archive_candidates = ['archive_path', 'archives_path', 'source_file', 'source_archive', 'archive']
         archive_col = None
-        for col in ['archive_path', 'source_file', 'source_archive', 'archive']:
+        for col in archive_candidates:
             if col in df.columns:
                 archive_col = col
                 break
         if archive_col:
             log(f"  [GOLDEN-SOURCE] ستون archive_path از سورس گلدن خوانده می‌شود: '{archive_col}'")
         else:
-            log("  [GOLDEN-SOURCE] ⚠️ هیچ ستون archive_path/source_file در سورس گلدن یافت نشد — "
-                "golden.py هنوز این متادیتا را ذخیره نمی‌کند؛ archive_path=None خواهد بود", 'WARNING')
+            log(
+                f"  [GOLDEN-SOURCE] ⚠️ هیچ‌کدام از ستون‌های {archive_candidates} در CSV گلدن یافت نشد. "
+                f"ستون‌های واقعی موجود در فایل: {list(df.columns)} — "
+                "golden.py فعلاً چنین ستونی در golden_scores.csv نمی‌نویسد "
+                "(خروجی golden.py فقط شامل strategy_id/coin_composition/signature_path/signature/"
+                "score/sample_count/version_id/calculated_at است)؛ archive_path=None ثبت می‌شود "
+                "و باید از ایندکس fallback (signature_archive_index.json) پر شود.",
+                'WARNING'
+            )
 
         filtered = df[df[score_col] >= min_score]
         log(f"  تعداد استراتژی‌های با امتیاز >= {min_score}: {len(filtered)}")
@@ -993,19 +1001,19 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     completed_set = set(completed_portfolios)
     log(f"  تعداد signatureهای قبلاً ثبت‌شده: {len(completed_set)}")
 
-    # دانلود و رمزگشایی golden_scores.parquet.enc
-    enc_path = "/tmp/golden_scores.parquet.enc"
+    # دانلود و رمزگشایی golden_scores.csv.enc
+    enc_path = "/tmp/golden_scores.csv.enc"
     targz_path = "/tmp/golden_scores.tar.gz"
     extract_dir = "/tmp/golden_scores_extract"
 
-    log("  دانلود golden_scores.parquet.enc...")
-    if not gh_api_get_binary(repo, "golden_scores.parquet.enc", enc_path):
-        log("  golden_scores.parquet.enc یافت نشد — احتمالاً golden هنوز اجرا نشده. رد می‌شویم.", 'WARNING')
+    log("  دانلود golden_scores.csv.enc...")
+    if not gh_api_get_binary(repo, "golden_scores.csv.enc", enc_path):
+        log("  golden_scores.csv.enc یافت نشد — احتمالاً golden هنوز اجرا نشده. رد می‌شویم.", 'WARNING')
         return 0
 
-    log("  رمزگشایی golden_scores.parquet.enc...")
+    log("  رمزگشایی golden_scores.csv.enc...")
     if not decrypt_file(enc_path, targz_path, password):
-        raise RuntimeError("رمزگشایی golden_scores.parquet.enc ناموفق بود")
+        raise RuntimeError("رمزگشایی golden_scores.csv.enc ناموفق بود")
 
     if not os.path.exists(targz_path) or os.path.getsize(targz_path) == 0:
         raise RuntimeError("فایل رمزگشایی‌شده خالی است")
@@ -1070,14 +1078,14 @@ def build_portfolios_queue(repo, token, password, min_score=45.0):
     #
     # اجباری: منبع اصلی و اول archive_path حالا خودِ سورس گلدن است —
     # یعنی همان مقداری که _get_qualified_signatures مستقیماً از ستون
-    # archive_path/source_file داخل golden_scores.parquet خوانده (q["archive_path"]).
+    # archive_path/source_file داخل golden_scores.csv خوانده (q["archive_path"]).
     # هیچ اسکن مجدد آرشیوها (که کند و سنگین است) اینجا انجام نمی‌شود.
     #
     # ایندکس دائمی signature_archive_index.json فقط به‌عنوان یک fallback
     # سبک و رایگان (فقط یک دانلود JSON، بدون دانلود/رمزگشایی آرشیو) برای
     # مواردی نگه داشته می‌شود که سورس گلدن هنوز این ستون را ندارد یا خالی
     # است — نه به‌عنوان منبع اصلی.
-    log("  [ARCHIVE-MAP] منبع اصلی archive_path: ستون سورس گلدن (golden_scores.parquet)")
+    log("  [ARCHIVE-MAP] منبع اصلی archive_path: ستون سورس گلدن (golden_scores.csv)")
     log("  [ARCHIVE-MAP] دریافت ایندکس سبک signature_path -> archive_path به‌عنوان fallback...")
     sig_to_archive = _load_source_index(repo)
     log(f"  [ARCHIVE-MAP] ایندکس fallback بارگذاری شد: {len(sig_to_archive)} نگاشت")
