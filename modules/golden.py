@@ -276,6 +276,23 @@ def compute_score(row: pd.Series) -> float:
 # گام ۶: وزن‌دهی استراتژی‌های چند-کوینه
 # ---------------------------------------------------------------------------
 
+def _dedup_coin_composition(series: pd.Series) -> str:
+    """ادغام coin_composition چند ردیف بدون تکرار تیکرها.
+
+    هر ردیف در گروه از قبل یک coin_composition چندکوینه دارد (مثلاً
+    'BTCUSDT+ETHUSDT+PAXGUSDT'). join خام این رشته‌ها باعث تکرار نمایی
+    تیکرها می‌شد (باگ اصلی اسپم). اینجا فقط تیکرهای یکتا را (با حفظ
+    ترتیب اولین ظهور) نگه می‌داریم.
+    """
+    seen: list[str] = []
+    for val in series.dropna():
+        for coin in str(val).split("+"):
+            coin = coin.strip()
+            if coin and coin not in seen:
+                seen.append(coin)
+    return "+".join(seen)
+
+
 def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
     """
     اگر یک استراتژی روی بیش از یک کوین اجرا شده باشد،
@@ -304,7 +321,7 @@ def weighted_multi_coin_score(scores_df: pd.DataFrame) -> pd.DataFrame:
 
             representative = grp.iloc[0].to_dict()
             representative["score"] = round(float(final_score), 4)
-            representative["coin_composition"] = "+".join(grp["coin_composition"].tolist())
+            representative["coin_composition"] = _dedup_coin_composition(grp["coin_composition"])
             representative["signature"] = base_sig_val
             # sample_count را به‌عنوان مجموع نمونه‌ها نگه می‌داریم
             representative["sample_count"] = int(total_samples)
