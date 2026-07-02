@@ -809,8 +809,25 @@ def run(
         candidates = signatures
 
     # ---- گام ۳: استخراج لیست امضاهای منحصربه‌فرد ----
+    # ========== رفع باگ اصلی: صف هیچ‌وقت برای موارد زیر آستانه‌ی Golden خالی نمی‌شد ==========
+    # قبلاً all_sig_keys و group_queue_keys از روی "candidates" (فقط رکوردهایی
+    # که از پیش‌فیلتر Golden score >= GOLDEN_SCORE_THRESHOLD رد شده بودند)
+    # ساخته می‌شدند. نتیجه: هر گروه (coin_composition, signature) که امتیاز
+    # Golden‌اش به آستانه نمی‌رسید، از همان ابتدا از این دو ساختار کنار گذاشته
+    # می‌شد؛ پس هیچ‌وقت وارد processed_set / group_queue_keys /
+    # processed_signature_paths نمی‌شد و در مرحله‌ی cleanup صف هم match/حذف
+    # نمی‌شد — صف برای این موارد برای همیشه ثابت می‌ماند، چون امتیاز Golden آن‌ها
+    # بین اجراهای بعدی هم تغییر نمی‌کند.
+    # راه‌حل: قلمرو گروه‌ها (all_sig_keys) و نگاشت queue_key (group_queue_keys)
+    # باید از روی کل داده‌ی خام signatures ساخته شوند (هر چیزی که واقعاً در صف
+    # بوده و بارگذاری شده)، نه فقط زیرمجموعه‌ی Golden-qualified. ارزیابی/ساخت
+    # پرتفوی همچنان فقط روی candidates انجام می‌شود (چون groups_df پایین‌تر از
+    # candidates ساخته می‌شود)؛ برای گروه‌هایی که در candidates نیستند (چون
+    # Golden ردشان کرده)، شاخه‌ی KeyError موجود در حلقه‌ی پردازش (پایین‌تر)
+    # آن‌ها را بدون ساخت پرتفوی مستقیماً processed علامت می‌زند — رفتار صحیح،
+    # چون این گروه‌ها آگاهانه توسط Golden رد شده‌اند، نه اینکه هنوز در انتظارند.
     all_sig_keys: list[tuple[str, str]] = (
-        candidates
+        signatures
         .groupby(["coin_composition", "signature"])
         .size()
         .reset_index()[["coin_composition", "signature"]]
@@ -819,13 +836,12 @@ def run(
     )
     log.info("تعداد کل گروه‌های (coin_composition, signature): %d", len(all_sig_keys))
 
-    # ========== رفع باگ ناسازگاری فضای شناسه‌ها ==========
-    # هر گروه (coin_composition, signature) ممکن است از چند رکورد/فایل خام
-    # ساخته شده باشد که هرکدام queue_key متفاوتی دارند (مثلاً چند دوره‌ی زمانی
-    # از یک استراتژی). برای اینکه بتوانیم آیتم صف را دقیقاً پس از پردازش کامل
-    # گروه حذف کنیم، تمام queue_key های عضو هر گروه را از پیش نگاشت می‌کنیم.
+    # هر گروه ممکن است از چند رکورد/فایل خام ساخته شده باشد که هرکدام queue_key
+    # متفاوتی دارند؛ این نگاشت باید از "signatures" کامل ساخته شود (نه فقط
+    # candidates) وگرنه queue_key های گروه‌های رد‌شده توسط Golden هیچ‌وقت
+    # شناخته نمی‌شوند و حذف آن‌ها از صف در cleanup ممکن نخواهد بود.
     group_queue_keys: dict[tuple, set[str]] = (
-        candidates
+        signatures
         .groupby(["coin_composition", "signature"])["queue_key"]
         .apply(lambda s: set(s.dropna().astype(str)))
         .to_dict()
