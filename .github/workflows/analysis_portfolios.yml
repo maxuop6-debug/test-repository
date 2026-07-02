@@ -337,7 +337,7 @@ jobs:
           # به portfolios.py داده می‌شود و فیلتر دقیق با --signatures-filter
           # (که chunk_N.json را دریافت می‌کند) در مرحله ۶ انجام می‌شود.
 
-      - name: 4. دانلود golden_scores.parquet از مخزن سوم
+      - name: 4. دانلود golden_scores.csv از مخزن سوم
         if: |
           steps.prev_check.outputs.already_done != 'true' &&
           steps.interrupt_check.outputs.interrupted != 'true'
@@ -348,29 +348,29 @@ jobs:
         run: |
           mkdir -p /tmp/golden_scores
           # نکته: فایل در ریشه‌ی مخزن سوم است، نه زیر analysis_results/
-          HTTP_CODE=$(curl -s -o /tmp/golden_scores.parquet.enc -w "%{http_code}" \
+          HTTP_CODE=$(curl -s -o /tmp/golden_scores.csv.enc -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3.raw" \
-            "https://api.github.com/repos/$THIRD_REPO/contents/golden_scores.parquet.enc")
+            "https://api.github.com/repos/$THIRD_REPO/contents/golden_scores.csv.enc")
 
           # اصلاح: اگر فایل وجود نداشت (۴۰۴)، با موفقیت ادامه می‌دهیم (بدون golden_scores)
           if [ "$HTTP_CODE" = "404" ]; then
-            echo "ℹ️ golden_scores.parquet.enc هنوز در مخزن سوم موجود نیست (HTTP 404) — portfolios بدون golden_scores اجرا می‌شود."
+            echo "ℹ️ golden_scores.csv.enc هنوز در مخزن سوم موجود نیست (HTTP 404) — portfolios بدون golden_scores اجرا می‌شود."
             exit 0
           fi
 
-          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/golden_scores.parquet.enc ]; then
-            echo "❌ golden_scores.parquet.enc دریافت نشد (HTTP $HTTP_CODE)."
+          if [ "$HTTP_CODE" != "200" ] || [ ! -s /tmp/golden_scores.csv.enc ]; then
+            echo "❌ golden_scores.csv.enc دریافت نشد (HTTP $HTTP_CODE)."
             exit 1
           fi
 
-          # محتوای رمزگشایی‌شده یک tar.gz است (golden_scores.parquet داخل آن
-          # فشرده شده — نگاه کنید analysis_golden.yml) نه parquet خام، پس باید
+          # محتوای رمزگشایی‌شده یک tar.gz است (golden_scores.csv داخل آن
+          # فشرده شده — نگاه کنید analysis_golden.yml) نه CSV خام، پس باید
           # بعد از دیکریپت استخراج شود.
           node -e "
             const crypto=require('crypto'),fs=require('fs');
             const pass=process.env.RESULTS_PASSWORD;
-            const data=fs.readFileSync('/tmp/golden_scores.parquet.enc');
+            const data=fs.readFileSync('/tmp/golden_scores.csv.enc');
             const key=crypto.scryptSync(pass,'salt',32);
             const iv=data.slice(0,16),enc=data.slice(16);
             const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);
@@ -382,14 +382,14 @@ jobs:
           fi
 
           tar -xzf /tmp/golden_scores.tar.gz -C /tmp/golden_scores
-          FOUND_PARQUET=$(find /tmp/golden_scores -name '*.parquet' | head -1)
-          if [ -z "$FOUND_PARQUET" ]; then
-            echo "❌ استخراج tar.gz موفق بود ولی هیچ فایل .parquet داخلش یافت نشد."; exit 1
+          FOUND_CSV=$(find /tmp/golden_scores -name '*.csv' | head -1)
+          if [ -z "$FOUND_CSV" ]; then
+            echo "❌ استخراج tar.gz موفق بود ولی هیچ فایل .csv داخلش یافت نشد."; exit 1
           fi
-          if [ "$FOUND_PARQUET" != "/tmp/golden_scores/golden_scores.parquet" ]; then
-            mv "$FOUND_PARQUET" /tmp/golden_scores/golden_scores.parquet
+          if [ "$FOUND_CSV" != "/tmp/golden_scores/golden_scores.csv" ]; then
+            mv "$FOUND_CSV" /tmp/golden_scores/golden_scores.csv
           fi
-          echo "✅ golden_scores.parquet دریافت، رمزگشایی و استخراج شد."
+          echo "✅ golden_scores.csv دریافت، رمزگشایی و استخراج شد."
 
       - name: 6. اجرای portfolios.py برای این چانک
         if: |
@@ -400,10 +400,10 @@ jobs:
 
           # اگر golden_scores موجود است آرگومان مربوطه را اضافه کن، در غیر این صورت بدون آن اجرا کن
           GOLDEN_ARG=""
-          if [ -f /tmp/golden_scores/golden_scores.parquet ]; then
-            GOLDEN_ARG="--golden-scores /tmp/golden_scores/golden_scores.parquet"
+          if [ -f /tmp/golden_scores/golden_scores.csv ]; then
+            GOLDEN_ARG="--golden-scores /tmp/golden_scores/golden_scores.csv"
           else
-            echo "ℹ️ golden_scores.parquet موجود نیست — portfolios.py بدون آن اجرا می‌شود."
+            echo "ℹ️ golden_scores.csv موجود نیست — portfolios.py بدون آن اجرا می‌شود."
           fi
 
           python modules/portfolios.py \
@@ -787,37 +787,37 @@ jobs:
           fi
           echo "✅ روش سوم موفق بود — $COUNT فایل دریافت شد."
 
-      - name: آپلود portfolios.parquet به مخزن سوم
+      - name: آپلود portfolios.csv به مخزن سوم
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
         run: |
-          # جمع‌آوری و ادغام portfolios parquet از artifactهای batch
+          # جمع‌آوری و ادغام portfolios csv از artifactهای batch
           # (دانلود artifactها قبلاً در یکی از سه مرحله قبل با موفقیت انجام شده است)
-          pip install pyarrow pandas --quiet --break-system-packages 2>/dev/null || \
-            pip install pyarrow pandas --quiet 2>/dev/null || true
+          pip install pandas --quiet --break-system-packages 2>/dev/null || \
+            pip install pandas --quiet 2>/dev/null || true
 
-          PARQUET_COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' 2>/dev/null | wc -l)
-          if [ "$PARQUET_COUNT" -eq 0 ]; then
-            echo "⚠️ هیچ portfolios parquet یافت نشد — رد می‌شویم."
+          CSV_COUNT=$(find /tmp/portfolios_scores_parts -name 'portfolios*.csv' 2>/dev/null | wc -l)
+          if [ "$CSV_COUNT" -eq 0 ]; then
+            echo "⚠️ هیچ portfolios csv یافت نشد — رد می‌شویم."
             exit 0
           fi
 
-          find /tmp/portfolios_scores_parts -name 'portfolios*.parquet' | sort > /tmp/portfolios_parquet_list.txt
+          find /tmp/portfolios_scores_parts -name 'portfolios*.csv' | sort > /tmp/portfolios_csv_list.txt
 
           python3 - <<'PYEOF'
           import sys, pathlib
           try:
               import pandas as pd
-              paths = pathlib.Path("/tmp/portfolios_parquet_list.txt").read_text().strip().split("\n")
+              paths = pathlib.Path("/tmp/portfolios_csv_list.txt").read_text().strip().split("\n")
               paths = [p for p in paths if p and pathlib.Path(p).exists()]
               if not paths:
                   sys.exit(0)
               dfs = []
               for p in paths:
                   try:
-                      dfs.append(pd.read_parquet(p))
+                      dfs.append(pd.read_csv(p, index_col=0))
                   except Exception as e:
                       print(f"skip {p}: {e}")
               if not dfs:
@@ -825,22 +825,22 @@ jobs:
               merged = pd.concat(dfs, ignore_index=False)
               if not merged.index.is_unique:
                   merged = merged[~merged.index.duplicated(keep="last")]
-              merged.to_parquet("/tmp/portfolios_scores.parquet", index=True)
+              merged.to_csv("/tmp/portfolios_scores.csv", index=True)
               print(f"merged {len(merged)} rows from {len(dfs)} files")
           except ImportError:
               import shutil
-              paths = pathlib.Path("/tmp/portfolios_parquet_list.txt").read_text().strip().split("\n")
+              paths = pathlib.Path("/tmp/portfolios_csv_list.txt").read_text().strip().split("\n")
               paths = [p for p in paths if p]
-              shutil.copy(paths[-1], "/tmp/portfolios_scores.parquet")
+              shutil.copy(paths[-1], "/tmp/portfolios_scores.csv")
               print(f"pandas not available, used last file: {paths[-1]}")
           PYEOF
 
-          if [ ! -f /tmp/portfolios_scores.parquet ]; then
-            echo "⚠️ portfolios_scores.parquet پس از merge وجود ندارد — رد می‌شویم."
+          if [ ! -f /tmp/portfolios_scores.csv ]; then
+            echo "⚠️ portfolios_scores.csv پس از merge وجود ندارد — رد می‌شویم."
             exit 0
           fi
 
-          tar -czf /tmp/portfolios_scores.tar.gz -C /tmp portfolios_scores.parquet
+          tar -czf /tmp/portfolios_scores.tar.gz -C /tmp portfolios_scores.csv
           node -e "
             const crypto = require('crypto'), fs = require('fs');
             const pass = process.env.RESULTS_PASSWORD;
@@ -853,7 +853,7 @@ jobs:
           "
           echo "✅ رمزنگاری portfolios_scores.tar.gz.enc انجام شد"
 
-          DEST="analysis_results/portfolios_scores.parquet.enc"
+          DEST="analysis_results/portfolios_scores.csv.enc"
           # fix ARG_MAX: به جای CONTENT_B64=$(base64 ...) در shell، به فایل می‌ریزیم
           base64 -w0 /tmp/portfolios_scores.tar.gz.enc > /tmp/portfolios_scores_b64.txt
           PS_RETRY=0; PS_MAX=10
@@ -883,7 +883,7 @@ jobs:
               --data-binary @/tmp/payload_ps.json \
               "https://api.github.com/repos/$THIRD_REPO/contents/$DEST")
             if [ "$PS_HTTP" = "200" ] || [ "$PS_HTTP" = "201" ]; then
-              echo "✅ portfolios_scores.parquet.enc در مخزن سوم آپلود شد → $DEST"
+              echo "✅ portfolios_scores.csv.enc در مخزن سوم آپلود شد → $DEST"
               break
             elif [ "$PS_HTTP" = "409" ] || [ "$PS_HTTP" = "422" ]; then
               echo "⚠️ تداخل SHA در portfolios_scores (HTTP $PS_HTTP) — تلاش مجدد ($((PS_RETRY+1))/$PS_MAX)..."
@@ -894,8 +894,8 @@ jobs:
             fi
           done
           [ $PS_RETRY -ge $PS_MAX ] && echo "ERROR: آپلود portfolios_scores پس از $PS_MAX تلاش ناموفق."
-          rm -f /tmp/portfolios_scores.parquet /tmp/portfolios_scores.tar.gz \
-            /tmp/portfolios_scores.tar.gz.enc /tmp/ps_resp.txt /tmp/portfolios_parquet_list.txt
+          rm -f /tmp/portfolios_scores.csv /tmp/portfolios_scores.tar.gz \
+            /tmp/portfolios_scores.tar.gz.enc /tmp/ps_resp.txt /tmp/portfolios_csv_list.txt
 
       - name: فراخوانی مجدد loop_analysis.yml
         env:
