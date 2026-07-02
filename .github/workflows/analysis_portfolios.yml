@@ -579,7 +579,7 @@ jobs:
               echo "⚠️ دریافت صف ناموفق (HTTP $QUEUE_HTTP) — ادامه loop."
             fi
           else
-            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null)) | unique' \
+            jq '[.[] | if type == "object" then (.path // .signature // .signature_path) else . end] | map(select(. != null)) | unique' \
               /tmp/merged_done.json > /tmp/merged_done_normalized.json
             [ -s /tmp/merged_done_normalized.json ] || echo "[]" > /tmp/merged_done_normalized.json
 
@@ -603,7 +603,7 @@ jobs:
               jq -s '.[0] as $c | .[1] as $d
                 | ($d | unique) as $done_set
                 | $c | map(
-                    (if type == "object" then .signature_path else . end) as $key
+                    (if type == "object" then (.path // .signature // .signature_path) else . end) as $key
                     | select(($done_set | index($key)) == null)
                   )
               ' /tmp/current.json /tmp/merged_done_normalized.json > /tmp/new_content.json
@@ -640,7 +640,7 @@ jobs:
 
             # fix ARG_MAX: همه عملیات merge روی فایل انجام میشه نه shell variable
             # new_sigs.json (خروجی همین chunk) یک‌بار ساخته میشه و ثابت می‌مونه
-            jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "")) | unique' \
+            jq '[.[] | if type == "object" then (.path // .signature // .signature_path) else . end] | map(select(. != null and . != "")) | unique' \
               /tmp/merged_done.json > /tmp/new_sigs.json 2>/dev/null \
               || echo "[]" > /tmp/new_sigs.json
 
@@ -658,7 +658,7 @@ jobs:
               if ! jq -e 'type == "array"' /tmp/current_completed_raw.json > /dev/null 2>&1; then
                 echo "[]" > /tmp/current_completed_raw.json
               fi
-              jq '[.[] | if type == "object" then .signature_path else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
+              jq '[.[] | if type == "object" then (.path // .signature // .signature_path) else . end] | map(select(. != null and . != "" and . != "completed")) | unique' \
                 /tmp/current_completed_raw.json > /tmp/current_normalized.json 2>/dev/null \
                 || echo "[]" > /tmp/current_normalized.json
 
