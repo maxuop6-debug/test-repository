@@ -294,7 +294,7 @@ def load_signatures(signatures_dir: Path, signatures_filter: Optional[Path] = No
         allowed_raw = []
         for item in _filter_data:
             if isinstance(item, dict):
-                val = item.get("path") or item.get("signature")
+                val = item.get("path") or item.get("signature") or item.get("signature_path")
             else:
                 val = item
             if val:
