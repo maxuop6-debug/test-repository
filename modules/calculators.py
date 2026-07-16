@@ -10,6 +10,7 @@ import json
 import csv
 import re
 import pickle
+import hashlib
 import argparse
 import logging
 import statistics
@@ -233,6 +234,358 @@ def build_inverse_dist(trades, stop_loss, max_gain):
     return [{"درصد_دقیق": k, "تعداد_معاملات": v} for k, v in sorted(agg.items())]
 
 # ══════════════════════════════════════════════════════════════
+# آمار توزیع سود / اوت‌لایر / ماهانه (سنگین) — با کش در cache/
+# ══════════════════════════════════════════════════════════════
+
+STATS_CACHE_DIR = "cache"
+
+
+def _trade_raw_time(t):
+    return t.get("closeTime") or t.get("openTime") or t.get("time") or 0
+
+
+def _trade_datetime(t):
+    """تبدیل زمان معامله (epoch ms/s یا رشته تاریخ) به datetime."""
+    v = _trade_raw_time(t)
+    if not v:
+        return None
+    try:
+        if isinstance(v, (int, float)):
+            ts = float(v)
+            if ts > 1e12:  # میلی‌ثانیه
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts)
+        s = str(v).strip()
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _stats_cache_path(row_key):
+    safe = re.sub(r'[^a-zA-Z0-9_.-]', '_', row_key)[:150]
+    return os.path.join(STATS_CACHE_DIR, f"{safe}.json")
+
+
+def _stats_cache_key(trades):
+    n = len(trades)
+    total = sum(safe_percentage(t.get("profitPercent", 0)) for t in trades)
+    first_t = _trade_raw_time(trades[0]) if trades else 0
+    last_t = _trade_raw_time(trades[-1]) if trades else 0
+    raw = f"{n}|{total:.6f}|{first_t}|{last_t}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def _load_stats_cache(row_key, cache_key):
+    path = _stats_cache_path(row_key)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("_cache_key") == cache_key:
+            return data.get("stats")
+    except Exception:
+        pass
+    return None
+
+
+def _save_stats_cache(row_key, cache_key, stats):
+    os.makedirs(STATS_CACHE_DIR, exist_ok=True)
+    path = _stats_cache_path(row_key)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"_cache_key": cache_key, "stats": stats}, f, ensure_ascii=False)
+    except Exception as e:
+        log.warning("خطا در ذخیره کش آمار برای %s: %s", row_key, e)
+
+
+def compute_distribution_stats(profits):
+    """دسته اول: توزیع سود معاملات."""
+    n = len(profits)
+    if not n:
+        return {"pct_gt0": 0.0, "pct_gt1": 0.0, "pct_gt5": 0.0, "pct_loss_gt5": 0.0}
+    gt0 = sum(1 for p in profits if p > 0)
+    gt1 = sum(1 for p in profits if p > 1)
+    gt5 = sum(1 for p in profits if p > 5)
+    loss_gt5 = sum(1 for p in profits if p < -5)
+    return {
+        "pct_gt0": gt0 / n * 100,
+        "pct_gt1": gt1 / n * 100,
+        "pct_gt5": gt5 / n * 100,
+        "pct_loss_gt5": loss_gt5 / n * 100,
+    }
+
+
+def compute_outlier_stats(profits):
+    """دسته دوم: معاملات خاص (اوت‌لایر بر اساس ۳ برابر IQR)."""
+    n = len(profits)
+    if not n:
+        return {"max_win": 0.0, "max_loss": 0.0, "stdev_profit": 0.0,
+                "outlier_count": 0, "outlier_sum": 0.0, "outlier_pct": 0.0}
+    max_win = max(profits)
+    max_loss = min(profits)
+    stdev = statistics.stdev(profits) if n >= 2 else 0.0
+    sp = sorted(profits)
+    try:
+        q1 = statistics.quantiles(sp, n=4)[0]
+        q3 = statistics.quantiles(sp, n=4)[2]
+    except Exception:
+        q1 = q3 = sp[0]
+    iqr = q3 - q1
+    lower = q1 - 3 * iqr
+    upper = q3 + 3 * iqr
+    outliers = [p for p in profits if p < lower or p > upper]
+    total_profit = sum(profits)
+    outlier_sum = sum(outliers)
+    outlier_pct = (outlier_sum / total_profit * 100) if total_profit else 0.0
+    return {
+        "max_win": max_win, "max_loss": max_loss, "stdev_profit": stdev,
+        "outlier_count": len(outliers), "outlier_sum": outlier_sum,
+        "outlier_pct": outlier_pct,
+    }
+
+
+def compute_monthly_stats(trades):
+    """دسته سوم و چهارم: شاخص‌های زمانی (ماهانه) و ریسک/پایداری."""
+    months = defaultdict(list)
+    for t in trades:
+        dt = _trade_datetime(t)
+        if dt is None:
+            continue
+        key = f"{dt.year:04d}-{dt.month:02d}"
+        months[key].append(safe_percentage(t.get("profitPercent", 0)))
+
+    empty = {
+        "months_no_trade": 0, "avg_monthly_return": 0.0, "stdev_monthly_return": 0.0,
+        "best_month": 0.0, "worst_month": 0.0, "pct_profitable_months": 0.0,
+        "avg_profit_in_profitable_months": 0.0, "avg_loss_in_loss_months": 0.0,
+        "max_consecutive_monthly_loss": 0, "avg_trades_per_month": 0.0,
+        "stdev_trades_per_month": 0.0,
+        "sharpe_monthly": 0.0, "sortino": 0.0, "mdd_pct": 0.0,
+        "recovery_months": 0, "calmar": 0.0,
+    }
+    if not months:
+        return empty
+
+    ordered_keys = sorted(months.keys())
+    monthly_returns = [sum(months[k]) for k in ordered_keys]
+    trades_per_month = [len(months[k]) for k in ordered_keys]
+    n_months = len(ordered_keys)
+
+    avg_ret = statistics.mean(monthly_returns)
+    std_ret = statistics.stdev(monthly_returns) if n_months >= 2 else 0.0
+    best = max(monthly_returns)
+    worst = min(monthly_returns)
+    profitable = [r for r in monthly_returns if r > 0]
+    losing = [r for r in monthly_returns if r < 0]
+    pct_profitable = (len(profitable) / n_months * 100) if n_months else 0.0
+    avg_profit_months = statistics.mean(profitable) if profitable else 0.0
+    avg_loss_months = statistics.mean(losing) if losing else 0.0
+
+    best_streak = cur = 0
+    for r in monthly_returns:
+        if r < 0:
+            cur += 1
+            best_streak = max(best_streak, cur)
+        else:
+            cur = 0
+
+    avg_trades = statistics.mean(trades_per_month) if trades_per_month else 0.0
+    std_trades = statistics.stdev(trades_per_month) if len(trades_per_month) >= 2 else 0.0
+
+    try:
+        first_dt = datetime.strptime(ordered_keys[0] + "-01", "%Y-%m-%d")
+        last_dt = datetime.strptime(ordered_keys[-1] + "-01", "%Y-%m-%d")
+        total_span_months = (last_dt.year - first_dt.year) * 12 + (last_dt.month - first_dt.month) + 1
+        months_no_trade = max(0, total_span_months - n_months)
+    except Exception:
+        months_no_trade = 0
+
+    sharpe_m = (avg_ret / std_ret) if std_ret else 0.0
+
+    downside = [r for r in monthly_returns if r < 0]
+    downside_dev = (statistics.stdev(downside) if len(downside) >= 2
+                     else (abs(downside[0]) if downside else 0.0))
+    sortino = (avg_ret / downside_dev) if downside_dev else 0.0
+
+    cum = 0.0
+    peak = 0.0
+    mdd = 0.0
+    cum_series = []
+    for r in monthly_returns:
+        cum += r
+        cum_series.append(cum)
+        if cum > peak:
+            peak = cum
+        dd = peak - cum
+        if dd > mdd:
+            mdd = dd
+
+    recovery_months = 0
+    if mdd > 0:
+        cur_peak = cum_series[0]
+        cur_peak_i = 0
+        worst_dd = 0.0
+        worst_peak_i = 0
+        worst_trough_i = 0
+        for i, v in enumerate(cum_series):
+            if v > cur_peak:
+                cur_peak = v
+                cur_peak_i = i
+            dd = cur_peak - v
+            if dd > worst_dd:
+                worst_dd = dd
+                worst_peak_i = cur_peak_i
+                worst_trough_i = i
+        target = cum_series[worst_peak_i]
+        rec = None
+        for i in range(worst_trough_i + 1, len(cum_series)):
+            if cum_series[i] >= target:
+                rec = i - worst_trough_i
+                break
+        recovery_months = rec if rec is not None else 0
+
+    calmar = (avg_ret * 12 / mdd) if mdd else 0.0
+
+    return {
+        "months_no_trade": months_no_trade,
+        "avg_monthly_return": avg_ret,
+        "stdev_monthly_return": std_ret,
+        "best_month": best,
+        "worst_month": worst,
+        "pct_profitable_months": pct_profitable,
+        "avg_profit_in_profitable_months": avg_profit_months,
+        "avg_loss_in_loss_months": avg_loss_months,
+        "max_consecutive_monthly_loss": best_streak,
+        "avg_trades_per_month": avg_trades,
+        "stdev_trades_per_month": std_trades,
+        "sharpe_monthly": sharpe_m,
+        "sortino": sortino,
+        "mdd_pct": -mdd,
+        "recovery_months": recovery_months,
+        "calmar": calmar,
+    }
+
+
+def _empty_ext_stats():
+    d = {}
+    d.update(compute_distribution_stats([]))
+    d.update(compute_outlier_stats([]))
+    d.update(compute_monthly_stats([]))
+    return d
+
+
+# ترتیب کلیدهای آمار جدید (برای نوشتن یکنواخت در CSVها)
+EXT_STATS_FIELDS = [
+    "pct_gt0", "pct_gt1", "pct_gt5", "pct_loss_gt5",
+    "max_win", "max_loss", "stdev_profit", "outlier_count", "outlier_sum", "outlier_pct",
+    "months_no_trade", "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
+    "pct_profitable_months", "avg_profit_in_profitable_months", "avg_loss_in_loss_months",
+    "max_consecutive_monthly_loss", "avg_trades_per_month", "stdev_trades_per_month",
+    "sharpe_monthly", "sortino", "mdd_pct", "recovery_months", "calmar",
+]
+
+
+# نگاشت هر فیلد آماری جدید به عنوان ستون CSV و فرمت نمایش آن
+EXT_STATS_HEADERS = {
+    "pct_gt0": "درصد سود > ۰%",
+    "pct_gt1": "درصد سود > ۱%",
+    "pct_gt5": "درصد سود > ۵%",
+    "pct_loss_gt5": "درصد ضرر > ۵%",
+    "max_win": "بیشترین سود یک معامله(%)",
+    "max_loss": "بیشترین ضرر یک معامله(%)",
+    "stdev_profit": "انحراف معیار سود",
+    "outlier_count": "تعداد اوت‌لایرها",
+    "outlier_sum": "مجموع سود اوت‌لایرها(%)",
+    "outlier_pct": "درصد سود از اوت‌لایرها",
+    "months_no_trade": "ماه‌های بدون معامله",
+    "avg_monthly_return": "میانگین سود ماهانه",
+    "stdev_monthly_return": "انحراف معیار سود ماهانه",
+    "best_month": "بهترین ماه(%)",
+    "worst_month": "بدترین ماه(%)",
+    "pct_profitable_months": "درصد ماه‌های سودده",
+    "avg_profit_in_profitable_months": "میانگین سود در ماه‌های سودده",
+    "avg_loss_in_loss_months": "میانگین ضرر در ماه‌های ضررده",
+    "max_consecutive_monthly_loss": "بیشترین ضرر متوالی ماهانه",
+    "avg_trades_per_month": "تعداد معاملات در ماه (میانگین)",
+    "stdev_trades_per_month": "انحراف معیار تعداد معاملات",
+    "sharpe_monthly": "نسبت شارپ (ماهانه)",
+    "sortino": "نسبت سورتینو",
+    "mdd_pct": "حداکثر افت سرمایه(%)",
+    "recovery_months": "مدت بازگشت از افت (ماه)",
+    "calmar": "نسبت کالمار",
+}
+
+# فرمت نمایش هر فیلد (None یعنی عدد صحیح، بدون فرمت اعشاری)
+EXT_STATS_FORMATS = {
+    "pct_gt0": "{:.2f}", "pct_gt1": "{:.2f}", "pct_gt5": "{:.2f}", "pct_loss_gt5": "{:.2f}",
+    "max_win": "{:.4f}", "max_loss": "{:.4f}", "stdev_profit": "{:.4f}",
+    "outlier_count": None, "outlier_sum": "{:.4f}", "outlier_pct": "{:.2f}",
+    "months_no_trade": None, "avg_monthly_return": "{:.4f}", "stdev_monthly_return": "{:.4f}",
+    "best_month": "{:.4f}", "worst_month": "{:.4f}", "pct_profitable_months": "{:.2f}",
+    "avg_profit_in_profitable_months": "{:.4f}", "avg_loss_in_loss_months": "{:.4f}",
+    "max_consecutive_monthly_loss": None, "avg_trades_per_month": "{:.2f}",
+    "stdev_trades_per_month": "{:.2f}",
+    "sharpe_monthly": "{:.3f}", "sortino": "{:.3f}", "mdd_pct": "{:.2f}",
+    "recovery_months": None, "calmar": "{:.3f}",
+}
+
+# ترتیب ستون‌های جدید مطابق نمونه هدر جدول_مقایسه_همه_*.csv (ماه‌های بدون معامله در انتها)
+COMPARISON_EXT_FIELDS = [
+    "pct_gt0", "pct_gt1", "pct_gt5", "pct_loss_gt5",
+    "max_win", "max_loss", "stdev_profit", "outlier_count", "outlier_sum", "outlier_pct",
+    "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
+    "pct_profitable_months", "avg_profit_in_profitable_months", "avg_loss_in_loss_months",
+    "max_consecutive_monthly_loss", "avg_trades_per_month", "stdev_trades_per_month",
+    "sharpe_monthly", "sortino", "mdd_pct", "recovery_months", "calmar",
+    "months_no_trade",
+]
+
+
+def _ext_headers(fields):
+    return [EXT_STATS_HEADERS[f] for f in fields]
+
+
+def _ext_row(record_or_agg, fields):
+    """ساخت لیست مقادیر فرمت‌شده برای ستون‌های آماری جدید از یک دیکشنری (رکورد یا میانگین تجمیع‌شده)."""
+    out = []
+    for f in fields:
+        v = record_or_agg.get(f, 0) or 0
+        fmt = EXT_STATS_FORMATS.get(f)
+        out.append(fmt.format(v) if fmt else v)
+    return out
+
+
+def compute_extended_stats(row_key, trades):
+    """
+    محاسبه سنگین آمار توزیع/اوت‌لایر/ماهانه با کش در cache/.
+    row_key باید شناسه یکتای ردیف (مثلاً enc_path::symbol یا folder_combo) باشد.
+    """
+    if not trades:
+        return _empty_ext_stats()
+
+    cache_key = _stats_cache_key(trades)
+    cached = _load_stats_cache(row_key, cache_key)
+    if cached is not None:
+        return cached
+
+    profits = [safe_percentage(t.get("profitPercent", 0)) for t in trades]
+    stats = {}
+    stats.update(compute_distribution_stats(profits))
+    stats.update(compute_outlier_stats(profits))
+    stats.update(compute_monthly_stats(trades))
+
+    _save_stats_cache(row_key, cache_key, stats)
+    return stats
+
+
+# ══════════════════════════════════════════════════════════════
 # پردازش یک فایل یکپارچه → همه خروجی‌ها به تفکیک symbol
 # ══════════════════════════════════════════════════════════════
 
@@ -286,6 +639,7 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
             "total": len(sym_trades),
             "win_rate": wr,
             "inv_dist": build_inverse_dist(sym_trades, sl, max_g),
+            "ext": compute_extended_stats(f"{enc_path}::{sym}", sym_trades),
         }
         log.info("  symbol=%s | total=%d | win_rate=%.1f%% | real=%.4f | special=%.4f | cons=%d",
                  sym, r["total"], r["win_rate"], r["real"], r["special"], r["max_cons_count"])
@@ -320,6 +674,7 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
             "total": len(merged),
             "win_rate": wr,
             "inv_dist": build_inverse_dist(merged, sl, max_g),
+            "ext": compute_extended_stats(f"{enc_path}::{label}", merged),
         }
         log.info("  combo=%s | total=%d | win_rate=%.1f%% | real=%.4f | special=%.4f",
                  label, r["total"], r["win_rate"], r["real"], r["special"])
@@ -539,6 +894,7 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                 mc_count, mc_loss = rd["max_cons_count"], rd["max_cons_loss"]
                 dd, sh, pl = rd["max_drawdown"], rd["sharpe"], rd["pl_ratio"]
                 inv_d = inv_cache.get(ck) or rd["inv_dist"]
+                ext = rd.get("ext") or _empty_ext_stats()
             else:
                 rc = returns_cache.get(ck, {"real": 0, "special": 0})
                 rk = risk_cache.get(ck, {"max_consecutive_loss": 0, "max_consecutive_count": 0})
@@ -548,6 +904,7 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                 mc_count = rk["max_consecutive_count"]
                 mc_loss = rk["max_consecutive_loss"]
                 inv_d = inv_cache.get(ck)
+                ext = _empty_ext_stats()
 
             log.info("  ✓ %s | trades=%d | wr=%.1f%% | real=%.4f | special=%.4f",
                      ck, total, wr, real, spec)
@@ -561,6 +918,13 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                     for i in inv_d
                 )
 
+            main_score, main_rating = _score(
+                1 if spec >= 1 else 0,
+                1 if spec > 0 else 0,
+                mc_loss if mc_loss is not None else 0,
+                1,
+            )
+
             main_rec = {
                 "folder_name": f"{folder}_{combo_lbl}", "group": group,
                 "file_name": f"{folder}_{combo_lbl}", "period_name": folder, "symbol": combo_lbl,
@@ -569,8 +933,10 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                 "max_drawdown": dd, "profit_loss_ratio": pl, "sharpe_ratio": sh,
                 "real_return": real, "special_rounded_return": spec,
                 "is_inverse": False,
+                "score": main_score, "rating": main_rating,
                 "_move_percents": mp, "_stop_loss": sl, "_max_move": max_move,
             }
+            main_rec.update(ext)
             all_results.append(main_rec)
 
             if inv_d is not None:
@@ -597,6 +963,7 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                     inv_wins = sum(1 for t in inv_trades if t["profitPercent"] > 0)
                     inv_losses = sum(1 for t in inv_trades if t["profitPercent"] < 0)
                     inv_wr = (inv_wins / len(inv_trades) * 100) if inv_trades else 0.0
+                    inv_ext = compute_extended_stats(f"{folder}_{combo_lbl}_INV", inv_trades)
                 else:
                     inv_mc_count = 0
                     inv_mc_loss = None
@@ -606,6 +973,14 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                     inv_wins = losses
                     inv_losses = wins
                     inv_wr = 100.0 - wr
+                    inv_ext = _empty_ext_stats()
+
+                inv_score, inv_rating = _score(
+                    1 if inv_spec >= 1 else 0,
+                    1 if inv_spec > 0 else 0,
+                    inv_mc_loss if inv_mc_loss is not None else 0,
+                    1,
+                )
 
                 inv_rec = {
                     "folder_name": f"{folder}_{combo_lbl}_INV", "group": group,
@@ -618,10 +993,18 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                     "sharpe_ratio": inv_sh,
                     "real_return": inv_real, "special_rounded_return": inv_spec,
                     "is_inverse": True,
+                    "score": inv_score, "rating": inv_rating,
                     "_move_percents": mp, "_stop_loss": sl, "_max_move": max_move,
                 }
+                inv_rec.update(inv_ext)
                 all_results.append(inv_rec)
                 log.info("  ✓ INV %s | real=%.4f | special=%.4f | cons=%d", ck, inv_real, inv_spec, inv_mc_count)
+
+    # فقط ۵۰۰ استراتژی برتر بر اساس امتیاز در خروجی نهایی نگهداری شوند
+    all_results.sort(key=lambda r: r["score"], reverse=True)
+    if len(all_results) > 500:
+        log.info("✂️ اعمال محدودیت ۵۰۰ استراتژی برتر (از %d رکورد) بر اساس امتیاز", len(all_results))
+        all_results = all_results[:500]
 
     return all_results
 
@@ -662,7 +1045,8 @@ def _folder_summary(folder_name, folder_path, recs):
         w.writerow([])
         w.writerow(["ردیف", "ترکیب کوین‌ها", "معاملات", "سودده", "زیانده", "وین‌ریت(%)",
                     "بازده واقعی(%)", "بازده ویژه(%)", "حداکثر ضرر متوالی(%)",
-                    "تعداد ضررهای متوالی", "افت سرمایه(%)", "P/L ratio", "شارپ", "وضعیت"])
+                    "تعداد ضررهای متوالی", "افت سرمایه(%)", "P/L ratio", "شارپ", "وضعیت"]
+                   + _ext_headers(EXT_STATS_FIELDS))
         for i, r in enumerate(recs, 1):
             sp = r["special_rounded_return"]
             status = "✅ عالی (≥۱%)" if sp >= 1 else ("👍 مثبت" if sp > 0 else "⚠️ منفی")
@@ -673,7 +1057,8 @@ def _folder_summary(folder_name, folder_path, recs):
                         f"{r.get('win_rate', 0):.2f}", f"{r['real_return']:.4f}", f"{sp:.4f}",
                         ml, r.get("max_consecutive_count", 0),
                         f"{r.get('max_drawdown', 0):.2f}", f"{r.get('profit_loss_ratio', 0):.3f}",
-                        sh, status])
+                        sh, status]
+                       + _ext_row(r, EXT_STATS_FIELDS))
         w.writerow([])
         pos = sum(1 for r in recs if r["special_rounded_return"] > 0)
         ge1 = sum(1 for r in recs if r["special_rounded_return"] >= 1)
@@ -691,7 +1076,8 @@ def _global_report(all_results, out_dir):
         w = csv.writer(f)
         w.writerow(["گروه", "پوشه", "symbol", "معاملات", "سودده", "زیانده", "وین‌ریت(%)",
                     "حداکثر ضرر متوالی(%)", "تعداد ضررهای متوالی", "افت سرمایه(%)",
-                    "P/L ratio", "شارپ", "بازده واقعی(%)", "بازده ویژه(%)", "نوع"])
+                    "P/L ratio", "شارپ", "بازده واقعی(%)", "بازده ویژه(%)", "نوع"]
+                   + _ext_headers(EXT_STATS_FIELDS))
         for r in all_results:
             ml = f"{r['max_consecutive_loss']:.2f}" if r.get("max_consecutive_loss") is not None else "-"
             sh = f"{r['sharpe_ratio']:.3f}" if r.get("sharpe_ratio") is not None else "-"
@@ -700,8 +1086,27 @@ def _global_report(all_results, out_dir):
                         f"{r['win_rate']:.2f}", ml, r.get("max_consecutive_count", 0),
                         f"{r.get('max_drawdown', 0):.2f}", f"{r.get('profit_loss_ratio', 0):.3f}",
                         sh, f"{r['real_return']:.4f}", f"{r['special_rounded_return']:.4f}",
-                        "معکوس" if r["is_inverse"] else "اصلی"])
+                        "معکوس" if r["is_inverse"] else "اصلی"]
+                       + _ext_row(r, EXT_STATS_FIELDS))
     log.info("گزارش کلی → %s", path)
+
+
+# قوانین تجمیع فیلدهای آماری جدید هنگام گروه‌بندی چند رکورد در یک ردیف جدول مقایسه
+_EXT_AGG_MAX = {"max_win"}
+_EXT_AGG_MIN = {"max_loss"}
+_EXT_AGG_SUM = {"outlier_count", "months_no_trade"}
+
+
+def _aggregate_ext_field(field, values):
+    if not values:
+        return 0
+    if field in _EXT_AGG_MAX:
+        return max(values)
+    if field in _EXT_AGG_MIN:
+        return min(values)
+    if field in _EXT_AGG_SUM:
+        return sum(values)
+    return statistics.mean(values)
 
 
 def _comparison_tables(all_results, out_dir):
@@ -712,7 +1117,8 @@ def _comparison_tables(all_results, out_dir):
             agg[k] = {"folder": r["folder_name"], "group": r["group"],
                       "win_rates": [], "sharpes": [], "max_losses": [],
                       "real": [], "special": [], "total_trades": 0,
-                      "ge1": 0, "gt0": 0, "n": 0}
+                      "ge1": 0, "gt0": 0, "n": 0,
+                      "ext_lists": {f: [] for f in EXT_STATS_FIELDS}}
         a = agg[k]
         a["win_rates"].append(r["win_rate"])
         a["sharpes"].append(r.get("sharpe_ratio") or 0)
@@ -723,13 +1129,16 @@ def _comparison_tables(all_results, out_dir):
         a["ge1"] += 1 if r["special_rounded_return"] >= 1 else 0
         a["gt0"] += 1 if r["special_rounded_return"] > 0 else 0
         a["n"] += 1
+        for f in EXT_STATS_FIELDS:
+            a["ext_lists"][f].append(r.get(f, 0) or 0)
 
     rows = []
     for (folder, group), a in agg.items():
         n = a["n"]
         avg_loss = statistics.mean(a["max_losses"]) if a["max_losses"] else 0
         sc, rt = _score(a["ge1"], a["gt0"], avg_loss, n)
-        rows.append({
+        ext_agg = {f: _aggregate_ext_field(f, a["ext_lists"][f]) for f in EXT_STATS_FIELDS}
+        row = {
             "folder": folder, "group": group,
             "n": n, "is_inv": folder.endswith("_INV"),
             "avg_win": statistics.mean(a["win_rates"]) if a["win_rates"] else 0,
@@ -739,25 +1148,32 @@ def _comparison_tables(all_results, out_dir):
             "avg_special": statistics.mean(a["special"]) if a["special"] else 0,
             "total_trades": a["total_trades"],
             "score": sc, "rating": rt,
-        })
+        }
+        row.update(ext_agg)
+        rows.append(row)
     rows.sort(key=lambda x: x["score"], reverse=True)
 
     for suffix, col, col_key in [
         ("بازده_واقعی", "بازده واقعی(%)", "avg_real"),
         ("بازده_ویژه",  "بازده ویژه(%)",  "avg_special"),
     ]:
+        # فقط ۵۰۰ استراتژی برتر بر اساس امتیاز در خروجی نهایی نگهداری شوند
+        table_rows = sorted(rows, key=lambda x: x["score"], reverse=True)[:500]
+
         path = os.path.join(out_dir, f"جدول_مقایسه_همه_{suffix}.csv")
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             w.writerow(["رتبه", "پوشه", "گروه", "نوع", "تعداد نمادها", col,
-                        "وین‌ریت(%)", "حداکثر ضرر متوالی(%)", "شارپ",
-                        "کل معاملات", "امتیاز", "وضعیت"])
-            for i, row in enumerate(rows, 1):
+                        "وین‌ریت(%)"]
+                       + _ext_headers(COMPARISON_EXT_FIELDS)
+                       + ["حداکثر ضرر متوالی(%)", "شارپ", "کل معاملات", "امتیاز", "وضعیت"])
+            for i, row in enumerate(table_rows, 1):
                 w.writerow([i, row["folder"], row["group"],
                             "معکوس" if row["is_inv"] else "اصلی",
-                            row["n"], f"{row[col_key]:.4f}%", f"{row['avg_win']:.2f}",
-                            f"{row['avg_loss']:.2f}", f"{row['avg_sh']:.3f}",
-                            row["total_trades"], f"{row['score']:.1f}/100", row["rating"]])
+                            row["n"], f"{row[col_key]:.4f}%", f"{row['avg_win']:.2f}"]
+                           + _ext_row(row, COMPARISON_EXT_FIELDS)
+                           + [f"{row['avg_loss']:.2f}", f"{row['avg_sh']:.3f}",
+                              row["total_trades"], f"{row['score']:.1f}/100", row["rating"]])
         log.info("جدول %s → %s", suffix, path)
 
 
