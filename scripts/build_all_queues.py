@@ -628,26 +628,20 @@ def build_work_queue(repo, token):
         "BTCUSDT+ETHUSDT+XRPUSDT+SOLUSDT+PAXGUSDT",
     ]
     intervals_10day = [
-        "fixed_5d","fixed_10d","fixed_15d","fixed_30d",
-        "CPI_pre_1d","CPI_pre_2d","CPI_pre_3d","CPI_pre_5d",
-        "CPI_post_1d","CPI_post_2d","CPI_post_3d","CPI_post_5d","CPI_post_7d","CPI_post_10d","CPI_post_15d",
-        "CoreCPI_pre_1d","CoreCPI_pre_2d","CoreCPI_pre_3d","CoreCPI_pre_5d",
-        "CoreCPI_post_1d","CoreCPI_post_2d","CoreCPI_post_3d","CoreCPI_post_5d","CoreCPI_post_7d","CoreCPI_post_10d","CoreCPI_post_15d",
-        "PPI_pre_1d","PPI_pre_2d","PPI_pre_3d","PPI_pre_5d",
-        "PPI_post_1d","PPI_post_2d","PPI_post_3d","PPI_post_5d","PPI_post_7d","PPI_post_10d","PPI_post_15d",
-        "CorePPI_pre_1d","CorePPI_pre_2d","CorePPI_pre_3d","CorePPI_pre_5d",
-        "CorePPI_post_1d","CorePPI_post_2d","CorePPI_post_3d","CorePPI_post_5d","CorePPI_post_7d","CorePPI_post_10d","CorePPI_post_15d",
-        "FOMC_pre_1d","FOMC_pre_2d","FOMC_pre_3d","FOMC_pre_5d",
-        "FOMC_post_1d","FOMC_post_2d","FOMC_post_3d","FOMC_post_5d","FOMC_post_7d","FOMC_post_10d","FOMC_post_15d",
-        "CPI_y_y_pre_1d","CPI_y_y_pre_2d","CPI_y_y_pre_3d","CPI_y_y_pre_5d",
-        "CPI_y_y_post_1d","CPI_y_y_post_2d","CPI_y_y_post_3d","CPI_y_y_post_5d","CPI_y_y_post_7d","CPI_y_y_post_10d","CPI_y_y_post_15d"
+        "fixed_5d", "fixed_10d", "fixed_15d", "fixed_30d",
+        "CPI_post_5d", "CPI_post_10d", "CPI_post_15d", "CPI_post_30d",
+        "CoreCPI_post_5d", "CoreCPI_post_10d", "CoreCPI_post_15d", "CoreCPI_post_30d",
+        "PPI_post_5d", "PPI_post_10d", "PPI_post_15d", "PPI_post_30d",
+        "CorePPI_post_5d", "CorePPI_post_10d", "CorePPI_post_15d", "CorePPI_post_30d",
+        "FOMC_pre_5d", "FOMC_post_5d", "FOMC_post_10d", "FOMC_post_15d", "FOMC_post_30d",
+        "CPI_y_y_post_5d", "CPI_y_y_post_10d", "CPI_y_y_post_15d", "CPI_y_y_post_30d"
     ]
     intervals_monthly = ["monthly"]
     module_intervals = {
         "combo_10day": intervals_10day,
         "combo_monthly": intervals_monthly,
     }
-    models = ["simple_hybrid", "fibonacci_full", "fibonacci_hybrid"]
+    models = ["simple_hybrid"]
 
     strategies_file = os.environ.get('STRATEGIES_FILE', '/tmp/strategies.txt')
     log(f"  خواندن استراتژی‌ها از: {strategies_file}")
