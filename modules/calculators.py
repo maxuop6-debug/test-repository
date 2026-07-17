@@ -362,7 +362,8 @@ def compute_monthly_stats(trades):
         months[key].append(safe_percentage(t.get("profitPercent", 0)))
 
     empty = {
-        "months_no_trade": 0, "avg_monthly_return": 0.0, "stdev_monthly_return": 0.0,
+        "months_no_trade": 0, "total_span_months": 0,
+        "avg_monthly_return": 0.0, "stdev_monthly_return": 0.0,
         "best_month": 0.0, "worst_month": 0.0, "pct_profitable_months": 0.0,
         "avg_profit_in_profitable_months": 0.0, "avg_loss_in_loss_months": 0.0,
         "max_consecutive_monthly_loss": 0, "avg_trades_per_month": 0.0,
@@ -405,6 +406,7 @@ def compute_monthly_stats(trades):
         total_span_months = (last_dt.year - first_dt.year) * 12 + (last_dt.month - first_dt.month) + 1
         months_no_trade = max(0, total_span_months - n_months)
     except Exception:
+        total_span_months = n_months
         months_no_trade = 0
 
     sharpe_m = (avg_ret / std_ret) if std_ret else 0.0
@@ -455,6 +457,7 @@ def compute_monthly_stats(trades):
 
     return {
         "months_no_trade": months_no_trade,
+        "total_span_months": total_span_months,
         "avg_monthly_return": avg_ret,
         "stdev_monthly_return": std_ret,
         "best_month": best,
@@ -485,7 +488,7 @@ def _empty_ext_stats():
 EXT_STATS_FIELDS = [
     "pct_gt0", "pct_gt1", "pct_gt5", "pct_loss_gt5",
     "max_win", "max_loss", "stdev_profit", "outlier_count", "outlier_sum", "outlier_pct",
-    "months_no_trade", "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
+    "total_span_months", "months_no_trade", "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
     "pct_profitable_months", "avg_profit_in_profitable_months", "avg_loss_in_loss_months",
     "max_consecutive_monthly_loss", "avg_trades_per_month", "stdev_trades_per_month",
     "sharpe_monthly", "sortino", "mdd_pct", "recovery_months", "calmar",
@@ -504,6 +507,7 @@ EXT_STATS_HEADERS = {
     "outlier_count": "تعداد اوت‌لایرها",
     "outlier_sum": "مجموع سود اوت‌لایرها(%)",
     "outlier_pct": "درصد سود از اوت‌لایرها",
+    "total_span_months": "بازه بکتست (ماه)",
     "months_no_trade": "ماه‌های بدون معامله",
     "avg_monthly_return": "میانگین سود ماهانه",
     "stdev_monthly_return": "انحراف معیار سود ماهانه",
@@ -527,6 +531,7 @@ EXT_STATS_FORMATS = {
     "pct_gt0": "{:.2f}", "pct_gt1": "{:.2f}", "pct_gt5": "{:.2f}", "pct_loss_gt5": "{:.2f}",
     "max_win": "{:.4f}", "max_loss": "{:.4f}", "stdev_profit": "{:.4f}",
     "outlier_count": None, "outlier_sum": "{:.4f}", "outlier_pct": "{:.2f}",
+    "total_span_months": None,
     "months_no_trade": None, "avg_monthly_return": "{:.4f}", "stdev_monthly_return": "{:.4f}",
     "best_month": "{:.4f}", "worst_month": "{:.4f}", "pct_profitable_months": "{:.2f}",
     "avg_profit_in_profitable_months": "{:.4f}", "avg_loss_in_loss_months": "{:.4f}",
@@ -538,6 +543,7 @@ EXT_STATS_FORMATS = {
 
 # ترتیب ستون‌های جدید مطابق نمونه هدر جدول_مقایسه_همه_*.csv (ماه‌های بدون معامله در انتها)
 COMPARISON_EXT_FIELDS = [
+    "total_span_months",
     "pct_gt0", "pct_gt1", "pct_gt5", "pct_loss_gt5",
     "max_win", "max_loss", "stdev_profit", "outlier_count", "outlier_sum", "outlier_pct",
     "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
@@ -1092,7 +1098,7 @@ def _global_report(all_results, out_dir):
 
 
 # قوانین تجمیع فیلدهای آماری جدید هنگام گروه‌بندی چند رکورد در یک ردیف جدول مقایسه
-_EXT_AGG_MAX = {"max_win"}
+_EXT_AGG_MAX = {"max_win", "total_span_months"}
 _EXT_AGG_MIN = {"max_loss"}
 _EXT_AGG_SUM = {"outlier_count", "months_no_trade"}
 
@@ -1112,6 +1118,9 @@ def _aggregate_ext_field(field, values):
 def _comparison_tables(all_results, out_dir):
     agg = {}
     for r in all_results:
+        # درخواست کاربر: استراتژی‌های معکوس در جدول مقایسه نمایش داده نشوند
+        if r.get("is_inverse"):
+            continue
         k = (r["folder_name"], r["group"])
         if k not in agg:
             agg[k] = {"folder": r["folder_name"], "group": r["group"],
@@ -1135,6 +1144,17 @@ def _comparison_tables(all_results, out_dir):
     rows = []
     for (folder, group), a in agg.items():
         n = a["n"]
+        avg_special_chk = statistics.mean(a["special"]) if a["special"] else 0
+        avg_win_chk = statistics.mean(a["win_rates"]) if a["win_rates"] else 0
+        total_trades_chk = a["total_trades"]
+
+        # قانون ۱: بازده منفی یا صفر داخل جدول نیاید
+        if avg_special_chk <= 0:
+            continue
+        # قانون ۲: کمتر از ۵۰ معامله (در کل بازه) فقط با عملکرد استثنایی بیاید
+        if total_trades_chk < 50 and not (avg_win_chk > 70 and avg_special_chk > 10):
+            continue
+
         avg_loss = statistics.mean(a["max_losses"]) if a["max_losses"] else 0
         sc, rt = _score(a["ge1"], a["gt0"], avg_loss, n)
         ext_agg = {f: _aggregate_ext_field(f, a["ext_lists"][f]) for f in EXT_STATS_FIELDS}
