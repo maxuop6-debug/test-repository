@@ -239,9 +239,35 @@ def build_inverse_dist(trades, stop_loss, max_gain):
 
 STATS_CACHE_DIR = "cache"
 
+# باگ ۱۵ (اصلی): compute_monthly_stats همیشه صفر برمی‌گشت چون _trade_raw_time
+# فقط ۳ نام کلید دقیق (closeTime/openTime/time) را چک می‌کرد. اگر داده واقعی
+# trades از یکی از این نام‌ها استفاده نکند (مثلاً close_time، exitTime، date،
+# timestamp و ...)، مقدار همیشه 0 برمی‌گردد → dt=None برای همه معاملات →
+# months خالی می‌ماند → کل ستون‌های ماهانه/بازه بکتست صفر می‌شوند، دقیقاً
+# همان الگویی که در خروجی جدول مقایسه دیده می‌شود (تمام ردیف‌ها، صرف‌نظر از
+# تعداد معاملات). این تابع را طوری اصلاح می‌کنیم که هم نام‌های بیشتری از
+# کلید زمان را بشناسد و هم اگر باز هم چیزی پیدا نشد، این را با صدای بلند در
+# لاگ گزارش کند (نه سکوت) تا مشکل قابل ردیابی باشد.
+
+_TIME_FIELD_CANDIDATES = [
+    "closeTime", "close_time", "closedAt", "closed_at", "closeDate", "close_date",
+    "exitTime", "exit_time", "exitDate", "exit_date",
+    "openTime", "open_time", "openedAt", "opened_at", "openDate", "open_date",
+    "entryTime", "entry_time", "entryDate", "entry_date",
+    "time", "timestamp", "date", "datetime",
+]
+
 
 def _trade_raw_time(t):
-    return t.get("closeTime") or t.get("openTime") or t.get("time") or 0
+    for key in _TIME_FIELD_CANDIDATES:
+        v = t.get(key)
+        if v:
+            return v
+    # جستجوی عمومی: هر کلیدی که شامل "time" یا "date" باشد (case-insensitive)
+    for k, v in t.items():
+        if v and isinstance(k, str) and ("time" in k.lower() or "date" in k.lower()):
+            return v
+    return 0
 
 
 def _trade_datetime(t):
@@ -256,8 +282,15 @@ def _trade_datetime(t):
                 ts /= 1000.0
             return datetime.fromtimestamp(ts)
         s = str(v).strip()
+        # رشته‌ای که فقط عدد است (اپاک به صورت string)
+        if re.fullmatch(r"\d+(\.\d+)?", s):
+            ts = float(s)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts)
         for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
-                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                    "%Y/%m/%d %H:%M:%S", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y"):
             try:
                 return datetime.strptime(s, fmt)
             except Exception:
@@ -265,6 +298,30 @@ def _trade_datetime(t):
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def _diagnose_missing_dates(row_key, trades):
+    """
+    اجباراً بعد از هر بار محاسبه آمار سنگین صدا زده می‌شود (از داخل
+    compute_extended_stats که خودش تابعی است که برای هر symbol/combo در
+    process_file همیشه صدا زده می‌شود). اگر trades غیرخالی باشد ولی هیچ
+    تاریخی از هیچ معامله‌ای قابل استخراج نباشد، این را با جزئیات کامل در
+    لاگ ثبت می‌کند تا مشکل دیگر «بی‌صدا» نماند.
+    """
+    if not trades:
+        return
+    sample = trades[0]
+    found_any = any(_trade_datetime(t) is not None for t in trades)
+    if not found_any:
+        keys = list(sample.keys()) if isinstance(sample, dict) else []
+        raw = _trade_raw_time(sample)
+        log.warning(
+            "⚠️ تاریخ معامله برای هیچ trade ای در «%s» قابل پارس نشد (تعداد=%d) → "
+            "همه ستون‌های ماهانه/بازه‌بکتست صفر می‌مانند. کلیدهای نمونه معامله اول: %s | "
+            "مقدار خام زمان استخراج‌شده: %r",
+            row_key, len(trades), keys, raw,
+        )
+
 
 
 def _stats_cache_path(row_key):
@@ -579,6 +636,10 @@ def compute_extended_stats(row_key, trades):
     cache_key = _stats_cache_key(trades)
     cached = _load_stats_cache(row_key, cache_key)
     if cached is not None:
+        # حتی برای نتیجه کش‌شده هم تشخیص را اجرا می‌کنیم: اگر کش قبلاً با
+        # همین باگ ساخته شده و صفر است، دیگر بی‌صدا رد نمی‌شود.
+        if not cached.get("total_span_months"):
+            _diagnose_missing_dates(row_key, trades)
         return cached
 
     profits = [safe_percentage(t.get("profitPercent", 0)) for t in trades]
@@ -586,6 +647,13 @@ def compute_extended_stats(row_key, trades):
     stats.update(compute_distribution_stats(profits))
     stats.update(compute_outlier_stats(profits))
     stats.update(compute_monthly_stats(trades))
+
+    # اجباری: این تابع همیشه بلافاصله بعد از compute_monthly_stats صدا زده
+    # می‌شود (که خودش همیشه از داخل همین تابع فراخوانی‌شده اجرا می‌گردد) تا
+    # اگر نتیجه صفر بود، در همین اجرا در لاگ مشخص شود و دیگر نیازی به حدس
+    # زدن یا اجرای مجدد نباشد.
+    if not stats.get("total_span_months"):
+        _diagnose_missing_dates(row_key, trades)
 
     _save_stats_cache(row_key, cache_key, stats)
     return stats
@@ -644,7 +712,6 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
             "loss":  losses,
             "total": len(sym_trades),
             "win_rate": wr,
-            "inv_dist": build_inverse_dist(sym_trades, sl, max_g),
             "ext": compute_extended_stats(f"{enc_path}::{sym}", sym_trades),
         }
         log.info("  symbol=%s | total=%d | win_rate=%.1f%% | real=%.4f | special=%.4f | cons=%d",
@@ -661,7 +728,11 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
         for s in combo:
             merged.extend(groups[s])
         # باگ ۹: مرتب‌سازی بر اساس زمان معامله برای صحت max_consecutive و max_drawdown
-        merged.sort(key=lambda t: t.get("closeTime") or t.get("openTime") or t.get("time") or 0)
+        # (قبلاً این خط مستقیماً closeTime/openTime/time را چک می‌کرد که در داده
+        # واقعی وجود ندارند [فیلدهای واقعی entryTime/exitTime هستند] و در نتیجه
+        # همیشه با مقدار 0 مرتب می‌شد؛ حالا از همان تشخیص چندنامی + پارس واقعی
+        # تاریخ استفاده می‌شود تا مقادیر رشته‌ای/عددی قاطی نشوند)
+        merged.sort(key=lambda t: _trade_datetime(t) or datetime.min)
         wins = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) > 0)
         losses = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) < 0)
         wr = (wins / len(merged) * 100) if merged else 0.0
@@ -679,7 +750,6 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
             "loss":  losses,
             "total": len(merged),
             "win_rate": wr,
-            "inv_dist": build_inverse_dist(merged, sl, max_g),
             "ext": compute_extended_stats(f"{enc_path}::{label}", merged),
         }
         log.info("  combo=%s | total=%d | win_rate=%.1f%% | real=%.4f | special=%.4f",
@@ -758,37 +828,12 @@ def cmd_risk(args):
 # ══════════════════════════════════════════════════════════════
 
 def cmd_inverse(args):
-    password = args.password or os.environ.get("RESULTS_PASSWORD", os.environ.get("DATA_PASSWORD", ""))
-    with open(args.strategies_json, "r", encoding="utf-8") as f:
-        strategies = json.load(f)["strategies"]
-    with open(args.stoploss_cache, "r", encoding="utf-8") as f:
-        sl_cache = json.load(f)
-
-    cache = {}
-    for s in strategies:
-        folder = s["folder"]
-        sl_info = sl_cache.get(folder, {"stop_loss": -2.0, "move_percents": None})
-        sl = sl_info["stop_loss"]
-        mp = sl_info.get("move_percents") or []
-        max_g = max(mp) if mp else None
-        enc = s.get("aggregated_file") or os.path.join(args.results_base, folder, f"{folder}_trades.enc")
-        if not os.path.exists(enc):
-            log.warning("استراتژی %s: فایل یافت نشد: %s", folder, enc)
-            continue
-        log.info("inverse ← استراتژی: %s  sl=%.2f  max_gain=%s", folder, sl, max_g)
-        try:
-            per_sym = process_file(enc, mp, sl, password=password)
-            for sym, r in per_sym.items():
-                if sym == "_meta":
-                    continue
-                key = f"{folder}_{sym}"
-                cache[key] = r["inv_dist"]
-                log.info("  کش: %s → %d سطح", key, len(r["inv_dist"]))
-        except Exception as e:
-            log.error("خطا استراتژی %s: %s", folder, e, exc_info=True)
-
-    _write_json(args.output, cache)
-    log.info("✅ inverse_cache: %d ترکیب → %s", len(cache), args.output)
+    # استراتژی معکوس کاملاً از پایپ‌لاین حذف شده است (نه فقط از جدول مقایسه).
+    # این subcommand همچنان توسط چند فایل yml صدا زده می‌شود، بنابراین بدون
+    # تغییر yml، اینجا فقط یک کش خالی و معتبر می‌نویسیم تا این step بی‌اثر
+    # و در کمتر از ۱ ثانیه تمام شود (بدون decrypt/process روی هیچ فایلی).
+    _write_json(args.output, {})
+    log.info("✅ inverse_cache: غیرفعال (استراتژی معکوس حذف شد) → %s", args.output)
 
 # ══════════════════════════════════════════════════════════════
 # subcommand: report
@@ -899,7 +944,6 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                 real, spec = rd["real"], rd["special"]
                 mc_count, mc_loss = rd["max_cons_count"], rd["max_cons_loss"]
                 dd, sh, pl = rd["max_drawdown"], rd["sharpe"], rd["pl_ratio"]
-                inv_d = inv_cache.get(ck) or rd["inv_dist"]
                 ext = rd.get("ext") or _empty_ext_stats()
             else:
                 rc = returns_cache.get(ck, {"real": 0, "special": 0})
@@ -909,20 +953,10 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
                 real, spec = rc["real"], rc["special"]
                 mc_count = rk["max_consecutive_count"]
                 mc_loss = rk["max_consecutive_loss"]
-                inv_d = inv_cache.get(ck)
                 ext = _empty_ext_stats()
 
             log.info("  ✓ %s | trades=%d | wr=%.1f%% | real=%.4f | special=%.4f",
                      ck, total, wr, real, spec)
-
-            # بازده معکوس
-            inv_real = inv_spec = 0.0
-            if inv_d:
-                inv_real = sum(safe_percentage(i["درصد_دقیق"]) * i["تعداد_معاملات"] for i in inv_d)
-                inv_spec = sum(
-                    apply_special_rounding(safe_percentage(i["درصد_دقیق"]), mp) * i["تعداد_معاملات"]
-                    for i in inv_d
-                )
 
             main_score, main_rating = _score(
                 1 if spec >= 1 else 0,
@@ -944,67 +978,6 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
             }
             main_rec.update(ext)
             all_results.append(main_rec)
-
-            if inv_d is not None:
-                # محاسبه ریسک برای حالت معکوس بر اساس trades معکوس
-                if rd:
-                    inv_trades = []
-                    inv_sl = abs(sl)
-                    max_g = max_move if max_move is not None else (max(mp) if mp else None)
-                    for t in rd["trades"]:
-                        p = safe_percentage(t.get("profitPercent", 0))
-                        if p > 0:
-                            inv_p = -inv_sl
-                        elif p < 0:
-                            g = abs(p)
-                            inv_p = min(g, max_g) if max_g is not None else g
-                        else:
-                            inv_p = 0.0
-                        inv_trades.append({"profitPercent": inv_p})
-                    inv_mc_count = max_consecutive_count(inv_trades)
-                    inv_mc_loss = consecutive_loss_value(inv_mc_count, -inv_sl)
-                    inv_dd = max_drawdown(inv_trades)
-                    inv_sh = sharpe_ratio(inv_trades)
-                    inv_pl = profit_loss_ratio(inv_trades)
-                    inv_wins = sum(1 for t in inv_trades if t["profitPercent"] > 0)
-                    inv_losses = sum(1 for t in inv_trades if t["profitPercent"] < 0)
-                    inv_wr = (inv_wins / len(inv_trades) * 100) if inv_trades else 0.0
-                    inv_ext = compute_extended_stats(f"{folder}_{combo_lbl}_INV", inv_trades)
-                else:
-                    inv_mc_count = 0
-                    inv_mc_loss = None
-                    inv_dd = dd
-                    inv_sh = -sh
-                    inv_pl = (1 / pl) if pl > 0 else 0
-                    inv_wins = losses
-                    inv_losses = wins
-                    inv_wr = 100.0 - wr
-                    inv_ext = _empty_ext_stats()
-
-                inv_score, inv_rating = _score(
-                    1 if inv_spec >= 1 else 0,
-                    1 if inv_spec > 0 else 0,
-                    inv_mc_loss if inv_mc_loss is not None else 0,
-                    1,
-                )
-
-                inv_rec = {
-                    "folder_name": f"{folder}_{combo_lbl}_INV", "group": group,
-                    "file_name": f"INV_{folder}_{combo_lbl}", "period_name": folder, "symbol": combo_lbl,
-                    "total_trades": total, "win_trades": inv_wins, "loss_trades": inv_losses,
-                    "win_rate": inv_wr,
-                    "max_consecutive_loss": inv_mc_loss, "max_consecutive_count": inv_mc_count,
-                    "max_drawdown": inv_dd,
-                    "profit_loss_ratio": inv_pl,
-                    "sharpe_ratio": inv_sh,
-                    "real_return": inv_real, "special_rounded_return": inv_spec,
-                    "is_inverse": True,
-                    "score": inv_score, "rating": inv_rating,
-                    "_move_percents": mp, "_stop_loss": sl, "_max_move": max_move,
-                }
-                inv_rec.update(inv_ext)
-                all_results.append(inv_rec)
-                log.info("  ✓ INV %s | real=%.4f | special=%.4f | cons=%d", ck, inv_real, inv_spec, inv_mc_count)
 
     # فقط ۵۰۰ استراتژی برتر بر اساس امتیاز در خروجی نهایی نگهداری شوند
     all_results.sort(key=lambda r: r["score"], reverse=True)
