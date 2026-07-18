@@ -408,6 +408,31 @@ def compute_outlier_stats(profits):
     }
 
 
+def compute_concentration_stats(profits):
+    """
+    میزان وابستگی بازده کل به یک (یا چند) معامله‌ی شانسیِ خیلی بزرگ.
+    برخلاف outlier_pct (که بر اساس ۳×IQR فیلتر می‌شود و روی داده‌های
+    محدودشده با stop-loss/take-profit عملاً هیچ‌وقت چیزی پیدا نمی‌کند)،
+    این معیار مستقیماً می‌گوید: «اگر بهترین معامله را حذف کنیم، چند درصد
+    از بازده کل از بین می‌رود؟» — دقیقاً همان چیزی که برای فیلتر کردن
+    استراتژی‌هایی که فقط با یک معامله‌ی ۱۰۰۰٪ سود «الکی» بالا آمده‌اند لازم است.
+    """
+    n = len(profits)
+    if not n:
+        return {"best_trade_pct_of_total": 0.0, "top3_trades_pct_of_total": 0.0}
+    total = sum(profits)
+    if total <= 0:
+        # وقتی جمع کل منفی/صفر است، نسبت مشارکت معنای گمراه‌کننده پیدا می‌کند؛
+        # صفر برمی‌گردانیم چون در این حالت اصلاً «سود الکی» موضوعیت ندارد.
+        return {"best_trade_pct_of_total": 0.0, "top3_trades_pct_of_total": 0.0}
+    best = max(profits)
+    top3 = sum(sorted(profits, reverse=True)[:3])
+    return {
+        "best_trade_pct_of_total": (best / total) * 100,
+        "top3_trades_pct_of_total": (top3 / total) * 100,
+    }
+
+
 def compute_monthly_stats(trades):
     """دسته سوم و چهارم: شاخص‌های زمانی (ماهانه) و ریسک/پایداری."""
     months = defaultdict(list)
@@ -537,6 +562,7 @@ def _empty_ext_stats():
     d = {}
     d.update(compute_distribution_stats([]))
     d.update(compute_outlier_stats([]))
+    d.update(compute_concentration_stats([]))
     d.update(compute_monthly_stats([]))
     return d
 
@@ -545,6 +571,7 @@ def _empty_ext_stats():
 EXT_STATS_FIELDS = [
     "pct_gt0", "pct_gt1", "pct_gt5", "pct_loss_gt5",
     "max_win", "max_loss", "stdev_profit", "outlier_count", "outlier_sum", "outlier_pct",
+    "best_trade_pct_of_total", "top3_trades_pct_of_total",
     "total_span_months", "months_no_trade", "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
     "pct_profitable_months", "avg_profit_in_profitable_months", "avg_loss_in_loss_months",
     "max_consecutive_monthly_loss", "avg_trades_per_month", "stdev_trades_per_month",
@@ -564,6 +591,8 @@ EXT_STATS_HEADERS = {
     "outlier_count": "تعداد اوت‌لایرها",
     "outlier_sum": "مجموع سود اوت‌لایرها(%)",
     "outlier_pct": "درصد سود از اوت‌لایرها",
+    "best_trade_pct_of_total": "سهم بهترین معامله از بازده کل(%)",
+    "top3_trades_pct_of_total": "سهم ۳ معامله برتر از بازده کل(%)",
     "total_span_months": "بازه بکتست (ماه)",
     "months_no_trade": "ماه‌های بدون معامله",
     "avg_monthly_return": "میانگین سود ماهانه",
@@ -588,6 +617,7 @@ EXT_STATS_FORMATS = {
     "pct_gt0": "{:.2f}", "pct_gt1": "{:.2f}", "pct_gt5": "{:.2f}", "pct_loss_gt5": "{:.2f}",
     "max_win": "{:.4f}", "max_loss": "{:.4f}", "stdev_profit": "{:.4f}",
     "outlier_count": None, "outlier_sum": "{:.4f}", "outlier_pct": "{:.2f}",
+    "best_trade_pct_of_total": "{:.2f}", "top3_trades_pct_of_total": "{:.2f}",
     "total_span_months": None,
     "months_no_trade": None, "avg_monthly_return": "{:.4f}", "stdev_monthly_return": "{:.4f}",
     "best_month": "{:.4f}", "worst_month": "{:.4f}", "pct_profitable_months": "{:.2f}",
@@ -603,6 +633,7 @@ COMPARISON_EXT_FIELDS = [
     "total_span_months",
     "pct_gt0", "pct_gt1", "pct_gt5", "pct_loss_gt5",
     "max_win", "max_loss", "stdev_profit", "outlier_count", "outlier_sum", "outlier_pct",
+    "best_trade_pct_of_total", "top3_trades_pct_of_total",
     "avg_monthly_return", "stdev_monthly_return", "best_month", "worst_month",
     "pct_profitable_months", "avg_profit_in_profitable_months", "avg_loss_in_loss_months",
     "max_consecutive_monthly_loss", "avg_trades_per_month", "stdev_trades_per_month",
@@ -646,6 +677,7 @@ def compute_extended_stats(row_key, trades):
     stats = {}
     stats.update(compute_distribution_stats(profits))
     stats.update(compute_outlier_stats(profits))
+    stats.update(compute_concentration_stats(profits))
     stats.update(compute_monthly_stats(trades))
 
     # اجباری: این تابع همیشه بلافاصله بعد از compute_monthly_stats صدا زده
@@ -958,11 +990,19 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
             log.info("  ✓ %s | trades=%d | wr=%.1f%% | real=%.4f | special=%.4f",
                      ck, total, wr, real, spec)
 
+            # وقتی rd موجود نیست (فقط کش قدیمی در دسترس است)، مقادیر ext صرفاً
+            # پیش‌فرض صفر هستند نه داده‌ی واقعی؛ برای امتیازدهی این‌ها را None
+            # می‌فرستیم تا به‌جای جریمه‌ی نادرست، نمره‌ی خنثی بگیرند.
+            span_months = ext.get("total_span_months") or 0
             main_score, main_rating = _score(
                 1 if spec >= 1 else 0,
                 1 if spec > 0 else 0,
                 mc_loss if mc_loss is not None else 0,
                 1,
+                win_rate=wr if rd else None,
+                idle_ratio=((ext.get("months_no_trade", 0) or 0) / span_months) if (rd and span_months) else None,
+                avg_trades_per_month=ext.get("avg_trades_per_month") if rd else None,
+                best_trade_pct=ext.get("best_trade_pct_of_total") if rd else None,
             )
 
             main_rec = {
@@ -991,26 +1031,95 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
 # گزارش‌های CSV
 # ══════════════════════════════════════════════════════════════
 
-def _score(returns_ge_1, returns_gt_0, avg_max_loss, total_files):
+def _score(returns_ge_1, returns_gt_0, avg_max_loss, total_files,
+           win_rate=None, idle_ratio=None, avg_trades_per_month=None,
+           best_trade_pct=None):
+    """
+    امتیازدهی (۰ تا ۱۰۰) بر اساس ۴ محور + ۱ جریمه:
+      ۱) عملکرد بازده                    حداکثر ۲۰ امتیاز
+      ۲) ریسک ضرر متوالی                 حداکثر ۱۵ امتیاز
+      ۳) وین‌ریت واقعی                   حداکثر ۳۰ امتیاز
+      ۴) فعالیت معاملاتی نسبت به بازه     حداکثر ۳۵ امتیاز
+      ۵) جریمه‌ی تمرکز سود روی معاملات شانسی   حداکثر ۱۵- امتیاز
+
+    قبلاً فقط بند (۱) و (۲) وجود داشت، به همین دلیل استراتژی‌ای که در ۵۵ از
+    ~۱۰۰ ماه اصلاً معامله نکرده و کل بازه فقط ۵۰ معامله با وین‌ریت ۵۰٪ داشته
+    می‌توانست رتبه‌ی اول را بگیرد (چون بازده‌اش هرچند کوچک، مثبت بود و افت
+    سرمایه‌ی خاصی هم نداشت). بندهای (۳) و (۴) دقیقاً همین حالت را جریمه
+    می‌کنند. بند (۵) هم جلوی بالا آمدن الکیِ امتیاز به خاطر یک معامله‌ی
+    خیلی شانسی (مثلاً ۱۰۰۰٪ سود در حالی که بقیه معاملات ضررده بوده‌اند) را
+    می‌گیرد.
+    """
     if not total_files:
         return 0, "بدون داده"
-    s = (returns_ge_1 / total_files) * 40 + (returns_gt_0 / total_files) * 30
+
+    # ۱) عملکرد بازده (حداکثر ۲۰) — وزن کم شده چون به‌تنهایی نباید کافی باشد
+    perf = (returns_ge_1 / total_files) * 15 + (returns_gt_0 / total_files) * 5
+
+    # ۲) ریسک ضرر متوالی (حداکثر ۱۵)
     la = abs(avg_max_loss)
-    # باگ ۱۴: امتیازدهی پیوسته برای جلوگیری از پرش ناگهانی در مرزها
     if la <= 5:
-        s += 30
+        risk = 15.0
     elif la <= 10:
-        s += 30 * (10 - la) / 5
+        risk = 15 * (10 - la) / 5
     elif la <= 20:
-        # ادغام بازه ۱۰-۱۵ و ۱۵-۲۰ به یک تابع خطی پیوسته
-        # در la=10: امتیاز=30، در la=20: امتیاز=0
-        s += 30 * (20 - la) / 10
+        risk = 15 * (20 - la) / 10
     else:
-        s += 0
-    s = round(s, 1)
+        risk = 0.0
+
+    # ۳) وین‌ریت واقعی (حداکثر ۳۰) — زیر ۳۵٪ عملاً صفر، از ۷۰٪ به بالا کامل
+    if win_rate is None:
+        wr_score = 15.0  # داده‌ای موجود نیست؛ نمره‌ی خنثی (نه تشویق نه جریمه)
+    else:
+        wr_score = max(0.0, min(1.0, (win_rate - 35) / 35)) * 30
+
+    # ۴) فعالیت معاملاتی نسبت به بازه (حداکثر ۳۵)
+    #    idle_ratio = ماه‌های بدون معامله / کل بازه بکتست → هرچه بیشتر، جریمه بیشتر
+    #    avg_trades_per_month → چگالی واقعی معاملات (۵ معامله در ماه = چگالی سالم فرضی)
+    if idle_ratio is None:
+        idle_score = 10.0
+    else:
+        idle_score = (1 - min(max(idle_ratio, 0.0), 1.0)) * 20
+    if avg_trades_per_month is None:
+        density_score = 7.5
+    else:
+        density_score = min(max(avg_trades_per_month, 0.0) / 5.0, 1.0) * 15
+    activity = idle_score + density_score
+
+    s = perf + risk + wr_score + activity
+
+    # ۵) جریمه‌ی تمرکز سود روی چند معامله‌ی شانسی (حداکثر ۱۵ امتیاز کسر)
+    #    زیر ۳۰٪ مشارکت، جریمه‌ای اعمال نمی‌شود؛ در ۱۰۰٪ مشارکت، کل ۱۵ امتیاز کسر می‌شود.
+    if best_trade_pct is not None and best_trade_pct > 30:
+        s -= min((best_trade_pct - 30) / 70.0, 1.0) * 15
+
+    s = round(max(0.0, min(100.0, s)), 1)
     rating = ("عالی ★★★★★" if s >= 80 else "خوب ★★★★" if s >= 60
               else "متوسط ★★★" if s >= 40 else "ضعیف ★★" if s >= 20 else "بسیار ضعیف ★")
     return s, rating
+
+
+def _score_kwargs_from_records(records):
+    """
+    میانگین/تجمیع فیلدهای لازم برای امتیازدهی (وین‌ریت، فعالیت، تمرکز سود)
+    از یک لیست از رکوردهای all_results — برای استفاده در گزارش ماهانه که
+    چند رکورد (مثلاً ۳ فایل یک ماه) با هم امتیازدهی می‌شوند.
+    """
+    if not records:
+        return {}
+    wr_list = [r.get("win_rate", 0) or 0 for r in records]
+    win_rate = statistics.mean(wr_list) if wr_list else None
+    span_sum = sum(r.get("total_span_months", 0) or 0 for r in records)
+    idle_sum = sum(r.get("months_no_trade", 0) or 0 for r in records)
+    idle_ratio = (idle_sum / span_sum) if span_sum else None
+    atpm_list = [r.get("avg_trades_per_month", 0) or 0 for r in records]
+    avg_trades_per_month = statistics.mean(atpm_list) if atpm_list else None
+    btp_list = [r.get("best_trade_pct_of_total", 0) or 0 for r in records]
+    best_trade_pct = statistics.mean(btp_list) if btp_list else None
+    return {
+        "win_rate": win_rate, "idle_ratio": idle_ratio,
+        "avg_trades_per_month": avg_trades_per_month, "best_trade_pct": best_trade_pct,
+    }
 
 
 def _folder_summary(folder_name, folder_path, recs):
@@ -1129,8 +1238,17 @@ def _comparison_tables(all_results, out_dir):
             continue
 
         avg_loss = statistics.mean(a["max_losses"]) if a["max_losses"] else 0
-        sc, rt = _score(a["ge1"], a["gt0"], avg_loss, n)
         ext_agg = {f: _aggregate_ext_field(f, a["ext_lists"][f]) for f in EXT_STATS_FIELDS}
+        span_sum = sum(a["ext_lists"]["total_span_months"])
+        idle_sum = sum(a["ext_lists"]["months_no_trade"])
+        idle_ratio = (idle_sum / span_sum) if span_sum else None
+        avg_atpm = (statistics.mean(a["ext_lists"]["avg_trades_per_month"])
+                    if a["ext_lists"]["avg_trades_per_month"] else None)
+        avg_btp = (statistics.mean(a["ext_lists"]["best_trade_pct_of_total"])
+                   if a["ext_lists"]["best_trade_pct_of_total"] else None)
+        sc, rt = _score(a["ge1"], a["gt0"], avg_loss, n,
+                         win_rate=avg_win_chk, idle_ratio=idle_ratio,
+                         avg_trades_per_month=avg_atpm, best_trade_pct=avg_btp)
         row = {
             "folder": folder, "group": group,
             "n": n, "is_inv": folder.endswith("_INV"),
@@ -1227,7 +1345,7 @@ def _monthly_report(all_results, out_dir, top_n=3):
         gt0 = sum(1 for f in non_inv if f["special_rounded_return"] > 0)
         ml = [f["max_consecutive_loss"] for f in non_inv if f.get("max_consecutive_loss") is not None]
         avg_l = statistics.mean(ml) if ml else 0
-        sc, _ = _score(ge1, gt0, avg_l, n)
+        sc, _ = _score(ge1, gt0, avg_l, n, **_score_kwargs_from_records(non_inv))
         strat_scores[k] = sc
 
     top = sorted(strat_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
@@ -1241,7 +1359,7 @@ def _monthly_report(all_results, out_dir, top_n=3):
             n = len(rec["file_objects"])
             ge1 = sum(1 for f in rec["file_objects"] if f["special_rounded_return"] >= 1)
             gt0 = sum(1 for f in rec["file_objects"] if f["special_rounded_return"] > 0)
-            sc, rt = _score(ge1, gt0, rec["max_loss"], n)
+            sc, rt = _score(ge1, gt0, rec["max_loss"], n, **_score_kwargs_from_records(rec["file_objects"]))
             rec["score"] = sc; rec["rating"] = rt
 
         sp = os.path.join(out_dir, group, period)
