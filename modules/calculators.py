@@ -176,12 +176,29 @@ def max_consecutive_count(trades):
             cur = 0
     return best
 
-def consecutive_loss_value(count, stop_loss):
-    """مجموع ضررهای متوالی بر اساس درصد stop_loss."""
-    count = int(count or 0)
-    sl = float(stop_loss)
-    # باگ ۳: اگر stop_loss مثبت ذخیره شده باشد، نتیجه باید منفی باشد
-    return count * (-abs(sl))
+def max_consecutive_loss_stats(trades):
+    """
+    بدترین رشته‌ی ضررهای متوالی، محاسبه‌شده از روی مقادیر واقعی profitPercent
+    (نه صرفاً «تعداد ضربدر یک عدد ثابت stop_loss» که فرض غلطی است — هر معامله
+    لزوماً دقیقاً به‌اندازه‌ی stop_loss ضرر نمی‌کند). رشته‌ی «بدترین» بر اساس
+    بزرگ‌ترین مجموع واقعی ضرر انتخاب می‌شود (نه صرفاً طولانی‌ترین رشته از نظر
+    تعداد)، چون از نظر ریسک واقعی، مجموع ضرر مهم‌تر از تعداد است.
+    خروجی: (تعداد معاملات آن رشته، مجموع واقعی درصد ضرر آن رشته [منفی]).
+    """
+    best_count, best_sum = 0, 0.0
+    cur_count, cur_sum = 0, 0.0
+    for t in trades:
+        p = safe_percentage(t.get("profitPercent", 0))
+        if p < 0:
+            cur_count += 1
+            cur_sum += p
+            if cur_sum < best_sum:  # مجموع منفی‌تر = بدترین رشته تا این لحظه
+                best_sum = cur_sum
+                best_count = cur_count
+        else:
+            cur_count = 0
+            cur_sum = 0.0
+    return best_count, best_sum
 
 def max_drawdown(trades):
     peak = cum = 0.0
@@ -730,13 +747,13 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
         wins = sum(1 for t in sym_trades if safe_percentage(t.get("profitPercent", 0)) > 0)
         losses = sum(1 for t in sym_trades if safe_percentage(t.get("profitPercent", 0)) < 0)
         wr = (wins / len(sym_trades) * 100) if sym_trades else 0.0
-        mc = max_consecutive_count(sym_trades)
+        mc, mc_loss = max_consecutive_loss_stats(sym_trades)
         r = {
             "trades": sym_trades,
             "real":            real_return(sym_trades),
             "special":         special_return(sym_trades, mp),
             "max_cons_count":  mc,
-            "max_cons_loss":   consecutive_loss_value(mc, sl),
+            "max_cons_loss":   mc_loss,
             "max_drawdown":    max_drawdown(sym_trades),
             "sharpe":          sharpe_ratio(sym_trades),
             "pl_ratio":        profit_loss_ratio(sym_trades),
@@ -768,13 +785,13 @@ def process_file(enc_path, move_percents_override=None, stop_loss_override=None,
         wins = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) > 0)
         losses = sum(1 for t in merged if safe_percentage(t.get("profitPercent", 0)) < 0)
         wr = (wins / len(merged) * 100) if merged else 0.0
-        mc = max_consecutive_count(merged)
+        mc, mc_loss = max_consecutive_loss_stats(merged)
         r = {
             "trades": merged,
             "real":            real_return(merged),
             "special":         special_return(merged, mp),
             "max_cons_count":  mc,
-            "max_cons_loss":   consecutive_loss_value(mc, sl),
+            "max_cons_loss":   mc_loss,
             "max_drawdown":    max_drawdown(merged),
             "sharpe":          sharpe_ratio(merged),
             "pl_ratio":        profit_loss_ratio(merged),
