@@ -50,6 +50,8 @@ jobs:
   aggregate-results:
     needs: check-interrupt
     runs-on: ubuntu-latest
+    outputs:
+      has_more: ${{ steps.aggregate.outputs.has_more }}
     steps:
       - name: Checkout main repository
         uses: actions/checkout@v5
@@ -97,8 +99,10 @@ jobs:
           echo "✅ مخزن OHLC با موفقیت clone شد."
 
       - name: یکپارچه‌سازی نتایج بک‌تست (با خواندن محلی فایل‌ها)
+        id: aggregate
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
+          MAX_STRATEGIES_PER_RUN: "40"
         run: |
           {
             echo "=============================================="
@@ -117,12 +121,21 @@ jobs:
             else
               STRATEGIES_LIST=$(find backtest_results -maxdepth 1 -type d -printf '%f\n' | tail -n +2 | sort -u)
             fi
+            MAX_STRATEGIES_PER_RUN=${MAX_STRATEGIES_PER_RUN:-40}
+            PROCESSED_COUNT=0
+            HAS_MORE=false
             if [ -z "$STRATEGIES_LIST" ]; then
               echo "ℹ️ هیچ استراتژی برای یکپارچه‌سازی یافت نشد. job با موفقیت کامل می‌شود."
             else
             echo "   استراتژی‌های یافت شده: $STRATEGIES_LIST"
             echo ""
             for STRAT in $STRATEGIES_LIST; do
+              if [ "$PROCESSED_COUNT" -ge "$MAX_STRATEGIES_PER_RUN" ]; then
+                echo "⏸️ محدودیت $MAX_STRATEGIES_PER_RUN استراتژی در این اجرا تکمیل شد."
+                echo "   بقیه استراتژی‌ها (از جمله $STRAT به بعد) به اجرای بعدی loop موکول می‌شوند."
+                HAS_MORE=true
+                break
+              fi
               echo "=============================================="
               echo "   📊 پردازش استراتژی: $STRAT"
               echo "=============================================="
@@ -469,6 +482,9 @@ jobs:
                 cp "/tmp/agg_${STRAT}/final.enc" "/tmp/third_repo/$AGG_FILE"
                 echo "   ✅ فایل یکپارچه در مخزن محلی ذخیره شد."
 
+                PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+                echo "   📈 تعداد استراتژی‌های یکپارچه‌شده در این اجرا: $PROCESSED_COUNT / $MAX_STRATEGIES_PER_RUN"
+
                 echo "4.5- ذخیره پرچم شروع پاکسازی..."
                 FILES_TO_DELETE_JSON="["
                 FIRST=true
@@ -501,7 +517,8 @@ jobs:
               echo ""
             done
             fi
-            echo "✅ یکپارچه‌سازی کامل شد."
+            echo "has_more=$HAS_MORE" >> "$GITHUB_OUTPUT"
+            echo "✅ یکپارچه‌سازی کامل شد. (has_more=$HAS_MORE)"
           }
 
       - name: Commit and push changes back to third repo
@@ -536,6 +553,7 @@ jobs:
   # ============================================================
   generate-reports:
     needs: aggregate-results
+    if: needs.aggregate-results.outputs.has_more != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout مخزن اصلی
@@ -664,6 +682,42 @@ jobs:
           git add -f reports.tar.gz.enc
           git commit -m "update reports.tar.gz.enc from aggregated data (run ${{ github.run_id }})" || echo "No changes to commit"
           git push origin main
+
+  # ============================================================
+  # Job 2.6: هنوز استراتژی پردازش‌نشده باقی مانده → فراخوانی مجدد همین ورک‌فلو
+  # (تمام مراحل بعدی skip می‌شوند، فقط خود loop_analysis.yml دوباره صدا زده می‌شود)
+  # ============================================================
+  continue-loop:
+    needs: aggregate-results
+    if: needs.aggregate-results.outputs.has_more == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          ref: main
+      - name: فراخوانی مجدد loop_analysis.yml (ادامه‌ی یکپارچه‌سازی)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "🔁 هنوز استراتژی‌های پردازش‌نشده باقی مانده‌اند. فراخوانی مجدد خودِ loop_analysis.yml..."
+            SUCCESS=false
+            for attempt in 1 2 3; do
+              if gh workflow run loop_analysis.yml --ref main 2>&1; then
+                echo "✅ فراخوانی مجدد loop_analysis.yml موفق بود (تلاش $attempt)."
+                SUCCESS=true
+                break
+              else
+                echo "⚠️ تلاش $attempt ناموفق بود. 5 ثانیه صبر می‌کنم..."
+                sleep 5
+              fi
+            done
+            if [ "$SUCCESS" = "false" ]; then
+              echo "❌ هر سه تلاش برای فراخوانی مجدد loop_analysis.yml ناموفق بود."
+              exit 1
+            fi
+          }
 
   # ============================================================
   # Job 3: آماده‌سازی صف کارها (ساخت all_combinations.json) با اصلاح کش
