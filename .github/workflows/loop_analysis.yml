@@ -25,6 +25,50 @@ jobs:
         with:
           token: ${{ secrets.CROSS_REPO_TOKEN }}
           ref: main
+
+      - name: گرفتن قفل مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          command -v jq &> /dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+          LOCK_PATH="automation.lock"
+          LOCK_TTL=1800
+          LOCK_OWNER="${GITHUB_REPOSITORY}-run${GITHUB_RUN_ID}-check-interrupt"
+          ACQUIRED=false
+          for i in $(seq 1 60); do
+            RESP=$(gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" 2>/dev/null || true)
+            if [ -z "$RESP" ] || [ "$RESP" = "null" ] || ! echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+              CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+              if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="acquire lock ($LOCK_OWNER)" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1; then
+                echo "✅ قفل مخزن سوم گرفته شد."
+                ACQUIRED=true
+                break
+              fi
+            else
+              SHA=$(echo "$RESP" | jq -r '.sha')
+              LOCK_CONTENT=$(echo "$RESP" | jq -r '.content' | base64 -d 2>/dev/null || echo "{}")
+              LOCK_TS=$(echo "$LOCK_CONTENT" | jq -r '.acquired_at // 0')
+              AGE=$(( $(date +%s) - LOCK_TS ))
+              if [ "$AGE" -gt "$LOCK_TTL" ]; then
+                echo "⚠️ قفل قدیمی (سن ${AGE}s) یافت شد؛ تصرف اجباری..."
+                CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+                if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="force-acquire stale lock ($LOCK_OWNER)" -f content="$CONTENT" -f sha="$SHA" -f branch="main" >/dev/null 2>&1; then
+                  echo "✅ قفل به‌صورت اجباری گرفته شد."
+                  ACQUIRED=true
+                  break
+                fi
+              else
+                echo "⏳ قفل در دست $(echo "$LOCK_CONTENT" | jq -r '.owner // "نامشخص"') است (سن ${AGE}s). صبر می‌کنم... (تلاش $i/60)"
+              fi
+            fi
+            sleep $(( (RANDOM % 10) + 5 ))
+          done
+          if [ "$ACQUIRED" != "true" ]; then
+            echo "❌ گرفتن قفل مخزن سوم پس از تلاش‌های متعدد ناموفق بود."
+            exit 1
+          fi
+
       - name: بررسی پرچم وقفه
         id: check
         env:
@@ -43,6 +87,21 @@ jobs:
               echo "force_fixed=false" >> $GITHUB_OUTPUT
             fi
           }
+
+      - name: آزاد کردن قفل مخزن سوم
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          RESP=$(gh api "repos/$THIRD_REPO/contents/automation.lock" 2>/dev/null || true)
+          if [ -n "$RESP" ] && [ "$RESP" != "null" ] && echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+            SHA=$(echo "$RESP" | jq -r '.sha')
+            gh api "repos/$THIRD_REPO/contents/automation.lock" -X DELETE -f message="release lock" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
+            echo "🔓 قفل مخزن سوم آزاد شد."
+          else
+            echo "ℹ️ قفلی برای آزاد کردن یافت نشد."
+          fi
 
   # ============================================================
   # Job 2: یکپارچه‌سازی نتایج بک‌تست (با clone مخزن سوم و استفاده محلی)
@@ -75,6 +134,48 @@ jobs:
         run: |
           rm -rf /tmp/agg_* /tmp/third_repo 2>/dev/null || true
           echo "✅ پاکسازی فضای موقت انجام شد."
+
+      - name: 0.6. گرفتن قفل مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          LOCK_PATH="automation.lock"
+          LOCK_TTL=1800
+          LOCK_OWNER="${GITHUB_REPOSITORY}-run${GITHUB_RUN_ID}-aggregate-results"
+          ACQUIRED=false
+          for i in $(seq 1 60); do
+            RESP=$(gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" 2>/dev/null || true)
+            if [ -z "$RESP" ] || [ "$RESP" = "null" ] || ! echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+              CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+              if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="acquire lock ($LOCK_OWNER)" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1; then
+                echo "✅ قفل مخزن سوم گرفته شد."
+                ACQUIRED=true
+                break
+              fi
+            else
+              SHA=$(echo "$RESP" | jq -r '.sha')
+              LOCK_CONTENT=$(echo "$RESP" | jq -r '.content' | base64 -d 2>/dev/null || echo "{}")
+              LOCK_TS=$(echo "$LOCK_CONTENT" | jq -r '.acquired_at // 0')
+              AGE=$(( $(date +%s) - LOCK_TS ))
+              if [ "$AGE" -gt "$LOCK_TTL" ]; then
+                echo "⚠️ قفل قدیمی (سن ${AGE}s) یافت شد؛ تصرف اجباری..."
+                CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+                if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="force-acquire stale lock ($LOCK_OWNER)" -f content="$CONTENT" -f sha="$SHA" -f branch="main" >/dev/null 2>&1; then
+                  echo "✅ قفل به‌صورت اجباری گرفته شد."
+                  ACQUIRED=true
+                  break
+                fi
+              else
+                echo "⏳ قفل در دست $(echo "$LOCK_CONTENT" | jq -r '.owner // "نامشخص"') است (سن ${AGE}s). صبر می‌کنم... (تلاش $i/60)"
+              fi
+            fi
+            sleep $(( (RANDOM % 10) + 5 ))
+          done
+          if [ "$ACQUIRED" != "true" ]; then
+            echo "❌ گرفتن قفل مخزن سوم پس از تلاش‌های متعدد ناموفق بود."
+            exit 1
+          fi
 
       - name: Clone third repository (shallow clone)
         env:
@@ -547,6 +648,21 @@ jobs:
             fi
           fi
 
+      - name: آزاد کردن قفل مخزن سوم
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          RESP=$(gh api "repos/$THIRD_REPO/contents/automation.lock" 2>/dev/null || true)
+          if [ -n "$RESP" ] && [ "$RESP" != "null" ] && echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+            SHA=$(echo "$RESP" | jq -r '.sha')
+            gh api "repos/$THIRD_REPO/contents/automation.lock" -X DELETE -f message="release lock" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
+            echo "🔓 قفل مخزن سوم آزاد شد."
+          else
+            echo "ℹ️ قفلی برای آزاد کردن یافت نشد."
+          fi
+
 
   # ============================================================
   # Job 2.5: تولید گزارش‌های جامع نسخه ۵ از داده‌های یکپارچه
@@ -933,6 +1049,50 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
+      - name: گرفتن قفل مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          command -v jq &> /dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+          LOCK_PATH="automation.lock"
+          LOCK_TTL=1800
+          LOCK_OWNER="${GITHUB_REPOSITORY}-run${GITHUB_RUN_ID}-dispatch-golden"
+          ACQUIRED=false
+          for i in $(seq 1 60); do
+            RESP=$(gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" 2>/dev/null || true)
+            if [ -z "$RESP" ] || [ "$RESP" = "null" ] || ! echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+              CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+              if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="acquire lock ($LOCK_OWNER)" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1; then
+                echo "✅ قفل مخزن سوم گرفته شد."
+                ACQUIRED=true
+                break
+              fi
+            else
+              SHA=$(echo "$RESP" | jq -r '.sha')
+              LOCK_CONTENT=$(echo "$RESP" | jq -r '.content' | base64 -d 2>/dev/null || echo "{}")
+              LOCK_TS=$(echo "$LOCK_CONTENT" | jq -r '.acquired_at // 0')
+              AGE=$(( $(date +%s) - LOCK_TS ))
+              if [ "$AGE" -gt "$LOCK_TTL" ]; then
+                echo "⚠️ قفل قدیمی (سن ${AGE}s) یافت شد؛ تصرف اجباری..."
+                CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+                if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="force-acquire stale lock ($LOCK_OWNER)" -f content="$CONTENT" -f sha="$SHA" -f branch="main" >/dev/null 2>&1; then
+                  echo "✅ قفل به‌صورت اجباری گرفته شد."
+                  ACQUIRED=true
+                  break
+                fi
+              else
+                echo "⏳ قفل در دست $(echo "$LOCK_CONTENT" | jq -r '.owner // "نامشخص"') است (سن ${AGE}s). صبر می‌کنم... (تلاش $i/60)"
+              fi
+            fi
+            sleep $(( (RANDOM % 10) + 5 ))
+          done
+          if [ "$ACQUIRED" != "true" ]; then
+            echo "❌ گرفتن قفل مخزن سوم پس از تلاش‌های متعدد ناموفق بود."
+            exit 1
+          fi
+
       - name: ساخت و به‌روزرسانی all_combinations_golden.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -949,6 +1109,22 @@ jobs:
             fi
             echo "✅ build_all_queues.py (golden queue) با موفقیت اجرا شد."
           }
+
+      - name: آزاد کردن قفل مخزن سوم
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          RESP=$(gh api "repos/$THIRD_REPO/contents/automation.lock" 2>/dev/null || true)
+          if [ -n "$RESP" ] && [ "$RESP" != "null" ] && echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+            SHA=$(echo "$RESP" | jq -r '.sha')
+            gh api "repos/$THIRD_REPO/contents/automation.lock" -X DELETE -f message="release lock" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
+            echo "🔓 قفل مخزن سوم آزاد شد."
+          else
+            echo "ℹ️ قفلی برای آزاد کردن یافت نشد."
+          fi
+
       - name: فراخوانی analysis_golden.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -988,6 +1164,50 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
+      - name: گرفتن قفل مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          command -v jq &> /dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+          LOCK_PATH="automation.lock"
+          LOCK_TTL=1800
+          LOCK_OWNER="${GITHUB_REPOSITORY}-run${GITHUB_RUN_ID}-dispatch-portfolios"
+          ACQUIRED=false
+          for i in $(seq 1 60); do
+            RESP=$(gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" 2>/dev/null || true)
+            if [ -z "$RESP" ] || [ "$RESP" = "null" ] || ! echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+              CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+              if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="acquire lock ($LOCK_OWNER)" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1; then
+                echo "✅ قفل مخزن سوم گرفته شد."
+                ACQUIRED=true
+                break
+              fi
+            else
+              SHA=$(echo "$RESP" | jq -r '.sha')
+              LOCK_CONTENT=$(echo "$RESP" | jq -r '.content' | base64 -d 2>/dev/null || echo "{}")
+              LOCK_TS=$(echo "$LOCK_CONTENT" | jq -r '.acquired_at // 0')
+              AGE=$(( $(date +%s) - LOCK_TS ))
+              if [ "$AGE" -gt "$LOCK_TTL" ]; then
+                echo "⚠️ قفل قدیمی (سن ${AGE}s) یافت شد؛ تصرف اجباری..."
+                CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
+                if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="force-acquire stale lock ($LOCK_OWNER)" -f content="$CONTENT" -f sha="$SHA" -f branch="main" >/dev/null 2>&1; then
+                  echo "✅ قفل به‌صورت اجباری گرفته شد."
+                  ACQUIRED=true
+                  break
+                fi
+              else
+                echo "⏳ قفل در دست $(echo "$LOCK_CONTENT" | jq -r '.owner // "نامشخص"') است (سن ${AGE}s). صبر می‌کنم... (تلاش $i/60)"
+              fi
+            fi
+            sleep $(( (RANDOM % 10) + 5 ))
+          done
+          if [ "$ACQUIRED" != "true" ]; then
+            echo "❌ گرفتن قفل مخزن سوم پس از تلاش‌های متعدد ناموفق بود."
+            exit 1
+          fi
+
       - name: ساخت و به‌روزرسانی all_combinations_portfolios.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
@@ -1005,6 +1225,22 @@ jobs:
             fi
             echo "✅ build_all_queues.py (portfolios queue) با موفقیت اجرا شد."
           }
+
+      - name: آزاد کردن قفل مخزن سوم
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          RESP=$(gh api "repos/$THIRD_REPO/contents/automation.lock" 2>/dev/null || true)
+          if [ -n "$RESP" ] && [ "$RESP" != "null" ] && echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+            SHA=$(echo "$RESP" | jq -r '.sha')
+            gh api "repos/$THIRD_REPO/contents/automation.lock" -X DELETE -f message="release lock" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
+            echo "🔓 قفل مخزن سوم آزاد شد."
+          else
+            echo "ℹ️ قفلی برای آزاد کردن یافت نشد."
+          fi
+
       - name: فراخوانی analysis_portfolios.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
