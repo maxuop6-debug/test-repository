@@ -110,7 +110,7 @@ jobs:
     needs: check-interrupt
     runs-on: ubuntu-latest
     outputs:
-      has_more: ${{ steps.aggregate.outputs.has_more }}
+      has_more: ${{ steps.turn_check.outputs.proceed == 'false' && 'true' || steps.aggregate.outputs.has_more }}
     steps:
       - name: Checkout main repository
         uses: actions/checkout@v5
@@ -135,49 +135,63 @@ jobs:
           rm -rf /tmp/agg_* /tmp/third_repo 2>/dev/null || true
           echo "✅ پاکسازی فضای موقت انجام شد."
 
-      - name: 0.6. گرفتن قفل مخزن سوم
+      - name: 0.6. بررسی نوبت منصفانه با loop.yml (بدون صبر برای قفل)
+        id: turn_check
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          LOCK_PATH="automation.lock"
-          LOCK_TTL=1800
-          LOCK_OWNER="${GITHUB_REPOSITORY}-run${GITHUB_RUN_ID}-aggregate-results"
-          ACQUIRED=false
-          for i in $(seq 1 60); do
-            RESP=$(gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" 2>/dev/null || true)
-            if [ -z "$RESP" ] || [ "$RESP" = "null" ] || ! echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
-              CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
-              if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="acquire lock ($LOCK_OWNER)" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1; then
-                echo "✅ قفل مخزن سوم گرفته شد."
-                ACQUIRED=true
-                break
-              fi
-            else
+          {
+            # هدف: این جاب (analysis) و جاب معادل در loop.yml (loop) هر دو روی
+            # THIRD_REPO کار می‌کنند. به‌جای صبر پشت یک قفل، نوبتی و منصفانه اجرا می‌شوند.
+            # اگر یک طرف کاری نداشته باشد، طرف دیگر بدون رعایت نوبت ادامه می‌دهد.
+            MY_ID="analysis"
+            OTHER_ID="loop"
+            TURN_FILE="turn.flag"
+            MY_NOWORK_FILE="${MY_ID}_no_work.flag"
+            OTHER_NOWORK_FILE="${OTHER_ID}_no_work.flag"
+            PROCEED=false
+
+            # چون این اجرا شروع شده یعنی قصد کار داریم؛ پرچم «کاری ندارم» خودمان را پاک می‌کنیم
+            RESP=$(gh api "repos/$THIRD_REPO/contents/$MY_NOWORK_FILE" 2>/dev/null || true)
+            if [ -n "$RESP" ] && [ "$RESP" != "null" ] && echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
               SHA=$(echo "$RESP" | jq -r '.sha')
-              LOCK_CONTENT=$(echo "$RESP" | jq -r '.content' | base64 -d 2>/dev/null || echo "{}")
-              LOCK_TS=$(echo "$LOCK_CONTENT" | jq -r '.acquired_at // 0')
-              AGE=$(( $(date +%s) - LOCK_TS ))
-              if [ "$AGE" -gt "$LOCK_TTL" ]; then
-                echo "⚠️ قفل قدیمی (سن ${AGE}s) یافت شد؛ تصرف اجباری..."
-                CONTENT=$(echo "{\"owner\":\"$LOCK_OWNER\",\"acquired_at\":$(date +%s)}" | base64 -w0)
-                if gh api "repos/$THIRD_REPO/contents/$LOCK_PATH" -X PUT -f message="force-acquire stale lock ($LOCK_OWNER)" -f content="$CONTENT" -f sha="$SHA" -f branch="main" >/dev/null 2>&1; then
-                  echo "✅ قفل به‌صورت اجباری گرفته شد."
-                  ACQUIRED=true
-                  break
-                fi
+              gh api "repos/$THIRD_REPO/contents/$MY_NOWORK_FILE" -X DELETE -f message="clear no-work ($MY_ID)" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
+              echo "🧹 پرچم «کاری ندارم» خودمان ($MY_ID) پاک شد."
+            fi
+
+            # اگر طرف مقابل کاری ندارد، رعایت نوبت بی‌معنی است؛ مستقیم ادامه می‌دهیم
+            OTHER_RESP=$(gh api "repos/$THIRD_REPO/contents/$OTHER_NOWORK_FILE" 2>/dev/null || true)
+            if [ -n "$OTHER_RESP" ] && [ "$OTHER_RESP" != "null" ] && echo "$OTHER_RESP" | jq -e '.sha' >/dev/null 2>&1; then
+              echo "ℹ️ طرف مقابل ($OTHER_ID) فعلاً کاری ندارد؛ بدون رعایت نوبت ادامه می‌دهیم."
+              PROCEED=true
+            else
+              TURN_RESP=$(gh api "repos/$THIRD_REPO/contents/$TURN_FILE" 2>/dev/null || true)
+              if [ -z "$TURN_RESP" ] || [ "$TURN_RESP" = "null" ] || ! echo "$TURN_RESP" | jq -e '.sha' >/dev/null 2>&1; then
+                echo "ℹ️ فایل نوبت وجود ندارد؛ این اجرا ($MY_ID) اولین نوبت را برمی‌دارد."
+                CONTENT=$(echo -n "$OTHER_ID" | base64 -w0)
+                gh api "repos/$THIRD_REPO/contents/$TURN_FILE" -X PUT -f message="init turn -> $OTHER_ID next" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1 || true
+                PROCEED=true
               else
-                echo "⏳ قفل در دست $(echo "$LOCK_CONTENT" | jq -r '.owner // "نامشخص"') است (سن ${AGE}s). صبر می‌کنم... (تلاش $i/60)"
+                CUR_TURN=$(echo "$TURN_RESP" | jq -r '.content' | base64 -d 2>/dev/null | tr -d '[:space:]')
+                if [ "$CUR_TURN" = "$MY_ID" ]; then
+                  SHA=$(echo "$TURN_RESP" | jq -r '.sha')
+                  CONTENT=$(echo -n "$OTHER_ID" | base64 -w0)
+                  gh api "repos/$THIRD_REPO/contents/$TURN_FILE" -X PUT -f message="turn -> $OTHER_ID next" -f content="$CONTENT" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
+                  echo "✅ نوبت $MY_ID بود. ادامه می‌دهیم و نوبت بعدی را برای $OTHER_ID ثبت کردیم."
+                  PROCEED=true
+                else
+                  echo "⏭️ نوبت $OTHER_ID است نه $MY_ID. این اجرا بدون هیچ انتظاری رد می‌شود (نه صف، نه sleep)."
+                  PROCEED=false
+                fi
               fi
             fi
-            sleep $(( (RANDOM % 10) + 5 ))
-          done
-          if [ "$ACQUIRED" != "true" ]; then
-            echo "❌ گرفتن قفل مخزن سوم پس از تلاش‌های متعدد ناموفق بود."
-            exit 1
-          fi
+
+            echo "proceed=$PROCEED" >> "$GITHUB_OUTPUT"
+          }
 
       - name: Clone third repository (shallow clone)
+        if: steps.turn_check.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
@@ -189,6 +203,7 @@ jobs:
           echo "✅ مخزن سوم با موفقیت clone شد."
 
       - name: Clone مخزن OHLC (برای شمارش فایل‌های CSV)
+        if: steps.turn_check.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           OHLC_REPO: ${{ secrets.OHLC_REPO }}
@@ -201,6 +216,7 @@ jobs:
 
       - name: یکپارچه‌سازی نتایج بک‌تست (با خواندن محلی فایل‌ها)
         id: aggregate
+        if: steps.turn_check.outputs.proceed == 'true'
         env:
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
           MAX_STRATEGIES_PER_RUN: "40"
@@ -227,7 +243,9 @@ jobs:
             HAS_MORE=false
             if [ -z "$STRATEGIES_LIST" ]; then
               echo "ℹ️ هیچ استراتژی برای یکپارچه‌سازی یافت نشد. job با موفقیت کامل می‌شود."
+              HAD_WORK=false
             else
+              HAD_WORK=true
             echo "   استراتژی‌های یافت شده: $STRATEGIES_LIST"
             echo ""
             for STRAT in $STRATEGIES_LIST; do
@@ -619,10 +637,12 @@ jobs:
             done
             fi
             echo "has_more=$HAS_MORE" >> "$GITHUB_OUTPUT"
-            echo "✅ یکپارچه‌سازی کامل شد. (has_more=$HAS_MORE)"
+            echo "had_work=$HAD_WORK" >> "$GITHUB_OUTPUT"
+            echo "✅ یکپارچه‌سازی کامل شد. (has_more=$HAS_MORE, had_work=$HAD_WORK)"
           }
 
       - name: Commit and push changes back to third repo
+        if: steps.turn_check.outputs.proceed == 'true'
         run: |
           cd /tmp/third_repo
           git add -A
@@ -648,19 +668,26 @@ jobs:
             fi
           fi
 
-      - name: آزاد کردن قفل مخزن سوم
-        if: always()
+      - name: ثبت/پاک‌کردن پرچم «کاری ندارم» برای نوبت‌دهی منصفانه
+        if: always() && steps.turn_check.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
         run: |
-          RESP=$(gh api "repos/$THIRD_REPO/contents/automation.lock" 2>/dev/null || true)
-          if [ -n "$RESP" ] && [ "$RESP" != "null" ] && echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
-            SHA=$(echo "$RESP" | jq -r '.sha')
-            gh api "repos/$THIRD_REPO/contents/automation.lock" -X DELETE -f message="release lock" -f sha="$SHA" -f branch="main" >/dev/null 2>&1 || true
-            echo "🔓 قفل مخزن سوم آزاد شد."
+          MY_ID="analysis"
+          MY_NOWORK_FILE="${MY_ID}_no_work.flag"
+          HAD_WORK="${{ steps.aggregate.outputs.had_work }}"
+          if [ "$HAD_WORK" = "false" ]; then
+            RESP=$(gh api "repos/$THIRD_REPO/contents/$MY_NOWORK_FILE" 2>/dev/null || true)
+            if [ -z "$RESP" ] || [ "$RESP" = "null" ] || ! echo "$RESP" | jq -e '.sha' >/dev/null 2>&1; then
+              CONTENT=$(echo -n "no work" | base64 -w0)
+              gh api "repos/$THIRD_REPO/contents/$MY_NOWORK_FILE" -X PUT -f message="mark $MY_ID as no-work" -f content="$CONTENT" -f branch="main" >/dev/null 2>&1 || true
+              echo "🚩 پرچم «کاری ندارم» برای $MY_ID ثبت شد؛ از این پس نوبت رعایت نمی‌شود تا وقتی کار جدید بیاید."
+            else
+              echo "ℹ️ پرچم «کاری ندارم» از قبل ثبت شده بود."
+            fi
           else
-            echo "ℹ️ قفلی برای آزاد کردن یافت نشد."
+            echo "✅ این اجرا کار داشت؛ پرچم «کاری ندارم» (که در ابتدای جاب پاک شده بود) دست‌نخورده می‌ماند."
           fi
 
 
