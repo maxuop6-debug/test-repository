@@ -330,7 +330,33 @@ jobs:
         id: chunk_params
         run: |
           CHUNK_INDEX=${{ matrix.chunk_index }}
-          cp /tmp/chunks/chunk_${CHUNK_INDEX}.json /tmp/chunk.json
+          echo "========== [DEBUG] انتخاب chunk =========="
+          echo "[DEBUG] CHUNK_INDEX = '$CHUNK_INDEX'"
+          echo "[DEBUG] pwd: $(pwd)"
+          echo "[DEBUG] runner temp dir env RUNNER_TEMP=$RUNNER_TEMP"
+          echo "[DEBUG] آیا /tmp/chunks اصلا وجود دارد؟"
+          if [ -d /tmp/chunks ]; then
+            echo "[DEBUG] بله. محتویات کامل /tmp/chunks:"
+            ls -la /tmp/chunks/ 2>&1
+            echo "[DEBUG] تعداد فایل‌های .json داخل /tmp/chunks: $(find /tmp/chunks -maxdepth 1 -name '*.json' | wc -l)"
+          else
+            echo "[DEBUG] ❌ پوشه /tmp/chunks اصلا وجود ندارد!"
+          fi
+          SRC="/tmp/chunks/chunk_${CHUNK_INDEX}.json"
+          echo "[DEBUG] مسیر مبدا مورد انتظار: $SRC"
+          if [ -f "$SRC" ]; then
+            echo "[DEBUG] فایل مبدا موجود است. سایز: $(stat -c%s "$SRC" 2>/dev/null || wc -c < "$SRC")"
+            echo "[DEBUG] ۲۰۰ کاراکتر ابتدای فایل: $(head -c 200 "$SRC")"
+          else
+            echo "[DEBUG] ❌ فایل مبدا با این نام دقیق موجود نیست."
+            echo "[DEBUG] نزدیک‌ترین تطبیق‌های موجود (اگر باشد):"
+            ls -la /tmp/chunks/*chunk* 2>&1 || echo "[DEBUG] هیچ فایلی با الگوی chunk یافت نشد."
+          fi
+          cp -v "$SRC" /tmp/chunk.json
+          CP_EXIT=$?
+          echo "[DEBUG] خروجی دستور cp: $CP_EXIT"
+          echo "[DEBUG] وضعیت /tmp/chunk.json بلافاصله بعد از cp:"
+          ls -la /tmp/chunk.json 2>&1 || echo "[DEBUG] ❌ /tmp/chunk.json بعد از cp هم وجود ندارد."
           CHUNK_LENGTH=$(jq length /tmp/chunk.json)
           echo "[DEBUG] chunk $CHUNK_INDEX شامل $CHUNK_LENGTH ترکیب است."
           echo "chunk_length=$CHUNK_LENGTH" >> $GITHUB_OUTPUT
@@ -365,6 +391,20 @@ jobs:
           THIRD_REPO: ${{ secrets.THIRD_REPO }}
           RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD || secrets.DATA_PASSWORD }}
         run: |
+          echo "========== [DEBUG] شروع مرحله ۲: بررسی chunk.json =========="
+          echo "[DEBUG] matrix.chunk_index = ${{ matrix.chunk_index }}"
+          echo "[DEBUG] steps.chunk_params.outputs.chunk_length = ${{ steps.chunk_params.outputs.chunk_length }}"
+          echo "[DEBUG] pwd: $(pwd) | whoami: $(whoami) | HOME=$HOME"
+          echo "[DEBUG] محتویات کامل /tmp:"
+          ls -la /tmp/ 2>&1
+          echo "[DEBUG] محتویات /tmp/chunks (اگر باقی مانده باشد):"
+          ls -la /tmp/chunks/ 2>&1 || echo "[DEBUG] /tmp/chunks موجود نیست."
+          if [ -f /tmp/chunk.json ]; then
+            echo "[DEBUG] ✅ /tmp/chunk.json موجود است. سایز: $(stat -c%s /tmp/chunk.json 2>/dev/null || wc -c < /tmp/chunk.json)"
+            echo "[DEBUG] ۳۰۰ کاراکتر ابتدای فایل: $(head -c 300 /tmp/chunk.json)"
+          else
+            echo "[DEBUG] ❌ /tmp/chunk.json در این لحظه وجود ندارد."
+          fi
           if [ ! -f /tmp/chunk.json ]; then
             echo "❌ /tmp/chunk.json یافت نشد."
             exit 1
