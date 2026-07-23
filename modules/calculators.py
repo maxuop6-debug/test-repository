@@ -102,6 +102,26 @@ def decrypt_enc_file(enc_path, password):
         raise RuntimeError(f"رمزگشایی ناموفق: {result.stderr.decode()}")
     return json.loads(result.stdout.decode("utf-8"))
 
+def decrypt_enc_bytes(enc_path, password):
+    """مشابه decrypt_enc_file اما خروجی را به‌صورت bytes خام برمی‌گرداند
+    (برای فایل‌هایی مثل reports.tar.gz.enc که JSON نیستند، بلکه بایگانی
+    فشرده رمزنگاری‌شده هستند)."""
+    import subprocess
+    script = (
+        f"const crypto=require('crypto'),fs=require('fs');"
+        f"const pass={json.dumps(password)};"
+        f"const data=fs.readFileSync({json.dumps(enc_path)});"
+        f"const key=crypto.scryptSync(pass,'salt',32);"
+        f"const iv=data.slice(0,16),enc=data.slice(16);"
+        f"const decipher=crypto.createDecipheriv('aes-256-cbc',key,iv);"
+        f"const dec=Buffer.concat([decipher.update(enc),decipher.final()]);"
+        f"process.stdout.write(dec);"
+    )
+    result = subprocess.run(["node", "-e", script], capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"رمزگشایی ناموفق: {result.stderr.decode()}")
+    return result.stdout
+
 def load_aggregated_data(enc_path, password=None):
     if not password:
         password = os.environ.get("RESULTS_PASSWORD", os.environ.get("DATA_PASSWORD", ""))
@@ -815,9 +835,19 @@ def cmd_returns(args):
     with open(args.strategies_json, "r", encoding="utf-8") as f:
         strategies = json.load(f)["strategies"]
 
+    previous_report_path = getattr(args, "previous_report", "") or ""
+    known_folders = set()
+    if previous_report_path:
+        prev = _load_previous_results(previous_report_path, password)
+        known_folders = {r["period_name"] for r in prev}
+        if known_folders:
+            log.info("returns: %d استراتژی قبلاً پردازش شده‌اند و رد می‌شوند (افزایشی)", len(known_folders))
+
     cache = {}
     for s in strategies:
         folder = s["folder"]
+        if folder in known_folders:
+            continue
         mp = s.get("move_percents") or []
         enc = s.get("aggregated_file") or os.path.join(args.results_base, folder, f"{folder}_trades.enc")
         if not os.path.exists(enc):
@@ -849,9 +879,19 @@ def cmd_risk(args):
     with open(args.stoploss_cache, "r", encoding="utf-8") as f:
         sl_cache = json.load(f)
 
+    previous_report_path = getattr(args, "previous_report", "") or ""
+    known_folders = set()
+    if previous_report_path:
+        prev = _load_previous_results(previous_report_path, password)
+        known_folders = {r["period_name"] for r in prev}
+        if known_folders:
+            log.info("risk: %d استراتژی قبلاً پردازش شده‌اند و رد می‌شوند (افزایشی)", len(known_folders))
+
     cache = {}
     for s in strategies:
         folder = s["folder"]
+        if folder in known_folders:
+            continue
         sl = sl_cache.get(folder, {}).get("stop_loss", -2.0)
         enc = s.get("aggregated_file") or os.path.join(args.results_base, folder, f"{folder}_trades.enc")
         if not os.path.exists(enc):
@@ -906,10 +946,33 @@ def cmd_report(args):
         with open(args.news_pickle, "rb") as f:
             news_events = pickle.load(f)
 
-    all_results = _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, password)
+    previous_report_path = getattr(args, "previous_report", "") or ""
+    previous_results = _load_previous_results(previous_report_path, password) if previous_report_path else []
+
+    if previous_results:
+        previous_folders = {r["period_name"] for r in previous_results}
+        new_strategies = [s for s in strategies if s["folder"] not in previous_folders]
+        log.info("📈 گزارش‌گیری افزایشی: %d استراتژی در گزارش قبلی، %d استراتژی جدید برای محاسبه",
+                 len(previous_folders), len(new_strategies))
+        new_results = _compute_results(new_strategies, returns_cache, risk_cache, inv_cache, args, password)
+        all_results = previous_results + new_results
+        # رتبه‌بندی نهایی روی کل داده‌ها (قدیم + جدید) بازمحاسبه و به ۵۰۰ برتر محدود می‌شود
+        all_results.sort(key=lambda r: r["score"], reverse=True)
+        if len(all_results) > 500:
+            log.info("✂️ اعمال محدودیت ۵۰۰ استراتژی برتر (از %d رکورد) بر اساس امتیاز", len(all_results))
+            all_results = all_results[:500]
+    else:
+        if previous_report_path:
+            log.info("گزارش قبلی در دسترس نبود یا قابل استفاده نبود؛ محاسبه کامل انجام می‌شود.")
+        all_results = _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, password)
+
     log.info("✅ all_results: %d رکورد (اصلی + معکوس)", len(all_results))
 
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # اسنپ‌شات داخلی برای گزارش‌گیری افزایشی در اجرای بعدی (فایل کاربرمحور نیست،
+    # ساختار CSV/JSON اصلی خروجی‌ها دست‌نخورده می‌ماند)
+    _write_json(os.path.join(args.output_dir, INTERNAL_SNAPSHOT_NAME), all_results)
 
     # 1. خلاصه هر پوشه (به ازای هر استراتژی پایه، همه ترکیب‌ها در یک فایل)
     base_strategy_map = defaultdict(list)
@@ -938,7 +1001,49 @@ def cmd_report(args):
     log.info("✅ همه گزارش‌ها تولید شدند.")
 
 
-def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, password):
+INTERNAL_SNAPSHOT_NAME = "_internal_all_results.json"
+
+
+def _load_previous_results(previous_report_path, password):
+    """برای گزارش‌گیری افزایشی: فایل reports.tar.gz.enc اجرای قبلی را رمزگشایی
+    و استخراج می‌کند و رکوردهای کامل هر استراتژی/ترکیب را از اسنپ‌شات داخلی
+    (_internal_all_results.json) بازمی‌گرداند. اگر فایل موجود نباشد، رمزگشایی
+    شکست بخورد یا اسنپ‌شات داخلی در آن نباشد (مثلاً چون از یک اجرای قدیمی‌تر
+    قبل از این قابلیت مانده)، به‌جای شکست کل اجرا، لیست خالی برمی‌گرداند تا
+    فراخوان به‌صورت خودکار روی «محاسبه کامل از صفر» بازگردد (backward-compatible)."""
+    import tarfile
+    import tempfile
+
+    if not previous_report_path or not os.path.exists(previous_report_path):
+        return []
+    try:
+        raw = decrypt_enc_bytes(previous_report_path, password)
+        with tempfile.TemporaryDirectory() as td:
+            tgz_path = os.path.join(td, "prev_reports.tar.gz")
+            with open(tgz_path, "wb") as f:
+                f.write(raw)
+            with tarfile.open(tgz_path, "r:gz") as tf:
+                tf.extractall(td)
+            snap_path = os.path.join(td, "reports", INTERNAL_SNAPSHOT_NAME)
+            if not os.path.exists(snap_path):
+                log.warning("گزارش قبلی %s فاقد اسنپ‌شات داخلی است (%s) – محاسبه کامل انجام می‌شود.",
+                            previous_report_path, INTERNAL_SNAPSHOT_NAME)
+                return []
+            with open(snap_path, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+            log.info("گزارش قبلی بارگذاری شد: %d رکورد از %s", len(prev), previous_report_path)
+            return prev
+    except Exception as e:
+        log.error("خطا در بارگذاری گزارش قبلی %s: %s – محاسبه کامل انجام می‌شود.",
+                   previous_report_path, e, exc_info=True)
+        return []
+
+
+def _compute_results(strategies, returns_cache, risk_cache, inv_cache, args, password):
+    """محاسبه کامل رکوردها برای مجموعه‌ای از استراتژی‌ها (بدون هیچ برش/محدودیتی).
+    این تابع پیش‌تر بخش اصلی _build_all_results بود؛ اکنون جدا شده تا هم برای
+    محاسبه‌ی کامل (همه استراتژی‌ها) و هم برای محاسبه‌ی افزایشی (فقط استراتژی‌های
+    جدید) قابل استفاده مجدد باشد."""
     all_results = []
     results_base = getattr(args, "results_base", "") or ""
 
@@ -1036,12 +1141,17 @@ def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, p
             main_rec.update(ext)
             all_results.append(main_rec)
 
-    # فقط ۵۰۰ استراتژی برتر بر اساس امتیاز در خروجی نهایی نگهداری شوند
+    return all_results
+
+
+def _build_all_results(strategies, returns_cache, risk_cache, inv_cache, args, password):
+    """محاسبه کامل (بدون افزایشی) + برش به ۵۰۰ استراتژی برتر. برای سازگاری
+    با فراخوانی‌های قبلی/مستقیم این تابع نگه داشته شده است."""
+    all_results = _compute_results(strategies, returns_cache, risk_cache, inv_cache, args, password)
     all_results.sort(key=lambda r: r["score"], reverse=True)
     if len(all_results) > 500:
         log.info("✂️ اعمال محدودیت ۵۰۰ استراتژی برتر (از %d رکورد) بر اساس امتیاز", len(all_results))
         all_results = all_results[:500]
-
     return all_results
 
 # ══════════════════════════════════════════════════════════════
@@ -1149,7 +1259,7 @@ def _folder_summary(folder_name, folder_path, recs):
         w.writerow(["تاریخ تولید", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
         w.writerow([])
         w.writerow(["ردیف", "ترکیب کوین‌ها", "معاملات", "سودده", "زیانده", "وین‌ریت(%)",
-                    "بازده واقعی(%)", "بازده ویژه(%)", "حداکثر ضرر متوالی(%)",
+                    "بازده ویژه(%)", "حداکثر ضرر متوالی(%)",
                     "تعداد ضررهای متوالی", "افت سرمایه(%)", "P/L ratio", "شارپ", "وضعیت"]
                    + _ext_headers(EXT_STATS_FIELDS))
         for i, r in enumerate(recs, 1):
@@ -1159,7 +1269,7 @@ def _folder_summary(folder_name, folder_path, recs):
             sh = f"{r['sharpe_ratio']:.3f}" if r.get("sharpe_ratio") is not None else "-"
             combo_display = r.get("symbol", r["folder_name"])
             w.writerow([i, combo_display, r["total_trades"], r["win_trades"], r["loss_trades"],
-                        f"{r.get('win_rate', 0):.2f}", f"{r['real_return']:.4f}", f"{sp:.4f}",
+                        f"{r.get('win_rate', 0):.2f}", f"{sp:.4f}",
                         ml, r.get("max_consecutive_count", 0),
                         f"{r.get('max_drawdown', 0):.2f}", f"{r.get('profit_loss_ratio', 0):.3f}",
                         sh, status]
@@ -1181,7 +1291,7 @@ def _global_report(all_results, out_dir):
         w = csv.writer(f)
         w.writerow(["گروه", "پوشه", "symbol", "معاملات", "سودده", "زیانده", "وین‌ریت(%)",
                     "حداکثر ضرر متوالی(%)", "تعداد ضررهای متوالی", "افت سرمایه(%)",
-                    "P/L ratio", "شارپ", "بازده واقعی(%)", "بازده ویژه(%)", "نوع"]
+                    "P/L ratio", "شارپ", "بازده ویژه(%)", "نوع"]
                    + _ext_headers(EXT_STATS_FIELDS))
         for r in all_results:
             ml = f"{r['max_consecutive_loss']:.2f}" if r.get("max_consecutive_loss") is not None else "-"
@@ -1190,7 +1300,7 @@ def _global_report(all_results, out_dir):
                         r["total_trades"], r["win_trades"], r["loss_trades"],
                         f"{r['win_rate']:.2f}", ml, r.get("max_consecutive_count", 0),
                         f"{r.get('max_drawdown', 0):.2f}", f"{r.get('profit_loss_ratio', 0):.3f}",
-                        sh, f"{r['real_return']:.4f}", f"{r['special_rounded_return']:.4f}",
+                        sh, f"{r['special_rounded_return']:.4f}",
                         "معکوس" if r["is_inverse"] else "اصلی"]
                        + _ext_row(r, EXT_STATS_FIELDS))
     log.info("گزارش کلی → %s", path)
@@ -1281,8 +1391,11 @@ def _comparison_tables(all_results, out_dir):
         rows.append(row)
     rows.sort(key=lambda x: x["score"], reverse=True)
 
+    # تغییر: جدول مقایسه «بازده واقعی» دیگر تولید نمی‌شود (حذف‌شده طبق درخواست).
+    # فیلترهای قانون ۱ و ۲ (بالاتر در همین تابع) فقط روی همین جدول باقی‌مانده
+    # (بازده ویژه) اثر می‌گذارند؛ گزارش کلی (_global_report) و خلاصه پوشه
+    # (_folder_summary) بدون هیچ فیلتری همه استراتژی‌ها را نمایش می‌دهند.
     for suffix, col, col_key in [
-        ("بازده_واقعی", "بازده واقعی(%)", "avg_real"),
         ("بازده_ویژه",  "بازده ویژه(%)",  "avg_special"),
     ]:
         # فقط ۵۰۰ استراتژی برتر بر اساس امتیاز در خروجی نهایی نگهداری شوند
@@ -1467,6 +1580,8 @@ def main():
     p.add_argument("--results-base", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--password", default="")
+    p.add_argument("--previous-report", default="",
+                    help="مسیر reports.tar.gz.enc اجرای قبلی (اختیاری) برای رد کردن استراتژی‌های قبلاً پردازش‌شده.")
 
     # ─── risk ───
     p = sub.add_parser("risk")
@@ -1475,6 +1590,8 @@ def main():
     p.add_argument("--stoploss-cache", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--password", default="")
+    p.add_argument("--previous-report", default="",
+                    help="مسیر reports.tar.gz.enc اجرای قبلی (اختیاری) برای رد کردن استراتژی‌های قبلاً پردازش‌شده.")
 
     # ─── inverse ───
     p = sub.add_parser("inverse")
@@ -1494,6 +1611,9 @@ def main():
     p.add_argument("--news-pickle", default="")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--password", default="")
+    p.add_argument("--previous-report", default="",
+                    help="مسیر reports.tar.gz.enc اجرای قبلی (اختیاری) برای گزارش‌گیری افزایشی؛ "
+                         "در صورت عدم ارائه یا نبود فایل، رفتار قبلی (محاسبه کامل) حفظ می‌شود.")
 
     args = parser.parse_args()
     {"returns": cmd_returns, "risk": cmd_risk, "inverse": cmd_inverse, "report": cmd_report}[args.cmd](args)
