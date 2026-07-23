@@ -748,7 +748,8 @@ jobs:
             --strategies-json /tmp/strategies.json \
             --results-base /tmp/third_repo/aggregated \
             --output /tmp/returns.json \
-            --password "$RESULTS_PASSWORD"
+            --password "$RESULTS_PASSWORD" \
+            --previous-report /tmp/third_repo/reports.tar.gz.enc
 
       - name: اجرای calculators.py risk
         env:
@@ -759,7 +760,8 @@ jobs:
             --results-base /tmp/third_repo/aggregated \
             --stoploss-cache /tmp/stoploss.json \
             --output /tmp/risk.json \
-            --password "$RESULTS_PASSWORD"
+            --password "$RESULTS_PASSWORD" \
+            --previous-report /tmp/third_repo/reports.tar.gz.enc
 
       - name: اجرای calculators.py inverse
         env:
@@ -785,7 +787,8 @@ jobs:
             --results-base /tmp/third_repo/aggregated \
             --news-pickle /tmp/news.pickle \
             --output-dir /tmp/reports \
-            --password "$RESULTS_PASSWORD"
+            --password "$RESULTS_PASSWORD" \
+            --previous-report /tmp/third_repo/reports.tar.gz.enc
 
       - name: فشرده‌سازی و رمزنگاری پوشه reports
         env:
