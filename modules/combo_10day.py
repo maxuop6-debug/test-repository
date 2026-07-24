@@ -621,6 +621,18 @@ def load_skeep_tp_sl(trades_json_path):
         return False, None, None
 
 
+def normalize_symbol(sym):
+    """
+    نرمال‌سازی نماد معامله برای تطبیق با --coin.
+    فایل معاملات نمادها را با پسوند تایم‌فریم ذخیره می‌کند (مثل BTCUSDT-1m)
+    اما --coin این پسوند را ندارد (مثل BTCUSDT یا BTCUSDT+ETHUSDT).
+    این تابع پسوند انتهایی مثل -1m/-5m/-1h/-1d را حذف می‌کند تا مقایسه درست انجام شود.
+    """
+    if not sym:
+        return sym
+    return re.sub(r'-\d+[mhdwM]$', '', str(sym).strip()).upper()
+
+
 def _importance(actual, forecast, distance_days):
     if actual is None or forecast is None:
         return None
@@ -685,12 +697,16 @@ def process_analysis(trades_json_path, news_dir, interval, target_coin,
             print("⚠️ move_percents خالی است — fallback به raw_profit")
 
     # ---------- مرحله ۲: فیلتر بر اساس کوین ----------
-    target_coins = [c.strip() for c in target_coin.split('+')]
+    # نکته: --coin پسوند تایم‌فریم ندارد (مثل BTCUSDT) اما نماد داخل فایل معاملات
+    # دارد (مثل BTCUSDT-1m). ترکیب ارزی (coin+coin) از قبل به‌صورت یک موجودیت
+    # آماده داخل فایل معاملات وجود ندارد؛ اینجا با نرمال‌سازی نمادها، معاملات
+    # هر کوین منفرد از فایل استخراج و به‌عنوان ترکیب ساخته می‌شود.
+    target_coins = [normalize_symbol(c.strip()) for c in target_coin.split('+')]
 
     trade_list = []
     for t in trades:
         symbol = t.get("symbol") or t.get("pair") or t.get("coin")
-        if symbol not in target_coins:
+        if normalize_symbol(symbol) not in target_coins:
             continue
 
         time_str = (t.get("entryTime") or t.get("entry_time") or
