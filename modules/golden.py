@@ -608,6 +608,17 @@ def run(
     scores_out = _save(scores_out_df, output_path / "golden_scores.csv")
     log.info(f"golden_scores ذخیره شد: {scores_out}")
 
+    # ── تولید خروجی‌های پیشنهاد استراتژی (الگوی خبری و رژیم بازار) ──────────
+    # از norm_df استفاده می‌شود چون همان ردیف‌های scores_out_df را دارد، اما
+    # علاوه بر آن win_rate و avg_daily_return را هم در خود نگه داشته است
+    # (این دو ستون به‌عمد به golden_scores.csv اضافه نشدند تا فرمت آن فایل،
+    # که در بخش‌های دیگر pipeline استفاده می‌شود، دست‌نخورده بماند).
+    recommendation_df = norm_df[
+        ["strategy_id", "coin_composition", "signature", "sample_count", "win_rate", "avg_daily_return"]
+    ].copy()
+    generate_news_pattern_recommendation(recommendation_df, output_path)
+    generate_market_regime_recommendation(recommendation_df, output_path)
+
     # ── وضعیت نهایی: completed ───────────────────────────────────────────
     save_status(status_path, processed_signatures, total_chunks - 1, total_chunks, "completed", chunk_size, processed_files)
 
@@ -631,6 +642,196 @@ def run(
     log.info(f"تعداد ردیف‌های نهایی امتیاز: {len(scores_out_df):,}")
     log.info(f"خروجی‌ها در: {output_path.resolve()}")
     log.info("=" * 60)
+
+
+# ---------------------------------------------------------------------------
+# خروجی‌های پیشنهاد استراتژی (افزایشی) – بر اساس الگوی خبری و رژیم بازار
+# ---------------------------------------------------------------------------
+#
+# نکته پیاده‌سازی: طبق پرامپت، این توابع باید از scores_out_df استفاده کنند،
+# اما scores_out_df ستون‌های win_rate و avg_daily_return را ندارد (فقط شامل
+# strategy_id, coin_composition, signature_path, signature, score, sample_count
+# است). برای اینکه ستون‌های اضافه به golden_scores.csv تحمیل نشود (و فرمت آن
+# فایل که در جاهای دیگر pipeline استفاده می‌شود دست‌نخورده بماند)، این دو تابع
+# با یک دیتافریم کمکی («recommendation_df») که از همان norm_df استخراج شده و
+# دقیقاً همان ردیف‌های scores_out_df را با ستون‌های win_rate/avg_daily_return
+# اضافه در بر می‌گیرد، فراخوانی می‌شوند. این دیتافریم در تابع run ساخته می‌شود.
+
+RECOMMENDATION_GROUP_COLUMNS = [
+    "گروه", "رتبه", "نام_استراتژی", "تعداد_تکرار",
+    "تعداد_سود", "تعداد_ضرر", "وین‌ریت_(%)", "میانگین_بازده_(%)",
+]
+
+
+def _prepare_group_aggregates(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
+    """تجمیع رکوردها بر اساس (گروه، نام_استراتژی) و محاسبه معیارهای خام.
+
+    نام_استراتژی به‌صورت "{strategy_id} ({coin_composition})" ساخته می‌شود تا
+    استراتژی‌های یکسان با ترکیب کوین متفاوت از هم متمایز بمانند. تعداد_سود و
+    تعداد_ضرر از sample_count و win_rate (وزن‌دهی‌شده) تخمین زده می‌شوند، چون
+    scores_out_df/norm_df شمارش خام سود/ضرر را نگه نمی‌دارد.
+    """
+    work = df.copy()
+    work["نام_استراتژی"] = work["strategy_id"].astype(str) + " (" + work["coin_composition"].astype(str) + ")"
+    work["sample_count"] = work["sample_count"].fillna(0)
+    work["_win_raw"] = work["sample_count"] * (work["win_rate"].fillna(0) / 100.0)
+    work["_return_weighted"] = work["sample_count"] * work["avg_daily_return"].fillna(0)
+
+    agg = (
+        work.groupby([group_col, "نام_استراتژی"], as_index=False)
+        .agg(
+            تعداد_تکرار=("sample_count", "sum"),
+            _win_raw_sum=("_win_raw", "sum"),
+            _return_weighted_sum=("_return_weighted", "sum"),
+        )
+    )
+    agg["تعداد_تکرار"] = agg["تعداد_تکرار"].round().astype(int)
+    agg["تعداد_سود"] = agg["_win_raw_sum"].round().astype(int).clip(lower=0)
+    agg["تعداد_ضرر"] = (agg["تعداد_تکرار"] - agg["تعداد_سود"]).clip(lower=0)
+    agg["میانگین_بازده_(%)"] = agg.apply(
+        lambda r: (r["_return_weighted_sum"] / r["تعداد_تکرار"]) if r["تعداد_تکرار"] else 0.0, axis=1
+    )
+    agg["وین‌ریت_(%)"] = agg.apply(
+        lambda r: (r["تعداد_سود"] / r["تعداد_تکرار"] * 100.0) if r["تعداد_تکرار"] else 0.0, axis=1
+    )
+    agg = agg.rename(columns={group_col: "گروه"})
+    return agg[["گروه", "نام_استراتژی", "تعداد_تکرار", "تعداد_سود", "تعداد_ضرر", "وین‌ریت_(%)", "میانگین_بازده_(%)"]]
+
+
+def _merge_with_previous(new_agg: pd.DataFrame, old_raw: pd.DataFrame | None) -> pd.DataFrame:
+    """ادغام داده‌های جدید با داده‌های قبلیِ استخراج‌شده از فایل خروجی (حافظه).
+
+    میانگین_بازده و وین‌ریت با وزن تعداد_تکرار هر ردیف دوباره محاسبه می‌شوند
+    تا ادغام‌های متوالی صحیح (و بدون خطای انباشتی) باقی بمانند.
+    """
+    if old_raw is None or old_raw.empty:
+        return new_agg
+
+    combined = pd.concat([old_raw, new_agg], ignore_index=True)
+    combined["_return_weighted"] = combined["میانگین_بازده_(%)"] * combined["تعداد_تکرار"]
+
+    merged = combined.groupby(["گروه", "نام_استراتژی"], as_index=False).agg(
+        تعداد_تکرار=("تعداد_تکرار", "sum"),
+        تعداد_سود=("تعداد_سود", "sum"),
+        تعداد_ضرر=("تعداد_ضرر", "sum"),
+        _return_weighted=("_return_weighted", "sum"),
+    )
+    merged["میانگین_بازده_(%)"] = merged.apply(
+        lambda r: (r["_return_weighted"] / r["تعداد_تکرار"]) if r["تعداد_تکرار"] else 0.0, axis=1
+    )
+    merged["وین‌ریت_(%)"] = merged.apply(
+        lambda r: (r["تعداد_سود"] / r["تعداد_تکرار"] * 100.0) if r["تعداد_تکرار"] else 0.0, axis=1
+    )
+    merged.drop(columns=["_return_weighted"], inplace=True)
+    return merged
+
+
+def _rank_and_select(agg: pd.DataFrame) -> pd.DataFrame:
+    """رتبه‌بندی هر گروه (تعداد_تکرار نزولی → میانگین_بازده نزولی) و اعمال
+    شرط نمایش: فقط رتبه ۱ اگر (میانگین_بازده ≥ ۰.۵٪ و وین‌ریت > ۸۰٪)، وگرنه ۵ رتبه اول."""
+    if agg.empty:
+        return pd.DataFrame(columns=RECOMMENDATION_GROUP_COLUMNS)
+
+    out_frames = []
+    for group_val, gdf in agg.groupby("گروه", sort=False):
+        gdf = gdf.sort_values(
+            by=["تعداد_تکرار", "میانگین_بازده_(%)"], ascending=[False, False]
+        ).reset_index(drop=True)
+        top = gdf.iloc[0]
+        strong = (top["میانگین_بازده_(%)"] >= 0.5) and (top["وین‌ریت_(%)"] > 80)
+        selected = gdf.iloc[[0]].copy() if strong else gdf.iloc[:5].copy()
+        selected["رتبه"] = range(1, len(selected) + 1)
+        out_frames.append(selected)
+
+    result = pd.concat(out_frames, ignore_index=True)
+    return result[RECOMMENDATION_GROUP_COLUMNS]
+
+
+def _rank1_changed(old_final: pd.DataFrame | None, new_final: pd.DataFrame) -> bool:
+    """بررسی اینکه آیا رتبه ۱ حداقل یک گروه نسبت به فایل قبلی تغییر کرده است."""
+    if old_final is None or old_final.empty:
+        return True  # اولین بار — همیشه نوشته شود
+    if "رتبه" not in old_final.columns:
+        return True
+
+    old_top = old_final[old_final["رتبه"] == 1].set_index("گروه")["نام_استراتژی"]
+    new_top = new_final[new_final["رتبه"] == 1].set_index("گروه")["نام_استراتژی"]
+    if set(old_top.index) != set(new_top.index):
+        return True
+    return not old_top.reindex(new_top.index).equals(new_top)
+
+
+def _generate_recommendation_output(
+    df: pd.DataFrame,
+    group_col: str,
+    output_path: Path,
+    filename: str,
+    label: str,
+) -> None:
+    """منطق مشترک تولید یک خروجی پیشنهاد استراتژی (افزایشی) بر اساس ستون گروه‌بندی مشخص."""
+    if df.empty or group_col not in df.columns:
+        log.warning(f"[{label}] داده‌ای برای تولید خروجی یافت نشد — رد می‌شود.")
+        return
+
+    new_agg = _prepare_group_aggregates(df, group_col)
+
+    out_file = output_path / filename
+    old_final = None
+    if out_file.exists():
+        try:
+            old_final = pd.read_csv(out_file)
+        except Exception as exc:
+            log.warning(f"[{label}] خواندن فایل قبلی {out_file} ناموفق بود ({exc}) — نادیده گرفته شد.")
+
+    old_raw = None
+    if old_final is not None and not old_final.empty:
+        old_raw = old_final[
+            ["گروه", "نام_استراتژی", "تعداد_تکرار", "تعداد_سود", "تعداد_ضرر", "وین‌ریت_(%)", "میانگین_بازده_(%)"]
+        ].copy()
+
+    merged_agg = _merge_with_previous(new_agg, old_raw)
+    new_final = _rank_and_select(merged_agg)
+
+    if _rank1_changed(old_final, new_final):
+        saved_path = _save(new_final, output_path / Path(filename).stem)
+        log.info(f"[{label}] خروجی به‌روزرسانی شد: {saved_path} ({len(new_final)} ردیف)")
+    else:
+        log.info(f"[{label}] رتبه ۱ هیچ گروهی تغییر نکرد — فایل {out_file} بدون تغییر باقی ماند.")
+
+
+def generate_news_pattern_recommendation(df: pd.DataFrame, output_dir) -> None:
+    """تولید خروجی پیشنهاد استراتژی بر اساس الگوی خبری (افزایشی)."""
+    output_path = Path(output_dir)
+    work = df.copy()
+    work["گروه_خبری"] = work["signature"]
+    _generate_recommendation_output(
+        work,
+        "گروه_خبری",
+        output_path,
+        "پیشنهاد_استراتژی_بر_اساس_الگوی_خبری.csv",
+        "الگوی خبری",
+    )
+
+
+def _extract_market_regime(signature) -> str:
+    """استخراج رژیم بازار (آخرین بخش امضا، مطابق build_signature) از رشته signature."""
+    if not isinstance(signature, str) or "_" not in signature:
+        return "unknown"
+    return signature.rsplit("_", 1)[-1]
+
+
+def generate_market_regime_recommendation(df: pd.DataFrame, output_dir) -> None:
+    """تولید خروجی پیشنهاد استراتژی بر اساس رژیم بازار (افزایشی)."""
+    output_path = Path(output_dir)
+    work = df.copy()
+    work["رژیم_بازار"] = work["signature"].apply(_extract_market_regime)
+    _generate_recommendation_output(
+        work,
+        "رژیم_بازار",
+        output_path,
+        "پیشنهاد_استراتژی_بر_اساس_رژیم_بازار.csv",
+        "رژیم بازار",
+    )
 
 
 # ---------------------------------------------------------------------------
