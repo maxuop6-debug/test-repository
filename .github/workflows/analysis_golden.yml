@@ -379,6 +379,31 @@ jobs:
             echo "⚠️ golden_scores.csv در این chunk یافت نشد."
           fi
 
+      - name: 5.3. کپی خروجی‌های پیشنهاد استراتژی به artifact برای ادغام در cleanup
+        if: |
+          steps.prev_check.outputs.already_done != 'true' &&
+          steps.interrupt_check.outputs.interrupted != 'true'
+        run: |
+          # golden.py این دو فایل را مستقیماً در --output-dir (همان
+          # /tmp/golden_chunk_cache) می‌سازد؛ این مرحله فقط برای اطمینان از
+          # مسیر استاندارد (مشابه رفتار golden_scores.csv در مرحله 5.2) است.
+          for FNAME in \
+              "پیشنهاد_استراتژی_بر_اساس_الگوی_خبری.csv" \
+              "پیشنهاد_استراتژی_بر_اساس_رژیم_بازار.csv"; do
+            SRC=$(find /tmp/golden_chunk_cache -name "$FNAME" | head -1)
+            DEST="/tmp/golden_chunk_cache/$FNAME"
+            if [ -n "$SRC" ]; then
+              if [ "$(realpath "$SRC")" != "$(realpath "$DEST" 2>/dev/null || echo "")" ]; then
+                cp "$SRC" "$DEST"
+                echo "✅ $FNAME برای artifact ذخیره شد: $SRC"
+              else
+                echo "✅ $FNAME قبلاً در مسیر صحیح است: $SRC"
+              fi
+            else
+              echo "⚠️ $FNAME در این chunk یافت نشد."
+            fi
+          done
+
       - name: 5.5. ذخیره done_items این chunk در Cache
         if: always()
         run: |
@@ -391,6 +416,14 @@ jobs:
             if [ -n "$CACHED_CSV" ] && [ "$(realpath "$CACHED_CSV")" != "/tmp/golden_chunk_cache/golden_scores.csv" ]; then
               cp "$CACHED_CSV" /tmp/golden_chunk_cache/golden_scores.csv
             fi
+            for FNAME in \
+                "پیشنهاد_استراتژی_بر_اساس_الگوی_خبری.csv" \
+                "پیشنهاد_استراتژی_بر_اساس_رژیم_بازار.csv"; do
+              CACHED_REC=$(find /tmp/golden_chunk_cache -name "$FNAME" 2>/dev/null | head -1)
+              if [ -n "$CACHED_REC" ] && [ "$(realpath "$CACHED_REC")" != "$(realpath "/tmp/golden_chunk_cache/$FNAME" 2>/dev/null || echo "")" ]; then
+                cp "$CACHED_REC" "/tmp/golden_chunk_cache/$FNAME"
+              fi
+            done
           fi
 
           # باگ dedup ریشه‌ای fix: done_items باید مسیرهای فایل JSONL باشه
@@ -448,6 +481,24 @@ jobs:
         with:
           name: golden-scores-${{ matrix.chunk_index }}-${{ github.run_id }}
           path: /tmp/golden_chunk_cache/golden_scores.csv
+          retention-days: 1
+          if-no-files-found: ignore
+
+      - name: 6.7. آپلود پیشنهاد_الگوی_خبری این چانک به‌عنوان artifact (برای ادغام در cleanup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-news-pattern-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: /tmp/golden_chunk_cache/پیشنهاد_استراتژی_بر_اساس_الگوی_خبری.csv
+          retention-days: 1
+          if-no-files-found: ignore
+
+      - name: 6.8. آپلود پیشنهاد_رژیم_بازار این چانک به‌عنوان artifact (برای ادغام در cleanup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-market-regime-${{ matrix.chunk_index }}-${{ github.run_id }}
+          path: /tmp/golden_chunk_cache/پیشنهاد_استراتژی_بر_اساس_رژیم_بازار.csv
           retention-days: 1
           if-no-files-found: ignore
 
@@ -671,6 +722,191 @@ jobs:
                 /tmp/golden_scores_b64.txt /tmp/payload_gs.json
             fi
           fi
+
+      - name: دانلود artifact های پیشنهاد استراتژی (الگوی خبری و رژیم بازار)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: golden-news-pattern-*-${{ github.run_id }}
+          path: /tmp/reco_news_parts
+          merge-multiple: false
+
+      - name: دانلود artifact های پیشنهاد رژیم بازار
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: golden-market-regime-*-${{ github.run_id }}
+          path: /tmp/reco_regime_parts
+          merge-multiple: false
+
+      - name: ادغام، رتبه‌بندی مجدد، رمزنگاری و آپلود خروجی‌های پیشنهاد استراتژی
+        # این دو خروجی مکمل golden_scores هستند و بحرانی نیستند، بنابراین
+        # شکست در آپلود آن‌ها (برخلاف golden_scores) کل workflow را متوقف نمی‌کند.
+        env:
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          mkdir -p /tmp/reco_news_parts /tmp/reco_regime_parts
+          pip install pandas --quiet --break-system-packages 2>/dev/null || \
+            pip install pandas --quiet 2>/dev/null || true
+
+          # ── اسکریپت ادغام + رتبه‌بندی مجدد (همان منطق _merge_with_previous /
+          # _rank_and_select در golden.py، به‌صورت مستقل چون golden.py در این
+          # job چک‌اوت نشده است) ──────────────────────────────────────────
+          cat > /tmp/merge_reco.py << 'PYEOF'
+          import sys
+          import pandas as pd
+
+          list_file, out_file = sys.argv[1], sys.argv[2]
+          with open(list_file, encoding="utf-8") as fh:
+              paths = [p.strip() for p in fh.read().splitlines() if p.strip()]
+
+          dfs = []
+          for p in paths:
+              try:
+                  dfs.append(pd.read_csv(p))
+              except Exception as e:
+                  print(f"skip {p}: {e}")
+
+          if not dfs:
+              print("no valid csv files found")
+              sys.exit(0)
+
+          combined = pd.concat(dfs, ignore_index=True)
+          needed = ["گروه", "نام_استراتژی", "تعداد_تکرار", "تعداد_سود", "تعداد_ضرر", "وین‌ریت_(%)", "میانگین_بازده_(%)"]
+          combined = combined[[c for c in needed if c in combined.columns]]
+
+          # ادغام وزن‌دار بر اساس (گروه، نام_استراتژی): جمع تعداد‌ها و میانگین
+          # وزنی بازده/وین‌ریت بر اساس تعداد_تکرار هر ردیف.
+          combined["_return_weighted"] = combined["میانگین_بازده_(%)"] * combined["تعداد_تکرار"]
+          merged = combined.groupby(["گروه", "نام_استراتژی"], as_index=False).agg(
+              تعداد_تکرار=("تعداد_تکرار", "sum"),
+              تعداد_سود=("تعداد_سود", "sum"),
+              تعداد_ضرر=("تعداد_ضرر", "sum"),
+              _return_weighted=("_return_weighted", "sum"),
+          )
+          merged["میانگین_بازده_(%)"] = merged.apply(
+              lambda r: (r["_return_weighted"] / r["تعداد_تکرار"]) if r["تعداد_تکرار"] else 0.0, axis=1
+          )
+          merged["وین‌ریت_(%)"] = merged.apply(
+              lambda r: (r["تعداد_سود"] / r["تعداد_تکرار"] * 100.0) if r["تعداد_تکرار"] else 0.0, axis=1
+          )
+          merged.drop(columns=["_return_weighted"], inplace=True)
+
+          # رتبه‌بندی مجدد هر گروه و اعمال شرط نمایش (فقط رتبه ۱ یا ۵ رتبه اول)
+          out_frames = []
+          for group_val, gdf in merged.groupby("گروه", sort=False):
+              gdf = gdf.sort_values(
+                  by=["تعداد_تکرار", "میانگین_بازده_(%)"], ascending=[False, False]
+              ).reset_index(drop=True)
+              top = gdf.iloc[0]
+              strong = (top["میانگین_بازده_(%)"] >= 0.5) and (top["وین‌ریت_(%)"] > 80)
+              selected = gdf.iloc[[0]].copy() if strong else gdf.iloc[:5].copy()
+              selected["رتبه"] = range(1, len(selected) + 1)
+              out_frames.append(selected)
+
+          result = pd.concat(out_frames, ignore_index=True) if out_frames else merged.iloc[0:0]
+          cols = ["گروه", "رتبه", "نام_استراتژی", "تعداد_تکرار", "تعداد_سود", "تعداد_ضرر", "وین‌ریت_(%)", "میانگین_بازده_(%)"]
+          result = result[[c for c in cols if c in result.columns]]
+          result.to_csv(out_file, index=False)
+          print(f"merged {len(dfs)} files -> {len(result)} rows")
+          PYEOF
+
+          upload_reco_file () {
+            SRC_DIR="$1"; FILE_NAME="$2"; DEST_ENC_NAME="$3"; LABEL="$4"
+
+            COUNT=$(find "$SRC_DIR" -name "$FILE_NAME" 2>/dev/null | wc -l)
+            echo "[DEBUG][$LABEL] تعداد فایل یافت‌شده: $COUNT"
+            if [ "$COUNT" -eq 0 ]; then
+              echo "⚠️ [$LABEL] هیچ $FILE_NAME ای یافت نشد — رد می‌شویم."
+              return 0
+            fi
+
+            find "$SRC_DIR" -name "$FILE_NAME" | sort > /tmp/reco_list.txt
+            python3 /tmp/merge_reco.py /tmp/reco_list.txt /tmp/merged_reco.csv
+            if [ ! -f /tmp/merged_reco.csv ]; then
+              echo "⚠️ [$LABEL] ادغام ناموفق بود — رد می‌شویم."
+              rm -f /tmp/reco_list.txt
+              return 0
+            fi
+
+            cp /tmp/merged_reco.csv "/tmp/$FILE_NAME"
+            tar -czf /tmp/reco.tar.gz -C /tmp "$FILE_NAME"
+
+            node -e "
+              const crypto = require('crypto'), fs = require('fs');
+              const pass = process.env.RESULTS_PASSWORD;
+              const data = fs.readFileSync('/tmp/reco.tar.gz');
+              const key  = crypto.scryptSync(pass, 'salt', 32);
+              const iv   = crypto.randomBytes(16);
+              const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+              const enc  = Buffer.concat([iv, cipher.update(data), cipher.final()]);
+              fs.writeFileSync('/tmp/reco.tar.gz.enc', enc);
+            "
+            base64 -w0 /tmp/reco.tar.gz.enc > /tmp/reco_b64.txt
+
+            RETRY=0; MAX=10; UPLOADED=false
+            while [ $RETRY -lt $MAX ]; do
+              SHA_RESP=$(curl -s -w "\n%{http_code}" \
+                -H "Authorization: token $CROSS_REPO_TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/$THIRD_REPO/contents/$DEST_ENC_NAME")
+              SHA_HTTP=$(echo "$SHA_RESP" | tail -1)
+              SHA_VAL=$(echo "$SHA_RESP" | head -n -1 | jq -r '.sha // empty' 2>/dev/null || echo "")
+
+              if [ "$SHA_HTTP" = "200" ] && [ -n "$SHA_VAL" ]; then
+                jq -n --arg msg "update $DEST_ENC_NAME (run ${{ github.run_id }})" \
+                  --rawfile content /tmp/reco_b64.txt --arg sha "$SHA_VAL" \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main", sha: $sha}' \
+                  > /tmp/payload_reco.json
+              elif [ "$SHA_HTTP" = "404" ]; then
+                jq -n --arg msg "add $DEST_ENC_NAME (run ${{ github.run_id }})" \
+                  --rawfile content /tmp/reco_b64.txt \
+                  '{message: $msg, content: ($content | rtrimstr("\n")), branch: "main"}' \
+                  > /tmp/payload_reco.json
+              else
+                echo "⚠️ [$LABEL] دریافت SHA نامعتبر (HTTP $SHA_HTTP) — تلاش مجدد..."
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+              fi
+
+              HTTP_CODE=$(curl -s -o /tmp/reco_resp.txt -w "%{http_code}" -X PUT \
+                -H "Authorization: token $CROSS_REPO_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-binary @/tmp/payload_reco.json \
+                "https://api.github.com/repos/$THIRD_REPO/contents/$DEST_ENC_NAME")
+
+              if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+                echo "✅ [$LABEL] $DEST_ENC_NAME در مخزن سوم آپلود شد."
+                UPLOADED=true
+                break
+              elif [ "$HTTP_CODE" = "409" ] || [ "$HTTP_CODE" = "422" ]; then
+                echo "⚠️ [$LABEL] تداخل SHA (HTTP $HTTP_CODE) — تلاش مجدد..."
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+              else
+                echo "ERROR: [$LABEL] آپلود ناموفق (HTTP $HTTP_CODE): $(cat /tmp/reco_resp.txt | head -c 300)"
+                RETRY=$((RETRY+1)); sleep $(( (RANDOM % 4) + 2 )); continue
+              fi
+            done
+
+            if [ "$UPLOADED" != "true" ]; then
+              echo "⚠️ [$LABEL] آپلود پس از $MAX تلاش ناموفق شد — این خروجی نادیده گرفته می‌شود."
+            fi
+
+            rm -f "/tmp/$FILE_NAME" /tmp/reco.tar.gz /tmp/reco.tar.gz.enc /tmp/reco_b64.txt \
+              /tmp/payload_reco.json /tmp/reco_resp.txt /tmp/reco_list.txt /tmp/merged_reco.csv
+          }
+
+          upload_reco_file "/tmp/reco_news_parts" \
+            "پیشنهاد_استراتژی_بر_اساس_الگوی_خبری.csv" \
+            "پیشنهاد_استراتژی_بر_اساس_الگوی_خبری.csv.enc" \
+            "الگوی خبری"
+
+          upload_reco_file "/tmp/reco_regime_parts" \
+            "پیشنهاد_استراتژی_بر_اساس_رژیم_بازار.csv" \
+            "پیشنهاد_استراتژی_بر_اساس_رژیم_بازار.csv.enc" \
+            "رژیم بازار"
+
       - name: ادغام لیست‌های done و حذف از all_combinations_golden.json
         env:
           GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
