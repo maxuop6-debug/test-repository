@@ -13,9 +13,139 @@ concurrency:
 
 jobs:
   # ================================================================
+  # generate-reports: تولید گزارش‌های جامع نسخه ۵ و commit به مخزن سوم
+  # ================================================================
+  generate-reports:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout مخزن اصلی
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 2. نصب پایتون و کتابخانه‌ها
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: نصب وابستگی‌ها
+        run: pip install pandas numpy scipy pyarrow
+
+      - name: 3. Clone مخزن سوم
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          git clone \
+            --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${THIRD_REPO}.git" \
+            /tmp/third_repo
+
+      - name: 4. اجرای loader.py
+        run: |
+          python modules/loader.py \
+            --news-dir data/news \
+            --results-dir /tmp/third_repo/aggregated \
+            --strategies-dir /tmp/third_repo/strategies \
+            --output-news /tmp/news.pickle \
+            --output-strategies /tmp/strategies.json
+
+      - name: 5. اجرای calculator_stoploss.py
+        run: |
+          python modules/calculator_stoploss.py \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --strategies-dir /tmp/third_repo/strategies \
+            --output /tmp/stoploss.json
+
+      - name: 6. اجرای calculators.py returns
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          python modules/calculators.py returns \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --output /tmp/returns.json \
+            --password "$RESULTS_PASSWORD"
+
+      - name: 7. اجرای calculators.py risk
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          python modules/calculators.py risk \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --stoploss-cache /tmp/stoploss.json \
+            --output /tmp/risk.json \
+            --password "$RESULTS_PASSWORD"
+
+      - name: 8. اجرای calculators.py inverse
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          python modules/calculators.py inverse \
+            --strategies-json /tmp/strategies.json \
+            --results-base /tmp/third_repo/aggregated \
+            --stoploss-cache /tmp/stoploss.json \
+            --output /tmp/inverse.json \
+            --password "$RESULTS_PASSWORD"
+
+      - name: 9. اجرای calculators.py report
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          mkdir -p /tmp/reports
+          python modules/calculators.py report \
+            --returns-cache /tmp/returns.json \
+            --strategies-json /tmp/strategies.json \
+            --risk-cache /tmp/risk.json \
+            --inverse-cache /tmp/inverse.json \
+            --results-base /tmp/third_repo/aggregated \
+            --news-pickle /tmp/news.pickle \
+            --output-dir /tmp/reports \
+            --password "$RESULTS_PASSWORD"
+
+      - name: 9.5. فشرده‌سازی و رمزنگاری پوشه reports
+        env:
+          RESULTS_PASSWORD: ${{ secrets.RESULTS_PASSWORD }}
+        run: |
+          tar -czf /tmp/reports.tar.gz -C /tmp reports
+          node -e "
+            const crypto=require('crypto'),fs=require('fs');
+            const pass=process.env.RESULTS_PASSWORD;
+            const key=crypto.scryptSync(pass,'salt',32);
+            const iv=crypto.randomBytes(16);
+            const data=fs.readFileSync('/tmp/reports.tar.gz');
+            const cipher=crypto.createCipheriv('aes-256-cbc',key,iv);
+            const enc=Buffer.concat([iv,cipher.update(data),cipher.final()]);
+            fs.writeFileSync('/tmp/reports.tar.gz.enc',enc);
+          "
+          rm -rf /tmp/reports /tmp/reports.tar.gz
+
+      - name: 10. Commit و Push گزارش‌ها به مخزن سوم (overwrite)
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          THIRD_REPO: ${{ secrets.THIRD_REPO }}
+        run: |
+          cd /tmp/third_repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -f reports.tar.gz.enc
+          cp /tmp/reports.tar.gz.enc reports.tar.gz.enc
+          git add -f reports.tar.gz.enc
+          git commit -m "update reports (run ${{ github.run_id }})" || echo "No changes to commit"
+          RETRY=0; MAX=5
+          while [ $RETRY -lt $MAX ]; do
+            git pull --rebase origin main && git push origin main && break
+            RETRY=$((RETRY+1))
+            sleep 2
+          done
+
+  # ================================================================
   # generate-matrix: تقسیم all_combinations.json به چانک‌ها
   # ================================================================
   generate-matrix:
+    needs: [generate-reports]
     runs-on: ubuntu-latest
     outputs:
       matrix_items: ${{ steps.fetch_batch.outputs.matrix_items }}
@@ -67,7 +197,7 @@ jobs:
           echo "[DEBUG] تعداد ترکیب‌های پردازش‌شونده این اجرا: $TOTAL_COMBOS"
           echo "total_combos=$TOTAL_COMBOS" >> $GITHUB_OUTPUT
 
-          CHUNK_SIZE=500
+          CHUNK_SIZE=375
           CHUNK_COUNT=$(( (TOTAL_COMBOS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
           if [ "$CHUNK_COUNT" -gt 256 ]; then
             CHUNK_SIZE=$(( (TOTAL_COMBOS + 255) / 256 ))
@@ -176,7 +306,7 @@ jobs:
   # batch: اجرای موازی روی چانک‌ها و تولید CSV + JSONL امضاها
   # ================================================================
   batch:
-    needs: [generate-matrix]
+    needs: [generate-reports, generate-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 340
     if: ${{ needs.generate-matrix.outputs.empty == 'false' }}
